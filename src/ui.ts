@@ -1,0 +1,229 @@
+import { BOOSTERS, COSMETICS, CREW, UPGRADES, type BoosterDef } from './config';
+import { fmt, type Game } from './state';
+import { sfx } from './audio';
+
+// ---------------------------------------------------------------------------
+// Rewarded-ad adapter. The placeholder provider fakes an ad with a countdown.
+// For store builds, swap in an AdMob provider (Capacitor community plugin
+// `@capacitor-community/admob`, RewardedAd) behind this same interface —
+// the game only ever calls show() and reads the resolved boolean.
+// ---------------------------------------------------------------------------
+export interface AdProvider {
+  show(lengthSec: number): Promise<boolean>; // true = watched to completion
+}
+
+class PlaceholderAdProvider implements AdProvider {
+  show(lengthSec: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const overlay = el('div', 'ad-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box">
+          <div class="ad-label">AD · PLACEHOLDER</div>
+          <div class="ad-screen">
+            <div class="ad-art">📺</div>
+            <div class="ad-copy">Your ad network renders here.<br/>(AdMob rewarded slot)</div>
+          </div>
+          <div class="ad-timer"></div>
+          <button class="ad-skip" disabled>reward in <span></span>s</button>
+        </div>`;
+      document.body.appendChild(overlay);
+      const btn = overlay.querySelector('.ad-skip') as HTMLButtonElement;
+      const span = btn.querySelector('span')!;
+      let left = lengthSec;
+      span.textContent = String(left);
+      const iv = setInterval(() => {
+        left -= 1;
+        span.textContent = String(left);
+        if (left <= 0) {
+          clearInterval(iv);
+          btn.disabled = false;
+          btn.innerHTML = 'CLAIM REWARD';
+          btn.onclick = () => { overlay.remove(); resolve(true); };
+        }
+      }, 1000);
+    });
+  }
+}
+
+function el(tag: string, cls?: string, html?: string): HTMLElement {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html !== undefined) e.innerHTML = html;
+  return e;
+}
+
+export class UI {
+  root: HTMLElement;
+  private ads: AdProvider = new PlaceholderAdProvider();
+  private panel: HTMLElement | null = null;
+  private bars: Record<string, HTMLElement> = {};
+  private fade: HTMLElement;
+  private openTab: string | null = null;
+
+  constructor(private game: Game, private onCosmeticsChanged: () => void) {
+    this.root = document.getElementById('app')!;
+    this.root.innerHTML = `
+      <div class="hud-top">
+        <div class="stat"><span class="k">RESPECT</span><span class="v" id="v-respect">0</span></div>
+        <div class="stat"><span class="k">MENTALITY</span><span class="v gold" id="v-mentality">0</span></div>
+        <div class="stat small"><span class="k">/TAP</span><span class="v" id="v-tap">1</span></div>
+        <div class="stat small"><span class="k">/SEC</span><span class="v" id="v-rps">0</span></div>
+      </div>
+      <div class="boost-pill" id="boost-pill" hidden></div>
+      <div class="opp-bar">
+        <div class="opp-name" id="opp-name"></div>
+        <div class="bar"><div class="fill" id="opp-fill"></div>
+          <div class="notch" style="left:25%"></div><div class="notch" style="left:50%"></div>
+          <div class="notch" style="left:75%"></div><div class="notch" style="left:90%"></div>
+        </div>
+        <div class="opp-blurb" id="opp-blurb"></div>
+      </div>
+      <div class="menu-row">
+        <button data-tab="upgrades">UPGRADES</button>
+        <button data-tab="crew">CREW</button>
+        <button data-tab="garage">GARAGE</button>
+        <button data-tab="boosters" class="hot">📺 BOOSTERS</button>
+      </div>
+      <div class="toasts" id="toasts"></div>
+      <div class="fade" id="fade"></div>`;
+    this.fade = document.getElementById('fade')!;
+
+    this.root.querySelectorAll('.menu-row button').forEach((b) => {
+      b.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        this.toggle((b as HTMLElement).dataset.tab!);
+      });
+    });
+  }
+
+  // ---- HUD refresh ----------------------------------------------------------
+  refresh() {
+    const g = this.game;
+    setText('v-respect', fmt(g.s.respect));
+    setText('v-mentality', fmt(g.s.mentality));
+    setText('v-tap', fmt(g.respectPerTap));
+    setText('v-rps', fmt(g.respectPerSec));
+    setText('opp-name', `RED LIGHT ${g.s.opponentIndex + 1} — ${g.opponent.name}`);
+    setText('opp-blurb', g.opponent.blurb);
+    (document.getElementById('opp-fill')!).style.width = `${(g.progress01 * 100).toFixed(1)}%`;
+
+    const pill = document.getElementById('boost-pill')!;
+    if (g.boostActive) {
+      pill.hidden = false;
+      pill.textContent = `🔥 x${g.s.boostMult} — ${Math.ceil((g.s.boostEndsAt - Date.now()) / 1000)}s`;
+    } else pill.hidden = true;
+
+    if (this.openTab) this.refreshPanel();
+  }
+
+  toast(msg: string, cls = '') {
+    const t = el('div', `toast ${cls}`, msg);
+    document.getElementById('toasts')!.appendChild(t);
+    setTimeout(() => t.classList.add('show'), 10);
+    setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 400); }, 2600);
+  }
+
+  flashFade(cb?: () => void) {
+    this.fade.classList.add('on');
+    setTimeout(() => { this.fade.classList.remove('on'); cb?.(); }, 2400);
+  }
+
+  // ---- panels -----------------------------------------------------------------
+  private toggle(tab: string) {
+    if (this.openTab === tab) return this.close();
+    this.openTab = tab;
+    this.panel?.remove();
+    this.panel = el('div', 'panel');
+    this.root.appendChild(this.panel);
+    this.refreshPanel();
+    sfx.click();
+  }
+
+  close() {
+    this.openTab = null;
+    this.panel?.remove();
+    this.panel = null;
+  }
+
+  get isPanelOpen() { return this.openTab !== null; }
+
+  private refreshPanel() {
+    if (!this.panel || !this.openTab) return;
+    const g = this.game;
+    const rows: string[] = [`<div class="panel-head">${this.openTab.toUpperCase()}<button class="x">✕</button></div>`];
+
+    if (this.openTab === 'upgrades') {
+      for (const u of UPGRADES) {
+        const lv = g.s.upgradeLevels[u.id] ?? 0;
+        const maxed = !!u.maxLevel && lv >= u.maxLevel;
+        const cost = g.upgradeCost(u.id);
+        rows.push(row(u.id, u.name, `Lv ${lv}${maxed ? ' MAX' : ''} · ${u.desc}`,
+          maxed ? '—' : `${fmt(cost)} R`, !maxed && g.s.respect >= cost, 'upgrades'));
+      }
+    } else if (this.openTab === 'crew') {
+      for (const c of CREW) {
+        const n = g.s.crewCounts[c.id] ?? 0;
+        const cost = g.crewCost(c.id);
+        rows.push(row(c.id, c.name, `x${n} · ${c.desc} (+${fmt(c.tapsPerSec)}/s)`,
+          `${fmt(cost)} R`, g.s.respect >= cost, 'crew'));
+      }
+    } else if (this.openTab === 'garage') {
+      rows.push(`<div class="panel-note">Aesthetic unlockables. Placeholder art — final meme skins land via the asset pipeline.</div>`);
+      for (const c of COSMETICS) {
+        const owned = g.s.ownedCosmetics.includes(c.id);
+        const equipped = g.s.equippedCosmetics[c.slot] === c.id;
+        rows.push(row(c.id, `${c.name}${equipped ? ' ✓' : ''}`, c.desc,
+          owned ? (equipped ? 'UNEQUIP' : 'EQUIP') : `${c.cost} M`,
+          owned || g.s.mentality >= c.cost, 'cosmetic'));
+      }
+    } else if (this.openTab === 'boosters') {
+      rows.push(`<div class="panel-note">Watch an ad, get a booster. No daily limit — the more the merrier. Ads watched: ${g.s.adsWatched}</div>`);
+      for (const b of BOOSTERS) {
+        rows.push(row(b.id, `📺 ${b.name}`, b.desc, `WATCH ${b.adSeconds}s`, true, 'booster'));
+      }
+    }
+
+    this.panel.innerHTML = rows.join('');
+    this.panel.querySelector('.x')!.addEventListener('click', () => this.close());
+    this.panel.querySelectorAll('.row button').forEach((btn) => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const id = (btn as HTMLElement).dataset.id!;
+        const kind = (btn as HTMLElement).dataset.kind!;
+        this.action(kind, id);
+      });
+    });
+  }
+
+  private async action(kind: string, id: string) {
+    const g = this.game;
+    if (kind === 'upgrades') { if (g.buyUpgrade(id)) sfx.buy(); }
+    else if (kind === 'crew') { if (g.buyCrew(id)) sfx.buy(); }
+    else if (kind === 'cosmetic') {
+      if (g.s.ownedCosmetics.includes(id)) g.toggleCosmetic(id);
+      else if (!g.buyCosmetic(id)) return;
+      sfx.buy();
+      this.onCosmeticsChanged();
+    } else if (kind === 'booster') {
+      const b = BOOSTERS.find(x => x.id === id) as BoosterDef;
+      const watched = await this.ads.show(b.adSeconds);
+      if (watched) {
+        g.grantBooster(b);
+        sfx.boost();
+      }
+    }
+    this.refresh();
+  }
+}
+
+function row(id: string, name: string, desc: string, action: string, enabled: boolean, kind?: string): string {
+  return `<div class="row">
+    <div class="row-txt"><div class="row-name">${name}</div><div class="row-desc">${desc}</div></div>
+    <button data-id="${id}" data-kind="${kind ?? 'AUTO'}" ${enabled ? '' : 'disabled'}>${action}</button>
+  </div>`;
+}
+
+function setText(id: string, v: string) {
+  const e = document.getElementById(id);
+  if (e && e.textContent !== v) e.textContent = v;
+}

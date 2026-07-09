@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__mcp-registry__search_mcp_registry",
+      "WebSearch",
+      "WebFetch(domain:apps.apple.com)",
+      "WebFetch(domain:knowyourmeme.com)",
+      "PowerShell(node -v)",
+      "PowerShell(npm -v)",
+      "PowerShell(gh --version)",
+      "PowerShell(gh repo list --limit 30)",
+      "PowerShell(claude mcp add --transport http higgsfield https://mcp.higgsfield.ai/mcp)",
+      "Read(//c/Users/jojos/AppData/Local/**)",
+      "Read(//c/Users/jojos/scoop/**)",
+      "Read(//c/Users/jojos/AppData/Roaming/**)",
+      "PowerShell(winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements --silent)",
+      "PowerShell(winget install GitHub.cli --accept-package-agreements --accept-source-agreements --silent)",
+      "PowerShell($env:PATH = \"C:\\\\Program Files\\\\nodejs;C:\\\\Program Files\\\\GitHub CLI;$env:PATH\"; node -v; npm -v; gh auth status)",
+      "PowerShell($env:PATH = \"C:\\\\Program Files\\\\nodejs;$env:PATH\"; npm install --no-fund --no-audit)",
+      "PowerShell($env:PATH = \"C:\\\\Program Files\\\\nodejs;$env:PATH\"; npm run build)",
+      "Bash(cmdkey /list)"
+    ]
+  }
+}
