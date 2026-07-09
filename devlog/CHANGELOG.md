@@ -135,3 +135,25 @@ changed in the build at the moment it was taken.
   set = live worldwide board + real name registry. Three commands to deploy.
 - **Native projects generated**: android/ (Gradle) and ios/ (Xcode) via
   Capacitor, web bundle synced. Open in Android Studio / Xcode and run.
+
+## 2026-07-09-11-roster-gymbro-pickup.png / -samurai-wedge.png
+**Build state:** content expansion — 4x the handcrafted roster.
+- **40 named opponents** (was 10), each with a unique original character:
+  act 2 (Gym Bro, The NPC, Doomer, Bloomer, The Yapper, Crypto Uncle, Aura
+  Farmer, Granny Torque, The Mime, Cone Kingpin), act 3 professionals
+  (Valet Prime, Chef Redline, Det. Yellowlight, The Surgeon, Off-Duty
+  Lifeguard, Grounded Astronaut, The Conductor, Beekeeper, The Librarian,
+  Final Delivery), act 4 legends (Traffic Knight, Lane Pharaoh, Roundabout
+  Viking, Signal Samurai, Parking Pirate, Gridlock Wizard, Visitor 51,
+  Unit T-RAFFIC, Count Idle, The Chrononaut). Requirements continue the
+  simulation-tuned 1.8x curve out to ~2.75e15 taps at light 40.
+- **3 new car styles**: pickup (open bed), wedge (low sports), taxi (roof
+  sign) — used across the roster and the endless procedural pool.
+- **Character feature system expanded**: hairstyles (mohawk/afro/spiky/long),
+  beards, mustaches, headphones, eyepatches, visors, crowns, helmets, chef
+  and wizard hats, face paint — endless procedural drivers now draw from the
+  full combinatorial space, so repeats are effectively never.
+- **4 new districts/skies** (Storm Docks, Toxic Flats, Noir Quarter, Mint
+  Boulevard) — 10 districts total on the 10-light rotation.
+- **13 new garage cosmetics** (goop colors, decals, skies, ornaments, horn).
+- Procedural name/blurb pools widened (24x24 name combos).

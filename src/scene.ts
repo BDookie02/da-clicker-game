@@ -74,6 +74,10 @@ const SKIES: Record<string, { top: number; bottom: number; fog: number; ambient:
   vapor:  { top: 0x1a0a3e, bottom: 0xe83a9a, fog: 0x5a2a6e, ambient: 0xcc99dd, sun: 1.0 },
   fog:    { top: 0x9aa4ac, bottom: 0xb8c0c6, fog: 0xaab4bc, ambient: 0xd8dde2, sun: 1.2 },
   dawn:   { top: 0x4a5a9e, bottom: 0xe8a86a, fog: 0xc0a898, ambient: 0xf0d8c8, sun: 1.8 },
+  storm:  { top: 0x2a3038, bottom: 0x4a545e, fog: 0x3a444e, ambient: 0x9aa8b4, sun: 0.9 },
+  toxic:  { top: 0x2a3a16, bottom: 0x8aa832, fog: 0x5a7024, ambient: 0xc0d088, sun: 1.3 },
+  noir:   { top: 0x0c0c10, bottom: 0x2e2e36, fog: 0x1a1a20, ambient: 0xb8b8c4, sun: 1.1 },
+  mint:   { top: 0x4ac0a0, bottom: 0xd8f0e0, fog: 0xb0e0cc, ambient: 0xf0fff8, sun: 2.0 },
 };
 
 export class GameScene {
@@ -378,7 +382,7 @@ export class GameScene {
     // seat, head turned, staring at you through the glass). The 2D character
     // billboard mounts here and always faces the player camera.
     const mountY = def.carStyle === 'cube' ? 2.0 : def.carStyle === 'metro' ? 1.85
-      : def.carStyle === 'van' ? 1.45 : 1.25;
+      : def.carStyle === 'van' ? 1.45 : def.carStyle === 'wedge' ? 0.98 : 1.25;
     const mount = new THREE.Object3D();
     mount.name = `sprite:${def.spriteSlot}`;
     mount.position.set(0.45, mountY, 0.15);
@@ -423,7 +427,7 @@ export class GameScene {
     };
 
     const s = def.carStyle;
-    const long = s === 'limo' ? 6.4 : s === 'metro' ? 7.5 : s === 'van' ? 4.6 : 4.0;
+    const long = s === 'limo' ? 6.4 : s === 'metro' ? 7.5 : s === 'van' || s === 'pickup' ? 4.6 : 4.0;
     const tall = s === 'van' || s === 'metro' ? 1.9 : s === 'cube' ? 1.6 : 1.0;
 
     if (s === 'cube') {
@@ -439,11 +443,13 @@ export class GameScene {
     } else {
       // unibody: lower body + glass greenhouse cabin (so the driver is
       // actually visible inside) capped with a body-colored roof slab
-      add(new THREE.BoxGeometry(2.0, 0.62, long), body, 0, 0.62, 0);
-      const cabLen = s === 'limo' ? 2.2 : s === 'muscle' ? 1.7 : 2.3;
-      const cabH = s === 'van' ? 1.15 : 0.72;
-      const cabY = 0.62 + 0.31 + cabH / 2;
-      const cabZ = s === 'muscle' ? -0.5 : (s === 'van' ? 0.4 : -0.2);
+      const bodyH = s === 'wedge' ? 0.45 : 0.62;
+      const bodyY = s === 'wedge' ? 0.5 : 0.62;
+      add(new THREE.BoxGeometry(2.0, bodyH, long), body, 0, bodyY, 0);
+      const cabLen = s === 'limo' ? 2.2 : s === 'muscle' ? 1.7 : s === 'pickup' ? 1.5 : 2.3;
+      const cabH = s === 'van' ? 1.15 : s === 'wedge' ? 0.55 : 0.72;
+      const cabY = bodyY + bodyH / 2 + cabH / 2;
+      const cabZ = s === 'muscle' ? -0.5 : s === 'van' ? 0.4 : s === 'pickup' ? 0.9 : -0.2;
       // seats first (opaque pass renders before the transparent greenhouse)
       for (const sx of [0.45, -0.45]) {
         add(new THREE.BoxGeometry(0.55, 0.16, 0.6), seatM, sx, cabY - cabH / 2 + 0.1, cabZ + 0.25);
@@ -451,6 +457,15 @@ export class GameScene {
       }
       const cab = add(new THREE.BoxGeometry(1.7, cabH, cabLen), glass, 0, cabY, cabZ);
       add(new THREE.BoxGeometry(1.74, 0.1, cabLen * 1.02), body, 0, cabY + cabH / 2, cabZ); // roof
+      if (s === 'taxi') {
+        add(new THREE.BoxGeometry(0.8, 0.22, 0.4), new THREE.MeshBasicMaterial({ color: 0xe8c84a }), 0, cabY + cabH / 2 + 0.16, cabZ);
+      }
+      if (s === 'pickup') {                                   // open bed walls
+        add(new THREE.BoxGeometry(1.9, 0.3, 0.12), trim, 0, 1.05, -long / 2 + 0.06);
+        add(new THREE.BoxGeometry(0.12, 0.3, 1.9), trim, -0.94, 1.05, -1.25);
+        add(new THREE.BoxGeometry(0.12, 0.3, 1.9), trim, 0.94, 1.05, -1.25);
+      }
+      if (s === 'wedge') add(new THREE.BoxGeometry(1.7, 0.1, 0.4), trim, 0, 1.1, -long / 2 + 0.3); // spoiler
       add(new THREE.BoxGeometry(2.02, 0.16, long * 0.98), trim, 0, 0.3, 0);
       if (s === 'lowrider') g.position.y = -0.18;
       if (s === 'muscle') add(new THREE.BoxGeometry(1.6, 0.12, 0.5), trim, 0, 1.15, -1.8); // spoiler
@@ -600,13 +615,20 @@ function lerpHex(a: string, b: string, t: number): string {
 interface DriverLook {
   skin: string; shirt: string;
   hair?: string;                       // undefined = bald
-  hat?: 'cap' | 'cowboy' | 'beanie' | 'halo' | 'horns';
+  hairStyle?: 'flat' | 'mohawk' | 'afro' | 'spiky' | 'long';
+  hat?: 'cap' | 'cowboy' | 'beanie' | 'halo' | 'horns' | 'crown' | 'helmet' | 'chef' | 'wizard';
   hatColor?: string;
   shades?: boolean;                    // sunglasses band
+  visor?: boolean;                     // full glowing visor (robots/astronauts)
+  eyepatch?: boolean;
   mask?: boolean;                      // balaclava lower face
   bandana?: boolean;
+  mustache?: boolean;
+  beard?: boolean;
+  headphones?: boolean;
   glow?: boolean;                      // radiant outline
   stubble?: boolean;
+  facePaint?: string;                  // mime white, warpaint, etc.
 }
 
 // Original character designs riffing on the opponent archetypes.
@@ -621,6 +643,39 @@ const DRIVER_LOOKS: Record<string, DriverLook> = {
   char_demon:      { skin: '#8e2222', shirt: '#1c1c22', hat: 'horns', hatColor: '#3a0e0e' },
   char_sigma:      { skin: '#e0b890', shirt: '#16161c', hair: '#1a1a1a', shades: true },
   char_discipline: { skin: '#f4f4f0', shirt: '#e8e8e4', hat: 'halo', hatColor: '#ffe98a', glow: true },
+  // act 2
+  char_gymbro:     { skin: '#e0a878', shirt: '#d84a4a', hair: '#2a2018', hairStyle: 'spiky', stubble: true },
+  char_npc:        { skin: '#c8c8c8', shirt: '#9a9a9a', hair: '#7a7a7a' },
+  char_doomer:     { skin: '#c9b49a', shirt: '#2e3440', hat: 'beanie', hatColor: '#1a1e26', stubble: true },
+  char_bloomer:    { skin: '#e8c098', shirt: '#7ac47a', hair: '#c9a227', hairStyle: 'flat' },
+  char_yapper:     { skin: '#e8b48a', shirt: '#e08ab0', hair: '#4a2e1a', hairStyle: 'long' },
+  char_cryptouncle:{ skin: '#d8a878', shirt: '#c9a227', hair: '#666666', mustache: true, shades: true },
+  char_aurafarmer: { skin: '#b89ae0', shirt: '#8a3ab0', hair: '#5a2472', hairStyle: 'spiky', glow: true },
+  char_granny:     { skin: '#e8c8b0', shirt: '#b8a8d8', hair: '#e0e0e0', hairStyle: 'afro' },
+  char_mime:       { skin: '#f0f0f0', shirt: '#2a2a2e', hat: 'beanie', hatColor: '#1a1a1e', facePaint: '#ffffff' },
+  char_kingpin:    { skin: '#c68a5a', shirt: '#e8862a', hat: 'helmet', hatColor: '#e8862a', beard: true },
+  // act 3
+  char_valet:      { skin: '#e0b890', shirt: '#2a2a2e', hat: 'cap', hatColor: '#c9a227', mustache: true },
+  char_chef:       { skin: '#e8b48a', shirt: '#e8e0d0', hat: 'chef', hatColor: '#f0f0ec', mustache: true },
+  char_detective:  { skin: '#c9a184', shirt: '#8a7a5c', hat: 'cowboy', hatColor: '#4a4234', stubble: true },
+  char_surgeon:    { skin: '#d8b898', shirt: '#7ab8c8', mask: true, hatColor: '#5a98a8' },
+  char_lifeguard:  { skin: '#e0a068', shirt: '#e8482a', hair: '#e8d84a', hairStyle: 'long', shades: true },
+  char_astronaut:  { skin: '#e8c8a8', shirt: '#d8d8e0', hat: 'helmet', hatColor: '#b8b8c8', visor: true },
+  char_conductor:  { skin: '#d8b090', shirt: '#1c1c22', hair: '#e0e0e0', hairStyle: 'spiky' },
+  char_beekeeper:  { skin: '#e0b890', shirt: '#e8c84a', hat: 'helmet', hatColor: '#f0e8c0', visor: true },
+  char_librarian:  { skin: '#c9a184', shirt: '#6a4a2e', hair: '#4a3a2a', hairStyle: 'flat', shades: true },
+  char_mailman:    { skin: '#c68a5a', shirt: '#4a6ab0', hat: 'cap', hatColor: '#2e4472' },
+  // act 4
+  char_knight:     { skin: '#d8b898', shirt: '#8a8a9a', hat: 'helmet', hatColor: '#6a6a7a', visor: true },
+  char_pharaoh:    { skin: '#c68a5a', shirt: '#2a6a8a', hat: 'crown', hatColor: '#c9a227' },
+  char_viking:     { skin: '#e0b088', shirt: '#5a4a3a', hat: 'horns', hatColor: '#d8d0c0', beard: true },
+  char_samurai:    { skin: '#d8b090', shirt: '#b03a3a', hair: '#1a1a1a', hairStyle: 'long', bandana: true },
+  char_pirate:     { skin: '#c9a184', shirt: '#2a2a2e', hat: 'cowboy', hatColor: '#1a1a1e', eyepatch: true, beard: true },
+  char_wizard:     { skin: '#e0c8b0', shirt: '#4a2a8a', hat: 'wizard', hatColor: '#4a2a8a', beard: true },
+  char_alien:      { skin: '#8ae0c0', shirt: '#4ae0c0', glow: true },
+  char_robot:      { skin: '#9aa8b4', shirt: '#6a7a8a', visor: true },
+  char_vampire:    { skin: '#e8e0e8', shirt: '#1c1016', hair: '#0a0a0a', hairStyle: 'flat' },
+  char_timetraveler:{ skin: '#d8b898', shirt: '#b87a2a', hair: '#e0e0e0', hairStyle: 'spiky', shades: true },
 };
 
 function lookFor(slot: string): DriverLook {
@@ -630,13 +685,18 @@ function lookFor(slot: string): DriverLook {
   const rng = mulberry(h);
   const pick = (arr: string[]) => arr[Math.floor(rng() * arr.length)];
   return {
-    skin: pick(['#e8b48a', '#c68a5a', '#8a5a3a', '#f0d0b0', '#6a4a2e']),
-    shirt: pick(['#b03a3a', '#3a6ab0', '#3ab06a', '#8a3ab0', '#2e2e36', '#c9a227']),
-    hair: rng() < 0.25 ? undefined : pick(['#1a1a1a', '#4a2e1a', '#c9a227', '#666666', '#b03a3a']),
-    hat: rng() < 0.2 ? (pick(['cap', 'beanie']) as DriverLook['hat']) : undefined,
-    hatColor: pick(['#2e2e36', '#5a3a2a', '#3a5a2a']),
+    skin: pick(['#e8b48a', '#c68a5a', '#8a5a3a', '#f0d0b0', '#6a4a2e', '#d8a878', '#c9a184']),
+    shirt: pick(['#b03a3a', '#3a6ab0', '#3ab06a', '#8a3ab0', '#2e2e36', '#c9a227', '#e08ab0', '#4ac0a0', '#e8862a']),
+    hair: rng() < 0.2 ? undefined : pick(['#1a1a1a', '#4a2e1a', '#c9a227', '#666666', '#b03a3a', '#e0e0e0', '#4a2a8a']),
+    hairStyle: pick(['flat', 'flat', 'flat', 'mohawk', 'afro', 'spiky', 'long']) as DriverLook['hairStyle'],
+    hat: rng() < 0.25 ? (pick(['cap', 'beanie', 'cowboy', 'helmet']) as DriverLook['hat']) : undefined,
+    hatColor: pick(['#2e2e36', '#5a3a2a', '#3a5a2a', '#8e2222', '#2e4472']),
     shades: rng() < 0.15,
-    stubble: rng() < 0.3,
+    eyepatch: rng() < 0.05,
+    mustache: rng() < 0.18,
+    beard: rng() < 0.15,
+    headphones: rng() < 0.12,
+    stubble: rng() < 0.25,
   };
 }
 
@@ -659,21 +719,42 @@ function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
     g.fillStyle = skin;
     g.fillRect(20, 29, 8, 7);                                 // neck
     g.fillRect(14, 8, 20, 23);                                // face
+    if (L.facePaint) { g.fillStyle = L.facePaint; g.fillRect(14, 8, 20, 23); }
     // hair / hats
     if (L.hair && !L.hat) {
       g.fillStyle = L.hair;
-      g.fillRect(13, 5, 22, 6);
-      g.fillRect(13, 5, 4, 13);                               // sideburn
+      const hs = L.hairStyle ?? 'flat';
+      if (hs === 'flat')   { g.fillRect(13, 5, 22, 6); g.fillRect(13, 5, 4, 13); }
+      if (hs === 'mohawk') { g.fillRect(21, 0, 6, 11); }
+      if (hs === 'afro')   { g.fillRect(11, 1, 26, 9); g.fillRect(9, 4, 4, 9); g.fillRect(35, 4, 4, 9); }
+      if (hs === 'spiky')  { g.fillRect(13, 5, 22, 4); for (let x = 14; x < 34; x += 5) g.fillRect(x, 1, 3, 5); }
+      if (hs === 'long')   { g.fillRect(13, 5, 22, 6); g.fillRect(12, 5, 5, 24); g.fillRect(31, 5, 5, 24); }
     }
     if (L.hat === 'cap')    { g.fillStyle = L.hatColor!; g.fillRect(12, 3, 24, 7); g.fillRect(30, 8, 10, 3); }
     if (L.hat === 'beanie') { g.fillStyle = L.hatColor!; g.fillRect(12, 3, 24, 9); }
     if (L.hat === 'cowboy') { g.fillStyle = L.hatColor!; g.fillRect(16, 1, 16, 6); g.fillRect(8, 6, 32, 3); }
     if (L.hat === 'horns')  { g.fillStyle = L.hatColor!; g.fillRect(11, 1, 4, 8); g.fillRect(33, 1, 4, 8); }
     if (L.hat === 'halo')   { g.fillStyle = L.hatColor!; g.fillRect(15, 0, 18, 2); }
-    // eyes: narrow with anger, red pupils past tier 2 (shades replace them)
-    if (L.shades) {
+    if (L.hat === 'crown')  { g.fillStyle = L.hatColor!; g.fillRect(13, 2, 22, 5); for (let x = 14; x < 34; x += 6) g.fillRect(x, 0, 3, 4); }
+    if (L.hat === 'helmet') { g.fillStyle = L.hatColor!; g.fillRect(11, 2, 26, 10); g.fillRect(11, 2, 3, 18); g.fillRect(34, 2, 3, 18); }
+    if (L.hat === 'chef')   { g.fillStyle = L.hatColor!; g.fillRect(14, 0, 20, 9); g.fillRect(12, 6, 24, 4); }
+    if (L.hat === 'wizard') { g.fillStyle = L.hatColor!; g.fillRect(20, 0, 8, 4); g.fillRect(16, 3, 16, 4); g.fillRect(10, 6, 28, 3); }
+    if (L.headphones) {
+      g.fillStyle = '#1a1a1e';
+      g.fillRect(11, 12, 4, 8); g.fillRect(33, 12, 4, 8); g.fillRect(12, 2, 24, 3);
+    }
+    // eyes: narrow with anger, red pupils past tier 2 (shades/visor replace them)
+    if (L.visor) {
+      g.fillStyle = a >= 3 ? '#e04a2a' : '#4ae0c0';
+      g.fillRect(14, 13, 20, 7);
+    } else if (L.shades) {
       g.fillStyle = '#0a0a0a'; g.fillRect(14, 14, 20, 5);
       if (a >= 3) { g.fillStyle = '#c01010'; g.fillRect(17, 16, 3, 2); g.fillRect(28, 16, 3, 2); } // glare through
+    } else if (L.eyepatch) {
+      g.fillStyle = '#111111'; g.fillRect(15, 13, 8, 6); g.fillRect(14, 12, 20, 2);
+      const eyeH = a >= 3 ? 3 : 5;
+      g.fillStyle = '#ffffff'; g.fillRect(26, 15, 6, eyeH);
+      g.fillStyle = a >= 3 ? '#c01010' : '#111111'; g.fillRect(28, 16, 3, Math.min(3, eyeH));
     } else {
       const eyeH = a >= 3 ? 3 : a >= 2 ? 4 : 6;
       g.fillStyle = '#ffffff';
@@ -688,6 +769,9 @@ function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
       g.fillRect(15 + i, 11 + drop, 1, 3);
       g.fillRect(32 - i, 11 + drop, 1, 3);
     }
+    // facial hair first — the mouth draws over it (teeth carve through beards)
+    if (L.beard)    { g.fillStyle = L.hair ?? '#2a2018'; g.fillRect(14, 24, 20, 8); g.fillRect(17, 30, 14, 4); }
+    if (L.mustache) { g.fillStyle = L.hair ?? '#2a2018'; g.fillRect(17, 22, 14, 3); }
     // lower face: mask/bandana cover the mouth, otherwise anger mouth
     if (L.mask || L.bandana) {
       g.fillStyle = L.bandana ? '#8e3a2e' : (L.hatColor ?? '#22222a');
