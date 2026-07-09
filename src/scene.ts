@@ -371,10 +371,12 @@ export class GameScene {
     this.opponentGroup.position.set(0, 0, 0);
     // Empty billboard mount at the driver's window — 2D character art goes here
     // later (Higgsfield pipeline), keyed by def.spriteSlot.
-    // Car is rotated 180° in world, so local -x = the window facing the player.
+    // Driver's seat (car local +x = far lane side, like the meme: he's in his
+    // seat, head turned, staring at you through the glass). The 2D character
+    // billboard mounts here and always faces the player camera.
     const mount = new THREE.Object3D();
     mount.name = `sprite:${def.spriteSlot}`;
-    mount.position.set(-0.95, 1.25, -0.3);
+    mount.position.set(0.45, 1.3, 0.15);
     this.opponentGroup.add(mount);
     this.sprite = null;
   }
@@ -383,7 +385,10 @@ export class GameScene {
     const g = new THREE.Group();
     const body = this.mat(def.carColor);
     const trim = this.mat(def.carAccent);
-    const glass = this.mat(0x0e1218); // dark windows: vehicle intentionally "empty"
+    // see-through glass (PSX-style semi-transparency) so the driver is visible;
+    // interiors hold empty seats until the 2D characters arrive
+    const glass = this.mat(0x8ab4cc, { transparent: true, opacity: 0.35 });
+    const seatM = this.mat(0x23262c);
     const tire = this.mat(0x18181c);
 
     const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number, ry = 0) => {
@@ -400,6 +405,7 @@ export class GameScene {
 
     if (s === 'cube') {
       add(new THREE.BoxGeometry(1.9, 1.6, 3.4), body, 0, 1.0, 0);
+      add(new THREE.BoxGeometry(1.4, 0.55, 0.8), seatM, 0, 1.6, 0.1); // bench seat
       add(new THREE.BoxGeometry(1.7, 0.9, 1.5), glass, 0, 1.85, 0.2);
       for (const [x, z] of [[-1, 1.2], [1, 1.2], [-1, -1.2], [1, -1.2]] as const)
         add(new THREE.BoxGeometry(0.5, 0.7, 0.7), tire, x * 1.0, 0.35, z);
@@ -414,6 +420,12 @@ export class GameScene {
       const cabH = s === 'van' ? 1.15 : 0.72;
       const cab = add(new THREE.BoxGeometry(1.8, cabH, cabLen), body, 0, 0.62 + 0.31 + cabH / 2, s === 'muscle' ? -0.5 : (s === 'van' ? 0.4 : -0.2));
       cab.scale.x = 0.92;
+      // empty front seats, visible through the glass (opaque pass renders
+      // before the transparent windows, so they show through correctly)
+      for (const sx of [0.45, -0.45]) {
+        add(new THREE.BoxGeometry(0.55, 0.16, 0.6), seatM, sx, cab.position.y - cabH / 2 + 0.1, cab.position.z + 0.25);
+        add(new THREE.BoxGeometry(0.55, 0.55, 0.13), seatM, sx, cab.position.y + 0.05, cab.position.z - 0.1);
+      }
       add(new THREE.BoxGeometry(1.84, cabH * 0.62, cabLen * 0.94), glass, 0, cab.position.y + 0.08, cab.position.z);
       add(new THREE.BoxGeometry(2.02, 0.16, long * 0.98), trim, 0, 0.3, 0);
       if (s === 'lowrider') g.position.y = -0.18;

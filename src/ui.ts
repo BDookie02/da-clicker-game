@@ -29,18 +29,28 @@ class PlaceholderAdProvider implements AdProvider {
       document.body.appendChild(overlay);
       const btn = overlay.querySelector('.ad-skip') as HTMLButtonElement;
       const span = btn.querySelector('span')!;
-      let left = lengthSec;
-      span.textContent = String(left);
+      span.textContent = String(lengthSec);
+
+      // Verified watch: credit only wall-clock time while the page is actually
+      // visible. Hiding the tab pauses the counter; there is no dismiss/skip,
+      // so the reward is unreachable without a full watch. In store builds the
+      // AdMob provider replaces this — its reward event only fires on SDK-
+      // confirmed completion (enable server-side verification for hard proof).
+      let watched = 0;
+      let lastT = performance.now();
       const iv = setInterval(() => {
-        left -= 1;
-        span.textContent = String(left);
-        if (left <= 0) {
+        const now = performance.now();
+        if (!document.hidden) watched += (now - lastT) / 1000;
+        lastT = now;
+        const left = Math.max(0, Math.ceil(lengthSec - watched));
+        span.textContent = document.hidden ? `${left} (paused)` : String(left);
+        if (watched >= lengthSec) {
           clearInterval(iv);
           btn.disabled = false;
           btn.innerHTML = 'CLAIM REWARD';
-          btn.onclick = () => { overlay.remove(); resolve(true); };
+          btn.onclick = () => { overlay.remove(); resolve(watched >= lengthSec); };
         }
-      }, 1000);
+      }, 250);
     });
   }
 }
