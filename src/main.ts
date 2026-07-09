@@ -100,9 +100,10 @@ game.on((e) => {
 
 // Tap anywhere on the scene (not on UI) to tap
 const onTap = (ev: Event) => {
-  if (transitioning || ui.isPanelOpen) return;
   const t = ev.target as HTMLElement;
-  if (t.closest('.panel, .menu-row, .ad-overlay, button')) return;
+  if (t.closest('.panel, .menu-row, .ad-overlay, button')) return; // UI handles it
+  if (ui.isPanelOpen) { ui.close(); return; } // tapping outside any menu closes it
+  if (transitioning) return;
   game.tap();
   sfx.tap();
   ev.preventDefault();

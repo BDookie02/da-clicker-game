@@ -192,7 +192,7 @@ export class UI {
       }
     } else if (this.openTab === 'ranks') {
       const native = !!this.lb && this.lb.platform !== 'web';
-      rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS${native
+      rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS (raw taps only, boosters don't count)${native
         ? ` · syncing via ${this.lb!.platform === 'gamecenter' ? 'Game Center' : 'Google Play Games'}`
         : ' · placeholder rivals until store launch (Game Center / Play Games)'}</div>`);
       const list = getWorldList(g.s.totalTaps);
@@ -251,6 +251,7 @@ export class UI {
       }
     } else if (kind === 'booster') {
       const b = BOOSTERS.find(x => x.id === id) as BoosterDef;
+      this.close(); // starting an ad closes any open menu — no stacked overlays
       const watched = await this.ads.show(b.adSeconds);
       if (watched) {
         g.grantBooster(b);

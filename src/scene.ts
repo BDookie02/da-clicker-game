@@ -88,7 +88,7 @@ export class GameScene {
   private opponentGroup = new THREE.Group();  // car + goop, shaken as a unit
   private opponentAnchor = new THREE.Group(); // world placement
   private goopGroup = new THREE.Group();
-  private sprite: THREE.Mesh | null = null;   // future 2D character billboard
+  private sprite: THREE.Object3D | null = null; // 2D driver billboard
   private trafficLights: THREE.MeshBasicMaterial[] = [];
   private lampMats: THREE.MeshBasicMaterial[] = [];
   private dashDecal: THREE.Mesh | null = null;
@@ -374,11 +374,19 @@ export class GameScene {
     // Driver's seat (car local +x = far lane side, like the meme: he's in his
     // seat, head turned, staring at you through the glass). The 2D character
     // billboard mounts here and always faces the player camera.
+    const mountY = def.carStyle === 'cube' ? 2.0 : def.carStyle === 'metro' ? 1.85
+      : def.carStyle === 'van' ? 1.45 : 1.25;
     const mount = new THREE.Object3D();
     mount.name = `sprite:${def.spriteSlot}`;
-    mount.position.set(0.45, 1.3, 0.15);
+    mount.position.set(0.45, mountY, 0.15);
     this.opponentGroup.add(mount);
-    this.sprite = null;
+    // Procedural placeholder driver (classic PS1 billboard) until the real
+    // meme character art replaces it — seeded per slot so every driver looks
+    // different, eyes locked dead on the player.
+    const driver = makeDriverSprite(def.spriteSlot);
+    driver.position.copy(mount.position);
+    this.opponentGroup.add(driver);
+    this.sprite = driver;
   }
 
   private buildCar(def: OpponentDef): THREE.Group {
@@ -387,7 +395,7 @@ export class GameScene {
     const trim = this.mat(def.carAccent);
     // see-through glass (PSX-style semi-transparency) so the driver is visible;
     // interiors hold empty seats until the 2D characters arrive
-    const glass = this.mat(0x8ab4cc, { transparent: true, opacity: 0.35 });
+    const glass = this.mat(0xa8d4e8, { transparent: true, opacity: 0.22 });
     const seatM = this.mat(0x23262c);
     const tire = this.mat(0x18181c);
 
@@ -414,19 +422,20 @@ export class GameScene {
       for (let i = -2; i <= 2; i++) add(new THREE.BoxGeometry(2.44, 0.6, 0.9), glass, 0, 1.9, i * 1.4);
       add(new THREE.BoxGeometry(2.5, 0.35, long), trim, 0, 0.35, 0);
     } else {
-      // unibody: lower body + cabin
+      // unibody: lower body + glass greenhouse cabin (so the driver is
+      // actually visible inside) capped with a body-colored roof slab
       add(new THREE.BoxGeometry(2.0, 0.62, long), body, 0, 0.62, 0);
       const cabLen = s === 'limo' ? 2.2 : s === 'muscle' ? 1.7 : 2.3;
       const cabH = s === 'van' ? 1.15 : 0.72;
-      const cab = add(new THREE.BoxGeometry(1.8, cabH, cabLen), body, 0, 0.62 + 0.31 + cabH / 2, s === 'muscle' ? -0.5 : (s === 'van' ? 0.4 : -0.2));
-      cab.scale.x = 0.92;
-      // empty front seats, visible through the glass (opaque pass renders
-      // before the transparent windows, so they show through correctly)
+      const cabY = 0.62 + 0.31 + cabH / 2;
+      const cabZ = s === 'muscle' ? -0.5 : (s === 'van' ? 0.4 : -0.2);
+      // seats first (opaque pass renders before the transparent greenhouse)
       for (const sx of [0.45, -0.45]) {
-        add(new THREE.BoxGeometry(0.55, 0.16, 0.6), seatM, sx, cab.position.y - cabH / 2 + 0.1, cab.position.z + 0.25);
-        add(new THREE.BoxGeometry(0.55, 0.55, 0.13), seatM, sx, cab.position.y + 0.05, cab.position.z - 0.1);
+        add(new THREE.BoxGeometry(0.55, 0.16, 0.6), seatM, sx, cabY - cabH / 2 + 0.1, cabZ + 0.25);
+        add(new THREE.BoxGeometry(0.55, 0.55, 0.13), seatM, sx, cabY - cabH / 2 + 0.35, cabZ - 0.1);
       }
-      add(new THREE.BoxGeometry(1.84, cabH * 0.62, cabLen * 0.94), glass, 0, cab.position.y + 0.08, cab.position.z);
+      const cab = add(new THREE.BoxGeometry(1.7, cabH, cabLen), glass, 0, cabY, cabZ);
+      add(new THREE.BoxGeometry(1.74, 0.1, cabLen * 1.02), body, 0, cabY + cabH / 2, cabZ); // roof
       add(new THREE.BoxGeometry(2.02, 0.16, long * 0.98), trim, 0, 0.3, 0);
       if (s === 'lowrider') g.position.y = -0.18;
       if (s === 'muscle') add(new THREE.BoxGeometry(1.6, 0.12, 0.5), trim, 0, 1.15, -1.8); // spoiler
@@ -557,6 +566,43 @@ export class GameScene {
     this.rt.setSize(rw, PSX_H);
     this.psxRes.set(rw, PSX_H);
   }
+}
+
+// Placeholder 2D driver billboard: chunky 32px pixel-art head-and-shoulders,
+// deterministic per sprite slot. THREE.Sprite always faces the camera, so the
+// driver holds eye contact with the player no matter what.
+function makeDriverSprite(slot: string): THREE.Sprite {
+  let h = 7;
+  for (const ch of slot) h = ((h * 31) + ch.charCodeAt(0)) >>> 0;
+  const rng = mulberry(h);
+  const pick = (arr: string[]) => arr[Math.floor(rng() * arr.length)];
+  const skin = pick(['#e8b48a', '#c68a5a', '#8a5a3a', '#f0d0b0', '#6a4a2e']);
+  const shirt = pick(['#b03a3a', '#3a6ab0', '#3ab06a', '#8a3ab0', '#2e2e36', '#c9a227']);
+  const hair = pick(['#1a1a1a', '#4a2e1a', '#c9a227', '#666666', '#b03a3a']);
+  const bald = rng() < 0.25;
+  const tex = canvasTex(32, (g) => {
+    g.clearRect(0, 0, 32, 32);
+    g.fillStyle = '#101014';
+    g.fillRect(5, 23, 22, 9);                                 // seat/torso shadow
+    g.fillStyle = shirt; g.fillRect(6, 24, 20, 8);            // shoulders
+    g.fillStyle = skin;
+    g.fillRect(13, 20, 6, 5);                                 // neck
+    g.fillRect(9, 5, 14, 16);                                 // head
+    if (!bald) {
+      g.fillStyle = hair;
+      g.fillRect(8, 3, 16, 5);                                // hair
+      if (rng() > 0.5) g.fillRect(8, 3, 3, 10);               // sideburn
+    }
+    g.fillStyle = '#ffffff';
+    g.fillRect(11, 11, 4, 4); g.fillRect(17, 11, 4, 4);       // wide-open eyes
+    g.fillStyle = '#111111';
+    g.fillRect(12, 12, 2, 2); g.fillRect(18, 12, 2, 2);       // locked pupils
+    g.fillRect(10, 9, 5, 1); g.fillRect(17, 9, 5, 1);         // flat brows
+    g.fillRect(14, 18, 4, 1);                                 // dead-neutral mouth
+  });
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  s.scale.set(0.7, 0.7, 1);
+  return s;
 }
 
 // deterministic tiny PRNG (no Math.random in render setup -> stable look)

@@ -110,6 +110,8 @@ export class Game {
   tap() {
     const gain = this.respectPerTap;
     this.s.respect += gain;
+    // totalTaps is RAW physical input only — always +1, never multiplied by
+    // boosters/upgrades, never fed by idle crew. It backs the worldwide board.
     this.s.totalTaps += 1;
     this.advance(gain);
     this.emit({ type: 'tap', gain });

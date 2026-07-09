@@ -68,3 +68,22 @@ changed in the build at the moment it was taken.
   the render path is identical.
 - Native sync unchanged: taps auto-submit to Game Center / Play Games on
   every opponent defeated.
+
+## 2026-07-09-07-visible-drivers.png
+**Build state:** adjustment pass #4 + continued dev.
+- **Drivers are visible now.** Car cabins rebuilt as glass greenhouses (with a
+  body-colored roof slab) instead of opaque boxes with glass skins — the old
+  structure entombed the interior. Glass opacity dropped to 22%.
+- Every opponent gets a **procedural placeholder driver**: seeded 32px
+  pixel-art head-and-shoulders billboard (skin/hair/shirt variations),
+  wide-open eyes locked on the player. THREE.Sprite always faces the camera,
+  so eye contact never breaks. Swapped for real meme art via the asset
+  pipeline later.
+- **Menu UX:** tapping anywhere outside an open menu closes it (the closing
+  tap doesn't count as a game tap), and starting a booster ad auto-closes
+  whatever menu is open — no stacked overlays anywhere.
+- **Raw-tap guarantee** documented in code and labeled in the RANKS panel:
+  the worldwide score counts physical taps only; boosters multiply Respect,
+  never the tap count.
+- Capacitor scaffolding added (capacitor.config.ts + deps) so native iOS /
+  Android packaging is `npx cap add <platform>` away.
