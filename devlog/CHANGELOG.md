@@ -157,3 +157,22 @@ changed in the build at the moment it was taken.
   Boulevard) — 10 districts total on the 10-light rotation.
 - **13 new garage cosmetics** (goop colors, decals, skies, ornaments, horn).
 - Procedural name/blurb pools widened (24x24 name combos).
+
+## 2026-07-09-12-fourlane-eyecontact.png / -green-eyes-on-road.png / -next-light-arrival.png
+**Build state:** positioning + camera rework to final spec.
+- **One-way 4-lane road**: lane dividers at three positions, solid edge
+  lines, full-width stop line and crosswalk. Player parked in lane 2
+  (driver's seat eye point at the left seat), opponent parallel in lane 1,
+  4 units apart, both nose-down the road at the light.
+- **Gaze state machine**: at a red light the head smoothly turns left for
+  eye contact with the opponent; on green it automatically swings back to
+  face the road, holds forward through the drive, then turns to the next
+  opponent at the next light. (Bug fixed en route: the slerp helper must be
+  a THREE.Camera — Object3D.lookAt aims +z, cameras view -z, which pointed
+  the head 180° away.)
+- **Cockpit fixed to the car, not the head** — dash/hood/wheel stay put
+  when you look left; wheel moved in front of the driver's seat; A-pillars
+  moved to the windshield line so the side view is clean glass.
+- Traffic light box recentered over the two middle lanes.
+- Verified full cycle in-browser with real taps: eye contact -> goop ->
+  green -> eyes-on-road drive -> arrival -> head turns to Blockhead.

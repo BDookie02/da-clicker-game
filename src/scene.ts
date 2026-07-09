@@ -111,6 +111,10 @@ export class GameScene {
   private driveT = 0;
   private onDriveDone: (() => void) | null = null;
   private time = 0;
+  private cockpit!: THREE.Group;
+  private gaze: 'opponent' | 'road' = 'opponent';
+  // must be a Camera: Camera.lookAt aims -z (view direction), Object3D aims +z
+  private gazeHelper = new THREE.PerspectiveCamera();
 
   constructor(canvas: HTMLCanvasElement) {
     // preserveDrawingBuffer lets us grab devlog screenshots off the canvas
@@ -118,10 +122,12 @@ export class GameScene {
     this.renderer.setPixelRatio(1);
 
     this.camera = new THREE.PerspectiveCamera(62, 4 / 3, 0.1, 60);
-    // Driver's seat POV: you're stopped in your lane, glancing left at the
-    // opponent idling beside you. Both cars face down the road normally.
-    this.camera.position.set(0, 1.25, 0);
-    this.camera.lookAt(-2.6, 1.15, -3.6);
+    // Driver's seat POV on a one-way 4-lane road. Player parked in a center
+    // lane (x=+2), opponent in the adjacent lane (x=-2) — parallel, side by
+    // side, both stopped at the light. The camera (your head) turns: toward
+    // the opponent while the light is red, back to the road when it's green.
+    this.camera.position.set(1.55, 1.25, 0); // left (driver's) seat of the lane-2 car
+    this.camera.lookAt(-2.45, 1.3, -3.35);
 
     this.scene.fog = new THREE.Fog(SKIES.day.fog, 10, 55);
     this.hemi = new THREE.HemisphereLight(0xffffff, 0x556677, 2.0);
@@ -148,9 +154,9 @@ export class GameScene {
     this.buildWorld();
     this.buildCockpit();
 
-    // Next lane over, slightly ahead, pointed down the road like normal
+    // Adjacent lane center, slightly ahead, pointed down the road like normal
     // traffic — the CAR faces forward; only the driver's head faces you.
-    this.opponentAnchor.position.set(-2.9, 0, -3.4);
+    this.opponentAnchor.position.set(-2, 0, -3.2);
     this.opponentAnchor.rotation.y = Math.PI; // headlights toward the intersection
     this.opponentAnchor.add(this.opponentGroup);
     this.scene.add(this.opponentAnchor);
@@ -199,19 +205,28 @@ export class GameScene {
     road.position.z = -30;
     this.scene.add(road);
 
-    // Lane dashes + stop line
+    // One-way 4-lane markings: dashes divide lanes at x -4/0/+4, solid edges
     const paint = this.mat(0xd8d8c8);
-    for (let z = 2; z > -110; z -= 4) {
-      const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 1.6), paint);
-      dash.rotation.x = -Math.PI / 2;
-      dash.position.set(-1.7, 0.01, z);
-      this.scene.add(dash);
+    for (const lx of [-4, 0, 4]) {
+      for (let z = 2; z > -110; z -= 4) {
+        const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 1.6), paint);
+        dash.rotation.x = -Math.PI / 2;
+        dash.position.set(lx, 0.01, z);
+        this.scene.add(dash);
+      }
     }
-    const stop = new THREE.Mesh(new THREE.PlaneGeometry(8, 0.5), paint);
+    for (const ex of [-7.7, 7.7]) {
+      const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 120), paint);
+      edge.rotation.x = -Math.PI / 2;
+      edge.position.set(ex, 0.01, -30);
+      this.scene.add(edge);
+    }
+    // stop line + crosswalk across all four lanes
+    const stop = new THREE.Mesh(new THREE.PlaneGeometry(15.4, 0.5), paint);
     stop.rotation.x = -Math.PI / 2;
-    stop.position.set(-1.6, 0.01, -6.2);
+    stop.position.set(0, 0.01, -6.2);
     this.scene.add(stop);
-    for (let x = -5; x <= 2; x += 1.1) {
+    for (let x = -6.6; x <= 6.6; x += 1.2) {
       const zebra = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 2.4), paint);
       zebra.rotation.x = -Math.PI / 2;
       zebra.position.set(x, 0.01, -8.4);
@@ -273,13 +288,13 @@ export class GameScene {
     arm.position.set(-3.7, 5.3, 0);
     g.add(arm);
     const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.35, 0.35), this.mat(0x1a1a20));
-    box.position.set(-7.2, 4.75, 0);
+    box.position.set(-4.4, 4.75, 0); // hangs over the two center lanes
     g.add(box);
     const colors = [0xff2222, 0xffaa00, 0x22ff44];
     colors.forEach((c, i) => {
       const m = new THREE.MeshBasicMaterial({ color: c });
       const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), m);
-      lamp.position.set(-7.2, 5.18 - i * 0.42, 0.2);
+      lamp.position.set(-4.4, 5.18 - i * 0.42, 0.2);
       g.add(lamp);
       this.trafficLights.push(m);
     });
@@ -307,26 +322,27 @@ export class GameScene {
     const dash = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.3, 0.5), this.mat(0x1c1c22));
     dash.position.set(0, 0.82, -0.75);
     g.add(dash);
-    // A-pillars
+    // A-pillars at the windshield line — clear of the left side-window view
     for (const side of [-1, 1]) {
       const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.3, 0.09), this.mat(0x14141a));
-      pillar.position.set(side * 1.15, 1.45, -0.85);
+      pillar.position.set(side * 1.18, 1.45, -1.35);
       pillar.rotation.x = -0.35;
       g.add(pillar);
     }
-    // wheel
+    // wheel in front of the driver's (left) seat
     const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.045, 6, 12), this.mat(0x26262e));
-    wheel.position.set(0.45, 0.95, -0.62);
+    wheel.position.set(-0.45, 0.95, -0.62);
     wheel.rotation.x = -1.15;
     g.add(wheel);
     g.name = 'cockpit';
-    this.camera.add(g);
-    g.position.set(0, -1.25, 0); // camera-relative
-    this.scene.add(this.camera);
+    // fixed to the CAR, not the head — the dash stays put when you look left
+    g.position.set(2, 0, 0);
+    this.cockpit = g;
+    this.scene.add(g);
   }
 
   setDecal(text?: string) {
-    if (this.dashDecal) { this.camera.remove(this.dashDecal); this.dashDecal = null; }
+    if (this.dashDecal) { this.cockpit.remove(this.dashDecal); this.dashDecal = null; }
     if (!text) return;
     const tex = canvasTex(128, (g, s) => {
       g.clearRect(0, 0, s, s);
@@ -342,20 +358,20 @@ export class GameScene {
       new THREE.PlaneGeometry(1.4, 1.4),
       new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false })
     );
-    m.position.set(0, 0.35, -1.4);
-    this.camera.add(m);
+    m.position.set(0, 1.6, -1.35); // windshield, car-space
+    this.cockpit.add(m);
     this.dashDecal = m;
   }
 
   setOrnament(colorHex?: string) {
-    if (this.ornament) { this.camera.remove(this.ornament); this.ornament = null; }
+    if (this.ornament) { this.cockpit.remove(this.ornament); this.ornament = null; }
     if (!colorHex) return;
     const m = new THREE.Mesh(
       new THREE.IcosahedronGeometry(0.06, 0),
       new THREE.MeshBasicMaterial({ color: new THREE.Color(colorHex) })
     );
-    m.position.set(-0.5, -0.28, -0.75);
-    this.camera.add(m);
+    m.position.set(-0.5, 1.0, -0.72); // on the dash, car-space
+    this.cockpit.add(m);
     this.ornament = m;
   }
 
@@ -394,6 +410,7 @@ export class GameScene {
     this.spritePos.copy(mount.position);
     this.spriteAnger = -1;
     this.setDriverAnger(0);
+    this.gaze = 'opponent'; // new rival at the light: head turns to face them
   }
 
   /** Redraw the driver at an anger tier (0 calm .. 4 furious & beet red). */
@@ -528,11 +545,12 @@ export class GameScene {
     }
   }
 
-  /** Green light: dolly forward to the next intersection, then reset. */
+  /** Green light: face the road, roll to the next intersection, then reset. */
   driveToNext(onDone: () => void) {
     this.driving = true;
     this.driveT = 0;
     this.onDriveDone = onDone;
+    this.gaze = 'road'; // eyes back on the road until the next red light
     this.setLight('green');
   }
 
@@ -552,6 +570,14 @@ export class GameScene {
 
     // subtle idle sway on the player cam (engine running)
     this.camera.position.y = 1.25 + Math.sin(t * 2.1) * 0.008;
+
+    // head turn: smoothly swing between the opponent's window and the road
+    const gazeTarget = this.gaze === 'opponent'
+      ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, 1.3, this.opponentAnchor.position.z - 0.15)
+      : new THREE.Vector3(this.camera.position.x, 1.15, this.camera.position.z - 30);
+    this.gazeHelper.position.copy(this.camera.position);
+    this.gazeHelper.lookAt(gazeTarget);
+    this.camera.quaternion.slerp(this.gazeHelper.quaternion, Math.min(1, dt * 3.2));
 
     // splat particles
     for (let i = this.splats.length - 1; i >= 0; i--) {
@@ -573,7 +599,7 @@ export class GameScene {
       // fade handled by UI; after 2.6s snap back and restore
       if (this.driveT > 2.6) {
         this.driving = false;
-        this.opponentAnchor.position.set(-2.9, 0, -3.4);
+        this.opponentAnchor.position.set(-2, 0, -3.2);
         this.setLight('red');
         const cb = this.onDriveDone;
         this.onDriveDone = null;
