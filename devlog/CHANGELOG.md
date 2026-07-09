@@ -87,3 +87,17 @@ changed in the build at the moment it was taken.
   never the tap count.
 - Capacitor scaffolding added (capacitor.config.ts + deps) so native iOS /
   Android packaging is `npx cap add <platform>` away.
+
+## 2026-07-09-08-fury-face.png
+**Build state:** usernames + escalating driver anger.
+- **Unique username system**: claim modal on first launch (can't be dismissed
+  until a name is secured), 3-14 chars, case-insensitive uniqueness so names
+  can't be re-registered or sniped by case variants. Renames cost 100K Respect
+  (RANKS panel). Behind a `UsernameService` interface — local registry now,
+  atomic insert-if-absent API at launch. All 49 rival names permanently
+  reserved. First live claim: "TheCreator".
+- **Drivers rage as you tap**: face redraws at every shake milestone — skin
+  flushes toward beet red, brows angle into a V, eyes narrow, pupils go red,
+  mouth goes neutral line → frown → gritted teeth, forehead vein at max fury.
+  Anger restores correctly on save load mid-opponent.
+- Leaderboard YOU row now shows your claimed username.

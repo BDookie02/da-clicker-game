@@ -4,6 +4,7 @@ import {
 } from './config';
 
 export interface SaveData {
+  username: string | null;
   respect: number;
   mentality: number;
   totalTaps: number;
@@ -20,6 +21,7 @@ export interface SaveData {
 }
 
 const fresh = (): SaveData => ({
+  username: null,
   respect: 0,
   mentality: 0,
   totalTaps: 0,

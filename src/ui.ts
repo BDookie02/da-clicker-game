@@ -2,6 +2,7 @@ import { BOOSTERS, COSMETICS, CREW, UPGRADES, type BoosterDef } from './config';
 import { fmt, type Game } from './state';
 import { sfx } from './audio';
 import { getWorldList, type LeaderboardProvider } from './leaderboard';
+import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
 
 // ---------------------------------------------------------------------------
 // Rewarded-ad adapter. The placeholder provider fakes an ad with a countdown.
@@ -72,6 +73,7 @@ export class UI {
   private openTab: string | null = null;
 
   lb: LeaderboardProvider | null = null;
+  names: UsernameService | null = null;
 
   constructor(private game: Game, private onCosmeticsChanged: () => void) {
     this.root = document.getElementById('app')!;
@@ -143,6 +145,50 @@ export class UI {
   }
 
   // ---- panels -----------------------------------------------------------------
+  /** First-launch claim (free) or paid rename (100K Respect). Resolves once
+   *  a unique name is secured; first-launch cannot be dismissed. */
+  promptUsername(firstTime: boolean): Promise<void> {
+    return new Promise((resolve) => {
+      const g = this.game;
+      const overlay = el('div', 'ad-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box name-box">
+          <div class="ad-label">${firstTime ? 'WELCOME TO THE INTERSECTION' : 'CHANGE USERNAME'}</div>
+          <div class="name-copy">${firstTime
+            ? 'Claim your one-of-a-kind username. Nobody else can ever register it.'
+            : `Costs ${fmt(RENAME_COST)} Respect. Your new name must also be unique.`}</div>
+          <input class="name-input" maxlength="14" placeholder="3-14 letters/numbers/_" spellcheck="false" />
+          <div class="name-status"></div>
+          <div class="name-actions">
+            ${firstTime ? '' : '<button class="name-cancel">CANCEL</button>'}
+            <button class="name-ok">${firstTime ? 'CLAIM' : `PAY ${fmt(RENAME_COST)}`}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const input = overlay.querySelector('.name-input') as HTMLInputElement;
+      const status = overlay.querySelector('.name-status') as HTMLElement;
+      const done = () => { overlay.remove(); this.refresh(); resolve(); };
+      overlay.querySelector('.name-cancel')?.addEventListener('click', done);
+      overlay.querySelector('.name-ok')!.addEventListener('click', async () => {
+        const name = input.value.trim();
+        if (!USERNAME_RE.test(name)) { status.textContent = '3-14 chars: letters, numbers, _'; return; }
+        if (!this.names) { status.textContent = 'Name service unavailable.'; return; }
+        if (!firstTime && g.s.respect < RENAME_COST) { status.textContent = 'Not enough Respect.'; return; }
+        status.textContent = 'Checking availability...';
+        if (!(await this.names.claim(name))) { status.textContent = `"${name}" is taken. Names can't be stolen.`; return; }
+        const old = g.s.username;
+        if (!firstTime) g.s.respect -= RENAME_COST;
+        g.s.username = name;
+        g.save();
+        if (old) void this.names.release(old);
+        sfx.buy();
+        this.toast(`Username secured: ${name}`, 'gold');
+        done();
+      });
+      input.focus();
+    });
+  }
+
   private toggle(tab: string) {
     if (this.openTab === tab) return this.close();
     this.openTab = tab;
@@ -195,7 +241,7 @@ export class UI {
       rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS (raw taps only, boosters don't count)${native
         ? ` · syncing via ${this.lb!.platform === 'gamecenter' ? 'Game Center' : 'Google Play Games'}`
         : ' · placeholder rivals until store launch (Game Center / Play Games)'}</div>`);
-      const list = getWorldList(g.s.totalTaps);
+      const list = getWorldList(g.s.totalTaps, g.s.username ?? 'YOU');
       const yourRank = list.find(e => e.you)!.rank;
       // Subway-Surfers-style ranked list: top 10, a gap, then your neighborhood
       const shown = list.filter(e => e.rank <= 10 || Math.abs(e.rank - yourRank) <= 2);
@@ -205,10 +251,13 @@ export class UI {
         prev = e.rank;
         rows.push(`<div class="lb-row${e.you ? ' lb-you' : ''}">
           <span class="lb-rank">${e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : '#' + e.rank}</span>
-          <span class="lb-name">${e.you ? '⭐ YOU' : e.name}</span>
+          <span class="lb-name">${e.you ? `⭐ ${e.name}` : e.name}</span>
           <span class="lb-score">${fmt(e.taps)}</span>
         </div>`);
       }
+      rows.push(row('rename', `Username: ${g.s.username ?? '—'}`,
+        `Change costs ${fmt(RENAME_COST)} Respect (one-of-a-kind, can't be stolen)`,
+        'CHANGE', g.s.respect >= RENAME_COST, 'name'));
       if (native) {
         rows.push(row('official', 'Official Board', 'Open the platform leaderboard', 'VIEW', true, 'lb'));
         rows.push(row('signin', 'Account', 'Sign in to submit your taps worldwide', 'SIGN IN', true, 'lb'));
@@ -249,6 +298,9 @@ export class UI {
       } else {
         await this.lb.show();
       }
+    } else if (kind === 'name') {
+      this.close();
+      await this.promptUsername(false);
     } else if (kind === 'booster') {
       const b = BOOSTERS.find(x => x.id === id) as BoosterDef;
       this.close(); // starting an ad closes any open menu — no stacked overlays

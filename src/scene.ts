@@ -89,6 +89,9 @@ export class GameScene {
   private opponentAnchor = new THREE.Group(); // world placement
   private goopGroup = new THREE.Group();
   private sprite: THREE.Object3D | null = null; // 2D driver billboard
+  private spriteSlot = '';
+  private spriteAnger = -1;
+  private spritePos = new THREE.Vector3();
   private trafficLights: THREE.MeshBasicMaterial[] = [];
   private lampMats: THREE.MeshBasicMaterial[] = [];
   private dashDecal: THREE.Mesh | null = null;
@@ -383,8 +386,20 @@ export class GameScene {
     // Procedural placeholder driver (classic PS1 billboard) until the real
     // meme character art replaces it — seeded per slot so every driver looks
     // different, eyes locked dead on the player.
-    const driver = makeDriverSprite(def.spriteSlot);
-    driver.position.copy(mount.position);
+    this.spriteSlot = def.spriteSlot;
+    this.spritePos.copy(mount.position);
+    this.spriteAnger = -1;
+    this.setDriverAnger(0);
+  }
+
+  /** Redraw the driver at an anger tier (0 calm .. 4 furious & beet red). */
+  setDriverAnger(tier: number) {
+    const a = Math.max(0, Math.min(4, Math.floor(tier)));
+    if (a === this.spriteAnger || !this.spriteSlot) return;
+    this.spriteAnger = a;
+    if (this.sprite) this.opponentGroup.remove(this.sprite);
+    const driver = makeDriverSprite(this.spriteSlot, a);
+    driver.position.copy(this.spritePos);
     this.opponentGroup.add(driver);
     this.sprite = driver;
   }
@@ -395,7 +410,7 @@ export class GameScene {
     const trim = this.mat(def.carAccent);
     // see-through glass (PSX-style semi-transparency) so the driver is visible;
     // interiors hold empty seats until the 2D characters arrive
-    const glass = this.mat(0xa8d4e8, { transparent: true, opacity: 0.22 });
+    const glass = this.mat(0xc8e4f0, { transparent: true, opacity: 0.16 });
     const seatM = this.mat(0x23262c);
     const tire = this.mat(0x18181c);
 
@@ -570,20 +585,37 @@ export class GameScene {
 
 // Placeholder 2D driver billboard: chunky 32px pixel-art head-and-shoulders,
 // deterministic per sprite slot. THREE.Sprite always faces the camera, so the
-// driver holds eye contact with the player no matter what.
-function makeDriverSprite(slot: string): THREE.Sprite {
+// driver holds eye contact with the player no matter what. `anger` (0..4)
+// tracks the shake milestones: the face flushes redder, brows angle down,
+// eyes narrow, and teeth grit as the car gets closer to finishing.
+function lerpHex(a: string, b: string, t: number): string {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (sh: number) => {
+    const va = (pa >> sh) & 255, vb = (pb >> sh) & 255;
+    return Math.round(va + (vb - va) * t);
+  };
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+}
+
+function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
   let h = 7;
   for (const ch of slot) h = ((h * 31) + ch.charCodeAt(0)) >>> 0;
   const rng = mulberry(h);
   const pick = (arr: string[]) => arr[Math.floor(rng() * arr.length)];
-  const skin = pick(['#e8b48a', '#c68a5a', '#8a5a3a', '#f0d0b0', '#6a4a2e']);
+  const baseSkin = pick(['#e8b48a', '#c68a5a', '#8a5a3a', '#f0d0b0', '#6a4a2e']);
   const shirt = pick(['#b03a3a', '#3a6ab0', '#3ab06a', '#8a3ab0', '#2e2e36', '#c9a227']);
   const hair = pick(['#1a1a1a', '#4a2e1a', '#c9a227', '#666666', '#b03a3a']);
   const bald = rng() < 0.25;
+  const sideburn = rng() > 0.5;
+  const a = Math.max(0, Math.min(4, anger));
+  const skin = lerpHex(baseSkin, '#d82818', a / 4 * 0.85);    // flush toward red
+
   const tex = canvasTex(32, (g) => {
     g.clearRect(0, 0, 32, 32);
-    g.fillStyle = '#101014';
-    g.fillRect(5, 23, 22, 9);                                 // seat/torso shadow
+    // hard black outline so every skin tone reads through tinted glass at 240p
+    g.fillStyle = '#000000';
+    g.fillRect(8, 2, 16, 20);                                 // head outline
+    g.fillRect(5, 22, 22, 10);                                // torso outline
     g.fillStyle = shirt; g.fillRect(6, 24, 20, 8);            // shoulders
     g.fillStyle = skin;
     g.fillRect(13, 20, 6, 5);                                 // neck
@@ -591,17 +623,37 @@ function makeDriverSprite(slot: string): THREE.Sprite {
     if (!bald) {
       g.fillStyle = hair;
       g.fillRect(8, 3, 16, 5);                                // hair
-      if (rng() > 0.5) g.fillRect(8, 3, 3, 10);               // sideburn
+      if (sideburn) g.fillRect(8, 3, 3, 10);
     }
+    // eyes narrow with anger; pupils go red past tier 2
+    const eyeH = a >= 3 ? 2 : a >= 2 ? 3 : 4;
     g.fillStyle = '#ffffff';
-    g.fillRect(11, 11, 4, 4); g.fillRect(17, 11, 4, 4);       // wide-open eyes
+    g.fillRect(11, 11, 4, eyeH); g.fillRect(17, 11, 4, eyeH);
+    g.fillStyle = a >= 3 ? '#c01010' : '#111111';
+    g.fillRect(12, 12, 2, Math.min(2, eyeH)); g.fillRect(18, 12, 2, Math.min(2, eyeH));
+    // brows angle down-in harder each tier (V shape when furious)
     g.fillStyle = '#111111';
-    g.fillRect(12, 12, 2, 2); g.fillRect(18, 12, 2, 2);       // locked pupils
-    g.fillRect(10, 9, 5, 1); g.fillRect(17, 9, 5, 1);         // flat brows
-    g.fillRect(14, 18, 4, 1);                                 // dead-neutral mouth
+    for (let i = 0; i < 5; i++) {
+      const drop = Math.floor((i * a) / 3);
+      g.fillRect(10 + i, 8 + drop, 1, 2);                     // left brow \
+      g.fillRect(21 - i, 8 + drop, 1, 2);                     // right brow /
+    }
+    // mouth: neutral line -> widening frown -> gritted teeth
+    if (a < 3) {
+      g.fillRect(14 - a, 18, 4 + a * 2, 1);
+    } else {
+      g.fillStyle = '#111111'; g.fillRect(11, 16, 10, 4);     // open snarl
+      g.fillStyle = '#ffffff'; g.fillRect(12, 17, 8, 2);      // teeth
+      g.fillStyle = '#111111';
+      for (let x = 13; x < 20; x += 2) g.fillRect(x, 17, 1, 2); // teeth gaps
+    }
+    if (a === 4) {                                            // vein pop, full fury
+      g.fillStyle = '#8e1010';
+      g.fillRect(10, 6, 2, 1); g.fillRect(11, 7, 1, 1); g.fillRect(9, 7, 1, 1);
+    }
   });
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
-  s.scale.set(0.7, 0.7, 1);
+  s.scale.set(0.85, 0.85, 1);
   return s;
 }
 

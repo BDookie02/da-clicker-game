@@ -241,3 +241,22 @@ html, body {
 .ad-copy { font-size: 10px; color: #8a8ab0; margin-top: 8px; line-height: 1.6; }
 .ad-skip { width: 100%; }
 .ad-skip:disabled { opacity: 0.5; }
+
+/* username claim / rename modal */
+.name-copy { font-size: 11px; color: #b0b0d0; margin: 10px 0; line-height: 1.6; }
+.name-input {
+  width: 100%;
+  font-family: inherit;
+  font-weight: bold;
+  font-size: 15px;
+  text-align: center;
+  background: #0a0a12;
+  color: #ffd890;
+  border: 2px solid #4a4a70;
+  padding: 9px 6px;
+  outline: none;
+}
+.name-input:focus { border-color: #e6c84a; }
+.name-status { font-size: 10px; color: #e66a2a; min-height: 16px; margin: 6px 0; }
+.name-actions { display: flex; gap: 6px; }
+.name-actions button { flex: 1; padding: 10px 6px; font-size: 11px; }

@@ -3,10 +3,11 @@ import { GameScene } from './scene';
 import { UI } from './ui';
 import { sfx } from './audio';
 import { getDistrict } from './config';
-import { initLeaderboards, type LeaderboardProvider } from './leaderboard';
+import { getWorldList, initLeaderboards, type LeaderboardProvider } from './leaderboard';
+import { LocalUsernameService } from './username';
 
 const game = new Game();
-// debug/testing handle (harmless in prod; used by automated checks)
+// debug/testing handles (harmless in prod; used by automated checks)
 (window as unknown as { __game: Game }).__game = game;
 
 // --- devlog capture helpers (dev server only; /__save writes to devlog/) ---
@@ -38,6 +39,7 @@ const canvas = document.createElement('canvas');
 canvas.id = 'game-canvas';
 document.body.prepend(canvas);
 const scene = new GameScene(canvas);
+(window as any).__scene = scene;
 
 const applyCosmetics = () => {
   // equipped sky cosmetic overrides the current district's time-of-day
@@ -56,8 +58,14 @@ initLeaderboards().then((lb) => {
   void lb.submit(game.s.totalTaps);
 });
 
+// Unique usernames: placeholder rival names are permanently reserved; the
+// local registry swaps for the real name API at launch (see src/username.ts)
+ui.names = new LocalUsernameService(getWorldList(0).filter(e => !e.you).map(e => e.name));
+if (!game.s.username) void ui.promptUsername(true); // first open: claim your name
+
 scene.setOpponent(game.opponent);
 scene.setShakeAmp(game.shakeAmp);
+scene.setDriverAnger(game.currentTier()); // restore mid-fight fury on load
 applyCosmetics();
 
 let transitioning = false;
@@ -67,6 +75,7 @@ game.on((e) => {
     scene.tapPulse();
   } else if (e.type === 'milestone') {
     scene.setShakeAmp(game.shakeAmp);
+    scene.setDriverAnger(e.tier); // face gets angrier and redder each tier
     ui.toast(e.label, 'warn');
     sfx.milestone();
   } else if (e.type === 'defeated') {
