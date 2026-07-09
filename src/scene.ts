@@ -583,11 +583,11 @@ export class GameScene {
   }
 }
 
-// Placeholder 2D driver billboard: chunky 32px pixel-art head-and-shoulders,
-// deterministic per sprite slot. THREE.Sprite always faces the camera, so the
-// driver holds eye contact with the player no matter what. `anger` (0..4)
-// tracks the shake milestones: the face flushes redder, brows angle down,
-// eyes narrow, and teeth grit as the car gets closer to finishing.
+// 2D driver billboards: original chunky pixel-art characters, one distinct
+// look per handcrafted opponent (procedural opponents get seeded variants).
+// THREE.Sprite always faces the camera, so the driver holds eye contact no
+// matter what. `anger` (0..4) tracks shake milestones: skin flushes red,
+// brows V, eyes narrow, teeth grit.
 function lerpHex(a: string, b: string, t: number): string {
   const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
   const ch = (sh: number) => {
@@ -597,63 +597,121 @@ function lerpHex(a: string, b: string, t: number): string {
   return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
 }
 
-function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
+interface DriverLook {
+  skin: string; shirt: string;
+  hair?: string;                       // undefined = bald
+  hat?: 'cap' | 'cowboy' | 'beanie' | 'halo' | 'horns';
+  hatColor?: string;
+  shades?: boolean;                    // sunglasses band
+  mask?: boolean;                      // balaclava lower face
+  bandana?: boolean;
+  glow?: boolean;                      // radiant outline
+  stubble?: boolean;
+}
+
+// Original character designs riffing on the opponent archetypes.
+const DRIVER_LOOKS: Record<string, DriverLook> = {
+  char_og:         { skin: '#e8b48a', shirt: '#7a8a99', hair: '#4a2e1a', stubble: true },
+  char_mentality:  { skin: '#f0d0b0', shirt: '#d8d8d8', hat: 'cap', hatColor: '#2e2e36' },
+  char_blockhead:  { skin: '#7fae4e', shirt: '#5f8a3a', hair: '#3c5c22' },
+  char_easyface:   { skin: '#f2d24a', shirt: '#4aa8e0' },
+  char_merc:       { skin: '#c68a5a', shirt: '#8e3a2e', mask: true, hatColor: '#2a2a2e' },
+  char_metro:      { skin: '#c9a184', shirt: '#5a5a66', hat: 'beanie', hatColor: '#3d4148' },
+  char_cowboy:     { skin: '#d8a878', shirt: '#6a4a9e', hat: 'cowboy', hatColor: '#4d2d66', bandana: true },
+  char_demon:      { skin: '#8e2222', shirt: '#1c1c22', hat: 'horns', hatColor: '#3a0e0e' },
+  char_sigma:      { skin: '#e0b890', shirt: '#16161c', hair: '#1a1a1a', shades: true },
+  char_discipline: { skin: '#f4f4f0', shirt: '#e8e8e4', hat: 'halo', hatColor: '#ffe98a', glow: true },
+};
+
+function lookFor(slot: string): DriverLook {
+  if (DRIVER_LOOKS[slot]) return DRIVER_LOOKS[slot];
   let h = 7;
   for (const ch of slot) h = ((h * 31) + ch.charCodeAt(0)) >>> 0;
   const rng = mulberry(h);
   const pick = (arr: string[]) => arr[Math.floor(rng() * arr.length)];
-  const baseSkin = pick(['#e8b48a', '#c68a5a', '#8a5a3a', '#f0d0b0', '#6a4a2e']);
-  const shirt = pick(['#b03a3a', '#3a6ab0', '#3ab06a', '#8a3ab0', '#2e2e36', '#c9a227']);
-  const hair = pick(['#1a1a1a', '#4a2e1a', '#c9a227', '#666666', '#b03a3a']);
-  const bald = rng() < 0.25;
-  const sideburn = rng() > 0.5;
-  const a = Math.max(0, Math.min(4, anger));
-  const skin = lerpHex(baseSkin, '#d82818', a / 4 * 0.85);    // flush toward red
+  return {
+    skin: pick(['#e8b48a', '#c68a5a', '#8a5a3a', '#f0d0b0', '#6a4a2e']),
+    shirt: pick(['#b03a3a', '#3a6ab0', '#3ab06a', '#8a3ab0', '#2e2e36', '#c9a227']),
+    hair: rng() < 0.25 ? undefined : pick(['#1a1a1a', '#4a2e1a', '#c9a227', '#666666', '#b03a3a']),
+    hat: rng() < 0.2 ? (pick(['cap', 'beanie']) as DriverLook['hat']) : undefined,
+    hatColor: pick(['#2e2e36', '#5a3a2a', '#3a5a2a']),
+    shades: rng() < 0.15,
+    stubble: rng() < 0.3,
+  };
+}
 
-  const tex = canvasTex(32, (g) => {
-    g.clearRect(0, 0, 32, 32);
-    // hard black outline so every skin tone reads through tinted glass at 240p
+function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
+  const L = lookFor(slot);
+  const a = Math.max(0, Math.min(4, anger));
+  const skin = lerpHex(L.skin, '#d82818', (a / 4) * 0.8);
+
+  const tex = canvasTex(48, (g) => {
+    g.clearRect(0, 0, 48, 48);
+    if (L.glow) {                                             // radiant aura
+      g.fillStyle = 'rgba(255,244,180,0.5)';
+      g.fillRect(10, 2, 28, 34); g.fillRect(6, 32, 36, 16);
+    }
+    // hard black outline so every look reads through glass at 240p
     g.fillStyle = '#000000';
-    g.fillRect(8, 2, 16, 20);                                 // head outline
-    g.fillRect(5, 22, 22, 10);                                // torso outline
-    g.fillStyle = shirt; g.fillRect(6, 24, 20, 8);            // shoulders
+    g.fillRect(12, 4, 24, 30);                                // head
+    g.fillRect(7, 32, 34, 16);                                // torso
+    g.fillStyle = L.shirt; g.fillRect(9, 35, 30, 13);         // shoulders
     g.fillStyle = skin;
-    g.fillRect(13, 20, 6, 5);                                 // neck
-    g.fillRect(9, 5, 14, 16);                                 // head
-    if (!bald) {
-      g.fillStyle = hair;
-      g.fillRect(8, 3, 16, 5);                                // hair
-      if (sideburn) g.fillRect(8, 3, 3, 10);
+    g.fillRect(20, 29, 8, 7);                                 // neck
+    g.fillRect(14, 8, 20, 23);                                // face
+    // hair / hats
+    if (L.hair && !L.hat) {
+      g.fillStyle = L.hair;
+      g.fillRect(13, 5, 22, 6);
+      g.fillRect(13, 5, 4, 13);                               // sideburn
     }
-    // eyes narrow with anger; pupils go red past tier 2
-    const eyeH = a >= 3 ? 2 : a >= 2 ? 3 : 4;
-    g.fillStyle = '#ffffff';
-    g.fillRect(11, 11, 4, eyeH); g.fillRect(17, 11, 4, eyeH);
-    g.fillStyle = a >= 3 ? '#c01010' : '#111111';
-    g.fillRect(12, 12, 2, Math.min(2, eyeH)); g.fillRect(18, 12, 2, Math.min(2, eyeH));
-    // brows angle down-in harder each tier (V shape when furious)
-    g.fillStyle = '#111111';
-    for (let i = 0; i < 5; i++) {
-      const drop = Math.floor((i * a) / 3);
-      g.fillRect(10 + i, 8 + drop, 1, 2);                     // left brow \
-      g.fillRect(21 - i, 8 + drop, 1, 2);                     // right brow /
-    }
-    // mouth: neutral line -> widening frown -> gritted teeth
-    if (a < 3) {
-      g.fillRect(14 - a, 18, 4 + a * 2, 1);
+    if (L.hat === 'cap')    { g.fillStyle = L.hatColor!; g.fillRect(12, 3, 24, 7); g.fillRect(30, 8, 10, 3); }
+    if (L.hat === 'beanie') { g.fillStyle = L.hatColor!; g.fillRect(12, 3, 24, 9); }
+    if (L.hat === 'cowboy') { g.fillStyle = L.hatColor!; g.fillRect(16, 1, 16, 6); g.fillRect(8, 6, 32, 3); }
+    if (L.hat === 'horns')  { g.fillStyle = L.hatColor!; g.fillRect(11, 1, 4, 8); g.fillRect(33, 1, 4, 8); }
+    if (L.hat === 'halo')   { g.fillStyle = L.hatColor!; g.fillRect(15, 0, 18, 2); }
+    // eyes: narrow with anger, red pupils past tier 2 (shades replace them)
+    if (L.shades) {
+      g.fillStyle = '#0a0a0a'; g.fillRect(14, 14, 20, 5);
+      if (a >= 3) { g.fillStyle = '#c01010'; g.fillRect(17, 16, 3, 2); g.fillRect(28, 16, 3, 2); } // glare through
     } else {
-      g.fillStyle = '#111111'; g.fillRect(11, 16, 10, 4);     // open snarl
-      g.fillStyle = '#ffffff'; g.fillRect(12, 17, 8, 2);      // teeth
-      g.fillStyle = '#111111';
-      for (let x = 13; x < 20; x += 2) g.fillRect(x, 17, 1, 2); // teeth gaps
+      const eyeH = a >= 3 ? 3 : a >= 2 ? 4 : 6;
+      g.fillStyle = '#ffffff';
+      g.fillRect(16, 15, 6, eyeH); g.fillRect(26, 15, 6, eyeH);
+      g.fillStyle = a >= 3 ? '#c01010' : '#111111';
+      g.fillRect(18, 16, 3, Math.min(3, eyeH)); g.fillRect(28, 16, 3, Math.min(3, eyeH));
     }
-    if (a === 4) {                                            // vein pop, full fury
+    // brows: angle into a V as anger rises
+    g.fillStyle = '#111111';
+    for (let i = 0; i < 7; i++) {
+      const drop = Math.floor((i * a) / 4);
+      g.fillRect(15 + i, 11 + drop, 1, 3);
+      g.fillRect(32 - i, 11 + drop, 1, 3);
+    }
+    // lower face: mask/bandana cover the mouth, otherwise anger mouth
+    if (L.mask || L.bandana) {
+      g.fillStyle = L.bandana ? '#8e3a2e' : (L.hatColor ?? '#22222a');
+      g.fillRect(14, 21, 20, 10);
+      if (L.bandana) { g.fillStyle = '#6e2a20'; for (let x = 16; x < 32; x += 4) g.fillRect(x, 24, 2, 2); }
+    } else if (a < 3) {
+      g.fillRect(21 - a * 2, 26, 6 + a * 4, 2);
+    } else {
+      g.fillStyle = '#111111'; g.fillRect(16, 24, 16, 6);     // open snarl
+      g.fillStyle = '#ffffff'; g.fillRect(17, 25, 14, 3);     // teeth
+      g.fillStyle = '#111111';
+      for (let x = 19; x < 31; x += 3) g.fillRect(x, 25, 1, 3);
+    }
+    if (L.stubble) {
+      g.fillStyle = 'rgba(40,30,20,0.55)';
+      g.fillRect(15, 24, 4, 6); g.fillRect(29, 24, 4, 6); g.fillRect(15, 29, 18, 2);
+    }
+    if (a === 4) {                                            // forehead vein
       g.fillStyle = '#8e1010';
-      g.fillRect(10, 6, 2, 1); g.fillRect(11, 7, 1, 1); g.fillRect(9, 7, 1, 1);
+      g.fillRect(15, 9, 3, 1); g.fillRect(16, 10, 1, 2); g.fillRect(14, 10, 1, 2);
     }
   });
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
-  s.scale.set(0.85, 0.85, 1);
+  s.scale.set(0.9, 0.9, 1);
   return s;
 }
 

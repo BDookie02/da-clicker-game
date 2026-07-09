@@ -22,6 +22,30 @@ export interface UsernameService {
   release(name: string): Promise<void>;
 }
 
+/** Real registry: server/worker.js — claims are atomic (UNIQUE constraint). */
+export class RemoteUsernameService implements UsernameService {
+  constructor(private apiUrl: string, private currentName: () => string | null) {}
+
+  async isTaken(name: string): Promise<boolean> {
+    // claim() is the source of truth; a cheap pre-check isn't worth a race
+    void name;
+    return false;
+  }
+
+  async claim(name: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.apiUrl}/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, old: this.currentName() ?? undefined }),
+      });
+      return res.ok;
+    } catch { return false; } // offline: keep the modal open, player retries
+  }
+
+  async release(): Promise<void> { /* handled server-side by claim(old) */ }
+}
+
 const REGISTRY_KEY = 'discipline-username-registry';
 
 export class LocalUsernameService implements UsernameService {

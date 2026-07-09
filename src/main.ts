@@ -2,9 +2,9 @@ import { Game, fmt } from './state';
 import { GameScene } from './scene';
 import { UI } from './ui';
 import { sfx } from './audio';
-import { getDistrict } from './config';
-import { getWorldList, initLeaderboards, type LeaderboardProvider } from './leaderboard';
-import { LocalUsernameService } from './username';
+import { API_URL, getDistrict } from './config';
+import { getWorldList, initLeaderboards, submitScoreRemote, type LeaderboardProvider } from './leaderboard';
+import { LocalUsernameService, RemoteUsernameService } from './username';
 
 const game = new Game();
 // debug/testing handles (harmless in prod; used by automated checks)
@@ -58,10 +58,16 @@ initLeaderboards().then((lb) => {
   void lb.submit(game.s.totalTaps);
 });
 
-// Unique usernames: placeholder rival names are permanently reserved; the
-// local registry swaps for the real name API at launch (see src/username.ts)
-ui.names = new LocalUsernameService(getWorldList(0).filter(e => !e.you).map(e => e.name));
+// Unique usernames: real API when configured, local registry otherwise
+ui.names = API_URL
+  ? new RemoteUsernameService(API_URL, () => game.s.username)
+  : new LocalUsernameService(getWorldList(0).filter(e => !e.you).map(e => e.name));
 if (!game.s.username) void ui.promptUsername(true); // first open: claim your name
+
+const syncScore = () => {
+  if (API_URL && game.s.username) submitScoreRemote(API_URL, game.s.username, game.s.totalTaps);
+};
+syncScore();
 
 scene.setOpponent(game.opponent);
 scene.setShakeAmp(game.shakeAmp);
@@ -81,6 +87,7 @@ game.on((e) => {
   } else if (e.type === 'defeated') {
     transitioning = true;
     void leaderboards?.submit(game.s.totalTaps);
+    syncScore();
     const beatenName = e.name;
     scene.goop(game.equipped('goop'));
     scene.setShakeAmp(0);

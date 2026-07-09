@@ -117,3 +117,21 @@ changed in the build at the moment it was taken.
   writer — pixel traffic light with a goop drip — plus PWA manifest.
 - SHIPPING.md added: everything code-side is done; remaining items are
   account/dashboard work (Higgsfield OAuth, AdMob, store consoles, name API).
+
+## 2026-07-09-10-character-art-og.png / -discipline.png
+**Build state:** full automation pass — art, backend, native scaffolds.
+- **Original character art** for all 10 handcrafted opponents: distinct 48px
+  pixel characters (The O.G. with stubble, MENTALITY's cap, green cube-headed
+  Blockhead, yellow ball-faced Easy Face, masked Mercenary, beanie'd Subway
+  Stranger, hatted+bandana'd Steel Cowboy, horned Demon Face, suited+shades
+  Sigma, glowing haloed DISCIPLINE.). All anger-reactive; procedural
+  opponents keep seeded variant looks. Original designs — archetype homage,
+  no copied character art.
+- **Real backend written and deploy-ready** (server/worker.js + schema.sql +
+  wrangler.toml): Cloudflare Worker + D1 with atomic username claims
+  (UNIQUE constraint — no race can steal a name), score upsert, and a
+  worldwide board endpoint (top 10 + caller neighborhood). Client fully
+  wired behind `API_URL` in src/config.ts: empty = local placeholders,
+  set = live worldwide board + real name registry. Three commands to deploy.
+- **Native projects generated**: android/ (Gradle) and ios/ (Xcode) via
+  Capacitor, web bundle synced. Open in Android Studio / Xcode and run.

@@ -113,6 +113,33 @@ function rivalCurve(i: number): { base: number; mult: number } {
   };
 }
 
+/** Submit the player's raw tap total to the real backend (fire-and-forget). */
+export function submitScoreRemote(apiUrl: string, name: string, taps: number) {
+  fetch(`${apiUrl}/score`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, taps: Math.floor(taps) }),
+  }).catch(() => { /* offline — next defeat resubmits */ });
+}
+
+/** Fetch the real worldwide board: top 10 + the caller's neighborhood. */
+export async function fetchBoardRemote(apiUrl: string, name: string): Promise<LbEntry[] | null> {
+  try {
+    const res = await fetch(`${apiUrl}/board?name=${encodeURIComponent(name)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rows: { name: string; taps: number }[] = data.top ?? [];
+    const entries: LbEntry[] = rows.map((r, i) => ({
+      rank: i + 1, name: r.name, taps: r.taps,
+      you: !!name && r.name.toLowerCase() === name.toLowerCase(),
+    }));
+    if (data.me && !entries.some(e => e.you)) {
+      entries.push({ rank: data.me.rank, name: data.me.name, taps: data.me.taps, you: true });
+    }
+    return entries;
+  } catch { return null; }
+}
+
 /** Ranked worldwide list with the player's row inserted and highlighted. */
 export function getWorldList(playerTaps: number, playerName = 'YOU'): LbEntry[] {
   const rows = RIVAL_NAMES.map((name, i) => {

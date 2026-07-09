@@ -1,7 +1,8 @@
 import { BOOSTERS, COSMETICS, CREW, UPGRADES, type BoosterDef } from './config';
 import { fmt, PRESTIGE_STEP, type Game } from './state';
 import { sfx } from './audio';
-import { getWorldList, type LeaderboardProvider } from './leaderboard';
+import { fetchBoardRemote, getWorldList, type LbEntry, type LeaderboardProvider } from './leaderboard';
+import { API_URL } from './config';
 import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,7 @@ export class UI {
   private fade: HTMLElement;
   private openTab: string | null = null;
   private prestigeArmed = false;
+  private remoteBoard: LbEntry[] | null = null;
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
@@ -213,6 +215,7 @@ export class UI {
   close() {
     this.openTab = null;
     this.prestigeArmed = false;
+    this.remoteBoard = null; // refetch live board next open
     this.panel?.remove();
     this.panel = null;
   }
@@ -263,8 +266,15 @@ export class UI {
       rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS (raw taps only, boosters don't count)${native
         ? ` · syncing via ${this.lb!.platform === 'gamecenter' ? 'Game Center' : 'Google Play Games'}`
         : ' · placeholder rivals until store launch (Game Center / Play Games)'}</div>`);
-      const list = getWorldList(g.s.totalTaps, g.s.username ?? 'YOU');
-      const yourRank = list.find(e => e.you)!.rank;
+      // real backend when configured (async: seeded list shows immediately,
+      // live worldwide data patches in when the fetch lands)
+      if (API_URL && g.s.username && this.openTab === 'ranks' && !this.remoteBoard) {
+        void fetchBoardRemote(API_URL, g.s.username).then((b) => {
+          if (b?.length) { this.remoteBoard = b; if (this.openTab === 'ranks') this.refreshPanel(); }
+        });
+      }
+      const list = this.remoteBoard ?? getWorldList(g.s.totalTaps, g.s.username ?? 'YOU');
+      const yourRank = list.find(e => e.you)?.rank ?? Infinity;
       // Subway-Surfers-style ranked list: top 10, a gap, then your neighborhood
       const shown = list.filter(e => e.rank <= 10 || Math.abs(e.rank - yourRank) <= 2);
       let prev = 0;
