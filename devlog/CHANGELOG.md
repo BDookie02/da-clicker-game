@@ -55,3 +55,16 @@ changed in the build at the moment it was taken.
   actions gated off ("DEVICE ONLY").
 - Board IDs are placeholders until the App Store Connect / Play Console
   leaderboards are created at publish time (documented in README).
+
+## 2026-07-09-06-taps-leaderboard-list.png
+**Build state:** adjustment pass #3 — leaderboard redesigned as a ranked list.
+- Single board now: **All-Time Taps** only (Red Lights Cleared board removed).
+- RANKS renders an in-game ranked list (mobile-runner style): medals for the
+  top 3, top 10 shown, a ··· gap, then your neighborhood (±2 ranks) with
+  **⭐ YOU** highlighted in gold.
+- 49 seeded placeholder rivals with fixed skill curves — the player genuinely
+  overtakes them one by one as taps accumulate (verified: YOU at #28 with
+  3.59K, 40 taps behind #27). Swapped for real global data at store launch;
+  the render path is identical.
+- Native sync unchanged: taps auto-submit to Game Center / Play Games on
+  every opponent defeated.

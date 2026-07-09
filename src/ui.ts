@@ -1,7 +1,7 @@
 import { BOOSTERS, COSMETICS, CREW, UPGRADES, type BoosterDef } from './config';
 import { fmt, type Game } from './state';
 import { sfx } from './audio';
-import { BOARD_IDS, localBests, type BoardKey, type LeaderboardProvider } from './leaderboard';
+import { getWorldList, type LeaderboardProvider } from './leaderboard';
 
 // ---------------------------------------------------------------------------
 // Rewarded-ad adapter. The placeholder provider fakes an ad with a countdown.
@@ -71,7 +71,7 @@ export class UI {
   private fade: HTMLElement;
   private openTab: string | null = null;
 
-  lb: LeaderboardProvider = localBests;
+  lb: LeaderboardProvider | null = null;
 
   constructor(private game: Game, private onCosmeticsChanged: () => void) {
     this.root = document.getElementById('app')!;
@@ -191,18 +191,28 @@ export class UI {
           owned || g.s.mentality >= c.cost, 'cosmetic'));
       }
     } else if (this.openTab === 'ranks') {
-      const native = this.lb.platform !== 'web';
-      const status = native
-        ? (this.lb.platform === 'gamecenter' ? 'Connected via Game Center' : 'Connected via Google Play Games')
-        : 'Web preview — worldwide boards go live on iOS/Android via Game Center & Play Games. Personal bests tracked below.';
-      rows.push(`<div class="panel-note">${status}</div>`);
-      for (const key of Object.keys(BOARD_IDS) as BoardKey[]) {
-        const best = key === 'lights' ? g.s.opponentIndex : g.s.totalTaps;
-        rows.push(row(`show_${key}`, `🌍 ${BOARD_IDS[key].name}`, `Your best: ${fmt(best)}`,
-          native ? 'VIEW GLOBAL' : 'DEVICE ONLY', native, 'lb'));
+      const native = !!this.lb && this.lb.platform !== 'web';
+      rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS${native
+        ? ` · syncing via ${this.lb!.platform === 'gamecenter' ? 'Game Center' : 'Google Play Games'}`
+        : ' · placeholder rivals until store launch (Game Center / Play Games)'}</div>`);
+      const list = getWorldList(g.s.totalTaps);
+      const yourRank = list.find(e => e.you)!.rank;
+      // Subway-Surfers-style ranked list: top 10, a gap, then your neighborhood
+      const shown = list.filter(e => e.rank <= 10 || Math.abs(e.rank - yourRank) <= 2);
+      let prev = 0;
+      for (const e of shown) {
+        if (e.rank > prev + 1) rows.push(`<div class="lb-gap">···</div>`);
+        prev = e.rank;
+        rows.push(`<div class="lb-row${e.you ? ' lb-you' : ''}">
+          <span class="lb-rank">${e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : '#' + e.rank}</span>
+          <span class="lb-name">${e.you ? '⭐ YOU' : e.name}</span>
+          <span class="lb-score">${fmt(e.taps)}</span>
+        </div>`);
       }
-      rows.push(row('signin', 'Account', native ? 'Sign in to submit worldwide scores' : 'Available on the mobile app',
-        'SIGN IN', native, 'lb'));
+      if (native) {
+        rows.push(row('official', 'Official Board', 'Open the platform leaderboard', 'VIEW', true, 'lb'));
+        rows.push(row('signin', 'Account', 'Sign in to submit your taps worldwide', 'SIGN IN', true, 'lb'));
+      }
     } else if (this.openTab === 'boosters') {
       rows.push(`<div class="panel-note">Watch an ad, get a booster. No daily limit — the more the merrier. Ads watched: ${g.s.adsWatched}</div>`);
       for (const b of BOOSTERS) {
@@ -232,11 +242,12 @@ export class UI {
       sfx.buy();
       this.onCosmeticsChanged();
     } else if (kind === 'lb') {
+      if (!this.lb) return;
       if (id === 'signin') {
         const ok = await this.lb.signIn();
-        this.toast(ok ? 'Signed in — scores will sync worldwide.' : 'Sign-in unavailable here.', ok ? 'gold' : '');
+        this.toast(ok ? 'Signed in — taps will sync worldwide.' : 'Sign-in unavailable here.', ok ? 'gold' : '');
       } else {
-        await this.lb.show(id.replace('show_', '') as BoardKey);
+        await this.lb.show();
       }
     } else if (kind === 'booster') {
       const b = BOOSTERS.find(x => x.id === id) as BoosterDef;

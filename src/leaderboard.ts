@@ -1,47 +1,42 @@
 // ---------------------------------------------------------------------------
-// Worldwide leaderboards — Game Center (iOS) + Google Play Games (Android).
+// Worldwide high-score leaderboard — ONE board: all-time taps.
+// Rendered in-game as a ranked list (rank / name / taps, your row highlighted).
 //
-// Same pattern as ads: one interface, swappable providers. On device, the
-// native provider drives @openforge/capacitor-game-connect (sign-in, score
-// submit, and the platform's own worldwide leaderboard overlay). In the web
-// build it falls back to a local placeholder that tracks personal bests.
+// Score sync: on device the provider drives @openforge/capacitor-game-connect
+// to submit taps to Game Center (iOS) / Google Play Games (Android) and can
+// open the official platform overlay. The in-game list itself uses a seeded
+// placeholder population until real global data is wired at publish (the
+// platform services or a tiny score API can back it — same render path).
 //
-// Publish-time setup (dashboard work, not code):
-//  - App Store Connect -> Game Center -> create both leaderboards, put their
-//    IDs in BOARD_IDS.ios
-//  - Google Play Console -> Play Games Services -> create both leaderboards,
-//    put their IDs in BOARD_IDS.android
+// Publish-time setup:
+//  - App Store Connect -> Game Center -> create the taps leaderboard -> ios id
+//  - Play Console -> Play Games Services -> create it -> android id
 //  - npm i @openforge/capacitor-game-connect && npx cap sync
 // ---------------------------------------------------------------------------
 
-export type BoardKey = 'lights' | 'taps';
-
-export const BOARD_IDS: Record<BoardKey, { name: string; ios: string; android: string }> = {
-  lights: { name: 'Red Lights Cleared', ios: 'grp.dclicker.lights', android: 'REPLACE_WITH_PLAY_CONSOLE_ID_lights' },
-  taps:   { name: 'Lifetime Taps',      ios: 'grp.dclicker.taps',   android: 'REPLACE_WITH_PLAY_CONSOLE_ID_taps' },
+export const BOARD = {
+  name: 'All-Time Taps',
+  ios: 'grp.dclicker.taps',
+  android: 'REPLACE_WITH_PLAY_CONSOLE_ID_taps',
 };
 
 export interface LeaderboardProvider {
   /** 'gamecenter' | 'playgames' | 'web' */
   readonly platform: string;
   signIn(): Promise<boolean>;
-  submit(board: BoardKey, value: number): Promise<void>;
-  /** Opens the platform's worldwide leaderboard overlay (native only). */
-  show(board: BoardKey): Promise<void>;
+  submit(taps: number): Promise<void>;
+  /** Opens the platform's official leaderboard overlay (native only). */
+  show(): Promise<void>;
 }
 
 class LocalLeaderboard implements LeaderboardProvider {
   readonly platform = 'web';
   async signIn() { return false; }
-  async submit(board: BoardKey, value: number) {
-    const key = `lb-best-${board}`;
-    const best = Number(localStorage.getItem(key) ?? 0);
-    if (value > best) localStorage.setItem(key, String(value));
+  async submit(taps: number) {
+    const best = Number(localStorage.getItem('lb-best-taps') ?? 0);
+    if (taps > best) localStorage.setItem('lb-best-taps', String(taps));
   }
-  async show() { /* web placeholder — the RANKS panel renders personal bests */ }
-  best(board: BoardKey): number {
-    return Number(localStorage.getItem(`lb-best-${board}`) ?? 0);
-  }
+  async show() { /* the in-game RANKS list is the display on web */ }
 }
 
 class GameConnectLeaderboard implements LeaderboardProvider {
@@ -52,30 +47,26 @@ class GameConnectLeaderboard implements LeaderboardProvider {
     this.platform = isIOS ? 'gamecenter' : 'playgames';
   }
 
+  private get boardId() { return this.platform === 'gamecenter' ? BOARD.ios : BOARD.android; }
+
   async signIn(): Promise<boolean> {
-    try {
-      await this.plugin.signIn();
-      this.signedIn = true;
-    } catch { this.signedIn = false; }
+    try { await this.plugin.signIn(); this.signedIn = true; }
+    catch { this.signedIn = false; }
     return this.signedIn;
   }
 
-  async submit(board: BoardKey, value: number) {
+  async submit(taps: number) {
     if (!this.signedIn && !(await this.signIn())) return;
-    const id = this.platform === 'gamecenter' ? BOARD_IDS[board].ios : BOARD_IDS[board].android;
     try {
-      await this.plugin.submitScore({ leaderboardID: id, totalScoreAmount: Math.floor(value) });
-    } catch { /* offline / not configured yet — scores resubmit on next defeat */ }
+      await this.plugin.submitScore({ leaderboardID: this.boardId, totalScoreAmount: Math.floor(taps) });
+    } catch { /* offline / not configured — resubmits on next defeat */ }
   }
 
-  async show(board: BoardKey) {
+  async show() {
     if (!this.signedIn && !(await this.signIn())) return;
-    const id = this.platform === 'gamecenter' ? BOARD_IDS[board].ios : BOARD_IDS[board].android;
-    try { await this.plugin.showLeaderboard({ leaderboardID: id }); } catch { /* ignore */ }
+    try { await this.plugin.showLeaderboard({ leaderboardID: this.boardId }); } catch { /* ignore */ }
   }
 }
-
-export const localBests = new LocalLeaderboard();
 
 export async function initLeaderboards(): Promise<LeaderboardProvider> {
   const cap = (window as any).Capacitor;
@@ -88,5 +79,47 @@ export async function initLeaderboards(): Promise<LeaderboardProvider> {
       return new GameConnectLeaderboard(mod.GameConnect, cap.getPlatform() === 'ios');
     } catch { /* plugin not installed yet — fall through to local */ }
   }
-  return localBests;
+  return new LocalLeaderboard();
+}
+
+// ---- worldwide list (placeholder population) -------------------------------
+// 49 seeded rivals whose scores are fixed "skill curves" — as your taps grow
+// you genuinely overtake them one by one, so the list feels alive. Swapped
+// for real platform/global data at publish; the UI render path is identical.
+
+export interface LbEntry { rank: number; name: string; taps: number; you: boolean; }
+
+const RIVAL_NAMES = [
+  'TapGod_99', 'xX_Mentality_Xx', 'RedLightRonnie', 'WristWarrior', 'GoopDodger',
+  'SigmaCommuter', 'NapkinCollector', 'IdleHands77', 'CrosswalkKing', 'GreenLightGwen',
+  'StoplightStan', 'ClutchCadence', 'TurnSignalTina', 'BlinkerBoi', 'HornHonker3000',
+  'LaneChanger', 'YellowLightYolo', 'PedalPusher', 'DashCamDan', 'RushHourRick',
+  'GridlockGary', 'MericaMotors', 'VibeCheckVal', 'NoBlinkNate', 'FocusFiend',
+  'DisciplineDee', 'MonkModeMike', 'GrindsetGreg', 'LockedInLou', 'EyeContactEd',
+  'StaringSteve', 'UnbotheredUma', 'PatientPete', 'CalmCarl', 'ZenZeke',
+  'TapTitan', 'ClickerChamp', 'FingerFlash', 'ThumbThunder', 'RapidRita',
+  'SteadyEddie', 'MellowMel', 'ChillChad', 'CoolHandCleo', 'SmoothSammy',
+  'TrafficTsar', 'IntersectionIvy', 'BoulevardBex', 'AvenueAce',
+];
+
+function rivalCurve(i: number): { base: number; mult: number } {
+  // deterministic per-rival skill: log-spread so the board spans casuals->gods
+  let a = ((i + 1) * 2654435761) >>> 0;
+  a ^= a >>> 13; a = Math.imul(a, 1274126177) >>> 0; a ^= a >>> 16;
+  const r = a / 4294967296;
+  return {
+    base: Math.floor(50 + r * 4000),                       // head start
+    mult: Math.pow(10, (i % 7) * 0.55 + r * 0.5) * 0.02,   // growth vs you
+  };
+}
+
+/** Ranked worldwide list with the player's row inserted and highlighted. */
+export function getWorldList(playerTaps: number, playerName = 'YOU'): LbEntry[] {
+  const rows = RIVAL_NAMES.map((name, i) => {
+    const { base, mult } = rivalCurve(i);
+    return { name, taps: Math.floor(base + playerTaps * mult), you: false };
+  });
+  rows.push({ name: playerName, taps: Math.floor(playerTaps), you: true });
+  rows.sort((a, b) => b.taps - a.taps);
+  return rows.map((r, i) => ({ ...r, rank: i + 1 }));
 }

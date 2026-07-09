@@ -154,6 +154,26 @@ html, body {
 .row button { flex: 0 0 92px; padding: 8px 4px; font-size: 10px; }
 .row button:disabled { opacity: 0.4; cursor: default; }
 
+/* worldwide leaderboard list */
+.lb-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #22223a;
+  font-size: 12px;
+}
+.lb-rank { flex: 0 0 44px; color: #8a8ab0; }
+.lb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-score { flex: 0 0 auto; color: #e6c84a; }
+.lb-you {
+  background: #2a2440;
+  border: 2px solid #e6c84a;
+  border-bottom-width: 2px;
+}
+.lb-you .lb-name, .lb-you .lb-rank { color: #ffd890; }
+.lb-gap { text-align: center; color: #4a4a70; padding: 2px 0; font-size: 12px; }
+
 .toasts {
   position: absolute;
   top: 150px;

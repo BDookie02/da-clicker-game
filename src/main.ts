@@ -53,8 +53,7 @@ let leaderboards: LeaderboardProvider | null = null;
 initLeaderboards().then((lb) => {
   leaderboards = lb;
   ui.lb = lb;
-  void lb.submit('lights', game.s.opponentIndex);
-  void lb.submit('taps', game.s.totalTaps);
+  void lb.submit(game.s.totalTaps);
 });
 
 scene.setOpponent(game.opponent);
@@ -72,8 +71,7 @@ game.on((e) => {
     sfx.milestone();
   } else if (e.type === 'defeated') {
     transitioning = true;
-    void leaderboards?.submit('lights', game.s.opponentIndex);
-    void leaderboards?.submit('taps', game.s.totalTaps);
+    void leaderboards?.submit(game.s.totalTaps);
     const beatenName = e.name;
     scene.goop(game.equipped('goop'));
     scene.setShakeAmp(0);
