@@ -47,10 +47,12 @@ class PlaceholderAdProvider implements AdProvider {
         const left = Math.max(0, Math.ceil(lengthSec - watched));
         span.textContent = document.hidden ? `${left} (paused)` : String(left);
         if (watched >= lengthSec) {
+          // auto-redeem on verified completion — no claim click, so a reward
+          // can never be stranded by the window closing
           clearInterval(iv);
-          btn.disabled = false;
-          btn.innerHTML = 'CLAIM REWARD';
-          btn.onclick = () => { overlay.remove(); resolve(watched >= lengthSec); };
+          btn.disabled = true;
+          btn.innerHTML = 'REWARD CLAIMED ✓';
+          setTimeout(() => { overlay.remove(); resolve(true); }, 600);
         }
       }, 250);
     });

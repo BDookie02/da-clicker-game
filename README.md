@@ -26,7 +26,7 @@ discipline car meme.
   No daily limit. Longer ad, fatter boost. Rewards require verified full
   watches — hiding the page pauses the countdown.
 - **Usernames**: one-of-a-kind, claimed at first launch, never re-registrable
-  (case-insensitive), rename for 100K Respect. Local registry in dev; swap
+  (case-insensitive), rename for 1M Respect. Local registry in dev; swap
   `UsernameService` (src/username.ts) for an atomic insert-if-absent API at
   launch (Cloudflare Worker/KV or Firebase doc-key both work).
 - **Escalating rage**: the opponent's driver visibly angers with each shake

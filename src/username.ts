@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 export const USERNAME_RE = /^[A-Za-z0-9_]{3,14}$/;
-export const RENAME_COST = 100_000;
+export const RENAME_COST = 1_000_000;
 
 export interface UsernameService {
   isTaken(name: string): Promise<boolean>;
