@@ -2,6 +2,13 @@
 // Placeholder-quality on purpose; real sound design comes with the art pass.
 class Sfx {
   private ctx: AudioContext | null = null;
+  muted = localStorage.getItem('discipline-muted') === '1';
+
+  toggleMute(): boolean {
+    this.muted = !this.muted;
+    localStorage.setItem('discipline-muted', this.muted ? '1' : '0');
+    return this.muted;
+  }
 
   private ac(): AudioContext {
     if (!this.ctx) this.ctx = new AudioContext();
@@ -10,6 +17,7 @@ class Sfx {
   }
 
   private blip(freq: number, dur: number, type: OscillatorType = 'square', vol = 0.08, slide = 0) {
+    if (this.muted) return;
     try {
       const ctx = this.ac();
       const o = ctx.createOscillator();
@@ -26,6 +34,7 @@ class Sfx {
   }
 
   private noise(dur: number, vol = 0.15) {
+    if (this.muted) return;
     try {
       const ctx = this.ac();
       const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);

@@ -100,6 +100,14 @@ game.on((e) => {
         transitioning = false;
       });
     }, 1600);
+  } else if (e.type === 'prestige') {
+    scene.setOpponent(game.opponent);
+    scene.setShakeAmp(game.shakeAmp);
+    scene.setDriverAnger(0);
+    applyCosmetics();
+    ui.flashFade();
+    ui.toast(`NEW ROUTE. Permanent x${Math.pow(2, e.count)} respect.`, 'gold');
+    sfx.green();
   } else if (e.type === 'boost') {
     ui.toast(`BOOST ACTIVE: x${e.mult} for ${e.seconds}s`, 'gold');
   } else if (e.type === 'offline') {

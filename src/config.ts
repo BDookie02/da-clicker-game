@@ -29,9 +29,9 @@ export const OPPONENTS: OpponentDef[] = [
   { id: 'merc',      name: 'The Mercenary',   blurb: 'Straight out of a source engine render. Mumbles about sandwiches.',   tapsRequired: 52000,      carColor: 0xb04a3a, carAccent: 0x6e2d24, carStyle: 'van',      mentalityReward: 25,  spriteSlot: 'char_merc' },
   { id: 'metro',     name: 'Subway Stranger', blurb: 'Not even a car. He brought the whole metro cart to the light.',       tapsRequired: 190000,     carColor: 0x9aa0a8, carAccent: 0x3d4148, carStyle: 'metro',    mentalityReward: 35,  spriteSlot: 'char_metro' },
   { id: 'cowboy',    name: 'Steel Cowboy',    blurb: 'He took the first Napkin. He will take this light too.',              tapsRequired: 700000,     carColor: 0x7a4a9e, carAccent: 0x4d2d66, carStyle: 'lowrider', mentalityReward: 50,  spriteSlot: 'char_cowboy' },
-  { id: 'demon',     name: 'Demon Face',      blurb: 'Rated: Extreme Demon. 0.1% of players pass this light.',              tapsRequired: 2600000,    carColor: 0x2a2a2e, carAccent: 0x8e1f1f, carStyle: 'muscle',   mentalityReward: 75,  spriteSlot: 'char_demon' },
-  { id: 'sigma',     name: 'The Sigma',       blurb: 'Grindset engaged. His limo idles louder than your engine.',           tapsRequired: 9500000,    carColor: 0xc9a227, carAccent: 0x8a6d14, carStyle: 'limo',     mentalityReward: 110, spriteSlot: 'char_sigma' },
-  { id: 'discipline',name: 'DISCIPLINE.',     blurb: 'The final light. Pure white. Pure focus. Bottom text.',               tapsRequired: 36000000,   carColor: 0xf2f2f2, carAccent: 0xcfcfcf, carStyle: 'divine',   mentalityReward: 200, spriteSlot: 'char_discipline' },
+  { id: 'demon',     name: 'Demon Face',      blurb: 'Rated: Extreme Demon. 0.1% of players pass this light.',              tapsRequired: 3200000,    carColor: 0x2a2a2e, carAccent: 0x8e1f1f, carStyle: 'muscle',   mentalityReward: 75,  spriteSlot: 'char_demon' },
+  { id: 'sigma',     name: 'The Sigma',       blurb: 'Grindset engaged. His limo idles louder than your engine.',           tapsRequired: 14000000,   carColor: 0xc9a227, carAccent: 0x8a6d14, carStyle: 'limo',     mentalityReward: 110, spriteSlot: 'char_sigma' },
+  { id: 'discipline',name: 'DISCIPLINE.',     blurb: 'The final light. Pure white. Pure focus. Bottom text.',               tapsRequired: 60000000,   carColor: 0xf2f2f2, carAccent: 0xcfcfcf, carStyle: 'divine',   mentalityReward: 200, spriteSlot: 'char_discipline' },
 ];
 
 // --- procedural opponents after the handcrafted 10 -------------------------
@@ -75,7 +75,9 @@ export function getOpponent(index: number): OpponentDef {
     id: `gen${index}`,
     name: `${NAME_A[Math.floor(r() * NAME_A.length)]} ${NAME_B[Math.floor(r() * NAME_B.length)]}`,
     blurb: BLURBS[Math.floor(r() * BLURBS.length)],
-    tapsRequired: Math.round(last.tapsRequired * Math.pow(1.55, n + 1)),
+    // 1.8x per light — simulation-tuned so lights stay session goals instead
+    // of trending easier forever (1.55 collapsed by ~day 30, 2.1 walled out)
+    tapsRequired: Math.round(last.tapsRequired * Math.pow(1.8, n + 1)),
     carColor: paint,
     carAccent: Math.max(0, paint - 0x202020),
     carStyle: STYLES[Math.floor(r() * STYLES.length)],

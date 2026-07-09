@@ -5,6 +5,7 @@ import {
 
 export interface SaveData {
   username: string | null;
+  prestiges: number;        // completed "New Routes"
   respect: number;
   mentality: number;
   totalTaps: number;
@@ -22,6 +23,7 @@ export interface SaveData {
 
 const fresh = (): SaveData => ({
   username: null,
+  prestiges: 0,
   respect: 0,
   mentality: 0,
   totalTaps: 0,
@@ -42,7 +44,12 @@ export type GameEvent =
   | { type: 'milestone'; tier: number; label: string }
   | { type: 'defeated'; mentality: number; name: string }
   | { type: 'boost'; mult: number; seconds: number }
-  | { type: 'offline'; gain: number; seconds: number };
+  | { type: 'offline'; gain: number; seconds: number }
+  | { type: 'prestige'; count: number };
+
+// New Route (prestige): unlocks at light 15, then +10 lights per route taken.
+export const PRESTIGE_BASE = 15;
+export const PRESTIGE_STEP = 10;
 
 type Listener = (e: GameEvent) => void;
 
@@ -79,6 +86,11 @@ export class Game {
   get boostActive(): boolean { return Date.now() < this.s.boostEndsAt; }
   get activeMult(): number { return this.boostActive ? this.s.boostMult : 1; }
 
+  /** Permanent x2 respect per completed New Route. */
+  get routeMult(): number { return Math.pow(2, this.s.prestiges); }
+  get prestigeRequirement(): number { return PRESTIGE_BASE + PRESTIGE_STEP * this.s.prestiges; }
+  get canPrestige(): boolean { return this.s.opponentIndex >= this.prestigeRequirement; }
+
   get respectPerTap(): number {
     let add = 1;
     let mult = 1;
@@ -87,13 +99,13 @@ export class Game {
       add += u.tapAdd * lv;
       if (u.tapMult) mult *= Math.pow(u.tapMult, lv);
     }
-    return Math.round(add * mult * this.activeMult);
+    return Math.round(add * mult * this.activeMult * this.routeMult);
   }
 
   get respectPerSec(): number {
     let rps = 0;
     for (const c of CREW) rps += (this.s.crewCounts[c.id] ?? 0) * c.tapsPerSec;
-    return Math.round(rps * this.activeMult);
+    return Math.round(rps * this.activeMult * this.routeMult);
   }
 
   upgradeCost(id: string): number {
@@ -144,6 +156,24 @@ export class Game {
       this.lastTier = 0;
       this.emit({ type: 'defeated', mentality: beaten.mentalityReward, name: beaten.name });
     }
+  }
+
+  /** New Route: reset the run for a permanent x2 respect multiplier.
+   *  Keeps mentality, cosmetics, username, raw tap total, ads watched. */
+  prestige(): boolean {
+    if (!this.canPrestige) return false;
+    this.s.prestiges += 1;
+    this.s.respect = 0;
+    this.s.opponentIndex = 0;
+    this.s.opponentProgress = 0;
+    this.s.upgradeLevels = {};
+    this.s.crewCounts = {};
+    this.s.boostMult = 1;
+    this.s.boostEndsAt = 0;
+    this.lastTier = 0;
+    this.save();
+    this.emit({ type: 'prestige', count: this.s.prestiges });
+    return true;
   }
 
   buyUpgrade(id: string): boolean {

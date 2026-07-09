@@ -1,5 +1,5 @@
 import { BOOSTERS, COSMETICS, CREW, UPGRADES, type BoosterDef } from './config';
-import { fmt, type Game } from './state';
+import { fmt, PRESTIGE_STEP, type Game } from './state';
 import { sfx } from './audio';
 import { getWorldList, type LeaderboardProvider } from './leaderboard';
 import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
@@ -73,6 +73,7 @@ export class UI {
   private bars: Record<string, HTMLElement> = {};
   private fade: HTMLElement;
   private openTab: string | null = null;
+  private prestigeArmed = false;
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
@@ -85,6 +86,7 @@ export class UI {
         <div class="stat"><span class="k">MENTALITY</span><span class="v gold" id="v-mentality">0</span></div>
         <div class="stat small"><span class="k">/TAP</span><span class="v" id="v-tap">1</span></div>
         <div class="stat small"><span class="k">/SEC</span><span class="v" id="v-rps">0</span></div>
+        <button class="stat mute" id="btn-mute" title="sound">🔊</button>
       </div>
       <div class="boost-pill" id="boost-pill" hidden></div>
       <div class="opp-bar">
@@ -111,6 +113,13 @@ export class UI {
         ev.stopPropagation();
         this.toggle((b as HTMLElement).dataset.tab!);
       });
+    });
+
+    const muteBtn = document.getElementById('btn-mute')!;
+    muteBtn.textContent = sfx.muted ? '🔇' : '🔊';
+    muteBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      muteBtn.textContent = sfx.toggleMute() ? '🔇' : '🔊';
     });
   }
 
@@ -203,6 +212,7 @@ export class UI {
 
   close() {
     this.openTab = null;
+    this.prestigeArmed = false;
     this.panel?.remove();
     this.panel = null;
   }
@@ -215,6 +225,16 @@ export class UI {
     const rows: string[] = [`<div class="panel-head">${this.openTab.toUpperCase()}<button class="x">✕</button></div>`];
 
     if (this.openTab === 'upgrades') {
+      // New Route (prestige) lives at the top of the upgrades list
+      if (g.canPrestige) {
+        rows.push(row('prestige', this.prestigeArmed ? '⚠️ TAP AGAIN TO CONFIRM' : '🛣️ NEW ROUTE',
+          `Reset the run for a PERMANENT x2 respect (now x${fmt(g.routeMult)}). Keeps Mentality, garage, username.`,
+          this.prestigeArmed ? 'CONFIRM' : `x${fmt(g.routeMult * 2)}`, true, 'prestige'));
+      } else {
+        rows.push(row('prestige', '🛣️ New Route (locked)',
+          `Reach RED LIGHT ${g.prestigeRequirement + 1} to reset for a permanent x2 respect. Next route: +${PRESTIGE_STEP} lights.`,
+          `LIGHT ${g.prestigeRequirement + 1}`, false, 'prestige'));
+      }
       for (const u of UPGRADES) {
         const lv = g.s.upgradeLevels[u.id] ?? 0;
         const maxed = !!u.maxLevel && lv >= u.maxLevel;
@@ -285,7 +305,14 @@ export class UI {
 
   private async action(kind: string, id: string) {
     const g = this.game;
-    if (kind === 'upgrades') { if (g.buyUpgrade(id)) sfx.buy(); }
+    if (kind === 'prestige') {
+      if (!this.prestigeArmed) {
+        this.prestigeArmed = true;
+      } else {
+        this.prestigeArmed = false;
+        if (g.prestige()) { this.close(); return; }
+      }
+    } else if (kind === 'upgrades') { if (g.buyUpgrade(id)) sfx.buy(); }
     else if (kind === 'crew') { if (g.buyCrew(id)) sfx.buy(); }
     else if (kind === 'cosmetic') {
       if (g.s.ownedCosmetics.includes(id)) g.toggleCosmetic(id);
