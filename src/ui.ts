@@ -1,6 +1,7 @@
 import { BOOSTERS, COSMETICS, CREW, UPGRADES, type BoosterDef } from './config';
 import { fmt, type Game } from './state';
 import { sfx } from './audio';
+import { BOARD_IDS, localBests, type BoardKey, type LeaderboardProvider } from './leaderboard';
 
 // ---------------------------------------------------------------------------
 // Rewarded-ad adapter. The placeholder provider fakes an ad with a countdown.
@@ -70,6 +71,8 @@ export class UI {
   private fade: HTMLElement;
   private openTab: string | null = null;
 
+  lb: LeaderboardProvider = localBests;
+
   constructor(private game: Game, private onCosmeticsChanged: () => void) {
     this.root = document.getElementById('app')!;
     this.root.innerHTML = `
@@ -92,6 +95,7 @@ export class UI {
         <button data-tab="upgrades">UPGRADES</button>
         <button data-tab="crew">CREW</button>
         <button data-tab="garage">GARAGE</button>
+        <button data-tab="ranks">🏆 RANKS</button>
         <button data-tab="boosters" class="hot">📺 BOOSTERS</button>
       </div>
       <div class="toasts" id="toasts"></div>
@@ -186,6 +190,19 @@ export class UI {
           owned ? (equipped ? 'UNEQUIP' : 'EQUIP') : `${c.cost} M`,
           owned || g.s.mentality >= c.cost, 'cosmetic'));
       }
+    } else if (this.openTab === 'ranks') {
+      const native = this.lb.platform !== 'web';
+      const status = native
+        ? (this.lb.platform === 'gamecenter' ? 'Connected via Game Center' : 'Connected via Google Play Games')
+        : 'Web preview — worldwide boards go live on iOS/Android via Game Center & Play Games. Personal bests tracked below.';
+      rows.push(`<div class="panel-note">${status}</div>`);
+      for (const key of Object.keys(BOARD_IDS) as BoardKey[]) {
+        const best = key === 'lights' ? g.s.opponentIndex : g.s.totalTaps;
+        rows.push(row(`show_${key}`, `🌍 ${BOARD_IDS[key].name}`, `Your best: ${fmt(best)}`,
+          native ? 'VIEW GLOBAL' : 'DEVICE ONLY', native, 'lb'));
+      }
+      rows.push(row('signin', 'Account', native ? 'Sign in to submit worldwide scores' : 'Available on the mobile app',
+        'SIGN IN', native, 'lb'));
     } else if (this.openTab === 'boosters') {
       rows.push(`<div class="panel-note">Watch an ad, get a booster. No daily limit — the more the merrier. Ads watched: ${g.s.adsWatched}</div>`);
       for (const b of BOOSTERS) {
@@ -214,6 +231,13 @@ export class UI {
       else if (!g.buyCosmetic(id)) return;
       sfx.buy();
       this.onCosmeticsChanged();
+    } else if (kind === 'lb') {
+      if (id === 'signin') {
+        const ok = await this.lb.signIn();
+        this.toast(ok ? 'Signed in — scores will sync worldwide.' : 'Sign-in unavailable here.', ok ? 'gold' : '');
+      } else {
+        await this.lb.show(id.replace('show_', '') as BoardKey);
+      }
     } else if (kind === 'booster') {
       const b = BOOSTERS.find(x => x.id === id) as BoosterDef;
       const watched = await this.ads.show(b.adSeconds);

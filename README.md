@@ -66,6 +66,16 @@ Rewarded ads: the game calls a single `AdProvider.show(lengthSec)` interface
 for store builds. Note: the goop humor likely lands a 17+ rating; plan App
 Review positioning accordingly.
 
+Worldwide leaderboards (🏆 RANKS menu): `LeaderboardProvider` (src/leaderboard.ts)
+submits **Red Lights Cleared** and **Lifetime Taps** to Game Center / Google
+Play Games on every opponent defeated. Publish checklist:
+
+1. `npm i @openforge/capacitor-game-connect && npx cap sync`
+2. App Store Connect → Game Center → create both leaderboards → paste IDs
+   into `BOARD_IDS.*.ios`
+3. Play Console → Play Games Services → create both leaderboards → paste IDs
+   into `BOARD_IDS.*.android`
+
 ## Asset pipeline (next phase)
 
 Higgsfield MCP (hosted, OAuth: `https://mcp.higgsfield.ai/mcp`) generates the

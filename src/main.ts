@@ -3,6 +3,7 @@ import { GameScene } from './scene';
 import { UI } from './ui';
 import { sfx } from './audio';
 import { getDistrict } from './config';
+import { initLeaderboards, type LeaderboardProvider } from './leaderboard';
 
 const game = new Game();
 // debug/testing handle (harmless in prod; used by automated checks)
@@ -47,6 +48,15 @@ const applyCosmetics = () => {
 
 const ui = new UI(game, applyCosmetics);
 
+// Worldwide leaderboards: Game Center / Play Games on device, local bests on web
+let leaderboards: LeaderboardProvider | null = null;
+initLeaderboards().then((lb) => {
+  leaderboards = lb;
+  ui.lb = lb;
+  void lb.submit('lights', game.s.opponentIndex);
+  void lb.submit('taps', game.s.totalTaps);
+});
+
 scene.setOpponent(game.opponent);
 scene.setShakeAmp(game.shakeAmp);
 applyCosmetics();
@@ -62,6 +72,8 @@ game.on((e) => {
     sfx.milestone();
   } else if (e.type === 'defeated') {
     transitioning = true;
+    void leaderboards?.submit('lights', game.s.opponentIndex);
+    void leaderboards?.submit('taps', game.s.totalTaps);
     const beatenName = e.name;
     scene.goop(game.equipped('goop'));
     scene.setShakeAmp(0);

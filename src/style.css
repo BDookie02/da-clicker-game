@@ -110,8 +110,8 @@ html, body {
   color: #e8e8f0;
   border: 2px solid #4a4a70;
   border-bottom-width: 4px;
-  padding: 10px 6px;
-  font-size: 11px;
+  padding: 10px 2px;
+  font-size: 10px;
   flex: 1;
   cursor: pointer;
 }

@@ -43,3 +43,15 @@ changed in the build at the moment it was taken.
   the page is visible (hiding the tab pauses it), there is no skip/dismiss,
   and the claim can't resolve before full watch time accumulates. Production
   AdMob provider will rely on SDK reward events + server-side verification.
+
+## 2026-07-09-05-worldwide-ranks-panel.png
+**Build state:** adjustment pass #2 — worldwide leaderboards.
+- New 🏆 RANKS menu: two worldwide boards — **Red Lights Cleared** and
+  **Lifetime Taps** — behind a swappable `LeaderboardProvider` interface.
+- On device it drives Game Center (iOS) / Google Play Games (Android) via
+  the Capacitor game-connect plugin: sign-in, auto score submit on every
+  opponent defeated, and the platform's native worldwide leaderboard overlay.
+- Web build falls back to local personal-best tracking with the native
+  actions gated off ("DEVICE ONLY").
+- Board IDs are placeholders until the App Store Connect / Play Console
+  leaderboards are created at publish time (documented in README).
