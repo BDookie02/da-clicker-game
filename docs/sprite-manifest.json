@@ -1,11 +1,11 @@
 {
-  "style": "chunky 90s pixel-art bust, PS1 memory-card portrait, hard black outline, limited palette, transparent background, head and shoulders, facing viewer, unbroken eye contact with camera, original character",
+  "style": "1997 PlayStation-era low-poly 3D rendered character portrait, triangulated low-polygon head, flat-shaded polygons, affine texture warping, dithered 15-bit color, jagged silhouette edges, retro console render, transparent background, head and shoulders bust, facing viewer, unbroken eye contact with camera, original character",
   "slots": {
     "char_og": "unremarkable everyman in a plain gray-blue tee, short brown hair, light stubble, faint smug half-smile, dead calm stare",
     "char_mentality": "pale man in a black baseball cap and plain white shirt, wide unblinking eyes, jaw set, aura of pure focus",
-    "char_blockhead": "man with a perfectly cubic olive-green head, flat pixel features, mossy flat-top hair, stoic blank expression",
-    "char_easyface": "cheerful round yellow ball-headed character, big friendly eyes, small confident smile, blue collared shirt",
-    "char_merc": "burly mercenary in a dark balaclava and rust-red jacket, only intense eyes visible",
+    "char_blockhead": "man with a perfectly cubic olive-green head like a blocky crafting-game character, flat square pixel features, mossy flat-top hair, stoic blank expression (original design, instantly readable as a blocky-game nod)",
+    "char_easyface": "cheerful perfectly-round yellow face like a difficulty-rating icon, big friendly oval eyes, small confident smile, blue collared shirt (original design, reads as a difficulty-face nod)",
+    "char_merc": "burly team-shooter mercenary in a dark balaclava and rust-red team jacket, only intense eyes visible, gruff military bearing (original design, reads as a class-shooter nod)",
     "char_metro": "tired commuter in a gray hoodie and dark beanie, heavy eyelids, thousand-yard stare, faint metro-map reflection in eyes",
     "char_cowboy": "steel-gray weathered cowboy, wide purple-banded hat, red bandana over nose, narrowed eyes",
     "char_demon": "dark crimson demon head with short black horns, glowing red pupils, gritted jaw, black muscle-shirt",
