@@ -234,3 +234,20 @@ changed in the build at the moment it was taken.
   sprites/char_og_a0.png beside the player at the light.
 - Native projects re-synced with the sprite bundle. Higgsfield (or any
   artist) can overwrite the same filenames later — pure drop-in.
+
+## 2026-07-10-17-drive-midblock.png / -drive-arrival.png
+**Build state:** the drive is REAL now.
+- Green light triggers an actual one-block drive: the whole world streams
+  past (lane dashes, buildings, street lamps wrap seamlessly), the beaten
+  goop-car falls behind on your left, and the NEXT rival is staged at the
+  next intersection — visible ahead through the windshield, growing as you
+  pull up, until you stop bumper-aligned beside them. Two intersections
+  leapfrog each other; the far light shows red while yours is green.
+  Eased acceleration/deceleration with a subtle speed bob.
+- Eye contact now aims at the driver's actual head height per body style —
+  tall vehicles no longer point your gaze at their fender. The bus (metro)
+  was also slimmed with a lower window line so its driver sits near eye
+  level.
+- Verified numerically and visually: staged rival at -60 -> -26 at
+  mid-block -> -0.4 (exact bumper alignment) on arrival; intersections
+  leapfrogged; gaze road->opponent; staged copy swapped cleanly.

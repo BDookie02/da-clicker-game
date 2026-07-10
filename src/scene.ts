@@ -89,14 +89,19 @@ export class GameScene {
   private compCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private psxRes = new THREE.Vector2(320, 240);
 
+  private static readonly SPACING = 60;       // distance between red lights
   private opponentGroup = new THREE.Group();  // car + goop, shaken as a unit
   private opponentAnchor = new THREE.Group(); // world placement
+  private nextAnchor = new THREE.Group();     // next rival, staged at the next light
   private goopGroup = new THREE.Group();
+  private intersections: { group: THREE.Group; lamps: THREE.MeshBasicMaterial[] }[] = [];
+  private curI = 0;
+  private scrollers: { obj: THREE.Object3D; span: number }[] = [];
+  private driveS = 0;
   private sprite: THREE.Object3D | null = null; // 2D driver billboard
   private spriteSlot = '';
   private spriteAnger = -1;
   private spritePos = new THREE.Vector3();
-  private trafficLights: THREE.MeshBasicMaterial[] = [];
   private lampMats: THREE.MeshBasicMaterial[] = [];
   private dashDecal: THREE.Mesh | null = null;
   private ornament: THREE.Mesh | null = null;
@@ -162,6 +167,10 @@ export class GameScene {
     this.opponentAnchor.rotation.y = Math.PI; // headlights toward the intersection
     this.opponentAnchor.add(this.opponentGroup);
     this.scene.add(this.opponentAnchor);
+    // staging anchor for the NEXT rival, parked at the next light down the road
+    this.nextAnchor.rotation.y = Math.PI;
+    this.nextAnchor.position.set(-2, 0, -GameScene.SPACING);
+    this.scene.add(this.nextAnchor);
     this.setSky('day');
 
     this.onResize();
@@ -207,7 +216,8 @@ export class GameScene {
     road.position.z = -30;
     this.scene.add(road);
 
-    // One-way 4-lane markings: dashes divide lanes at x -4/0/+4, solid edges
+    // One-way 4-lane markings: dashes divide lanes at x -4/0/+4, solid edges.
+    // Dashes are scrollers so the road streams past during the drive phase.
     const paint = this.mat(0xd8d8c8);
     for (const lx of [-4, 0, 4]) {
       for (let z = 2; z > -110; z -= 4) {
@@ -215,6 +225,7 @@ export class GameScene {
         dash.rotation.x = -Math.PI / 2;
         dash.position.set(lx, 0.01, z);
         this.scene.add(dash);
+        this.scrollers.push({ obj: dash, span: 112 });
       }
     }
     for (const ex of [-7.7, 7.7]) {
@@ -223,17 +234,10 @@ export class GameScene {
       edge.position.set(ex, 0.01, -30);
       this.scene.add(edge);
     }
-    // stop line just past both front bumpers, then crosswalk, then the light
-    const stop = new THREE.Mesh(new THREE.PlaneGeometry(15.4, 0.5), paint);
-    stop.rotation.x = -Math.PI / 2;
-    stop.position.set(0, 0.01, -3.4);
-    this.scene.add(stop);
-    for (let x = -6.6; x <= 6.6; x += 1.2) {
-      const zebra = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 2.4), paint);
-      zebra.rotation.x = -Math.PI / 2;
-      zebra.position.set(x, 0.01, -5.6);
-      this.scene.add(zebra);
-    }
+    // two intersections, one red-light block apart: the one you're at and the
+    // next one down the road (they leapfrog as you drive)
+    this.intersections = [this.buildIntersection(0), this.buildIntersection(-GameScene.SPACING)];
+    this.curI = 0;
 
     // Sidewalks
     const walkMat = this.mat(0x55555e);
@@ -262,6 +266,7 @@ export class GameScene {
       const side = i % 2 === 0 ? -1 : 1;
       b.position.set(side * (13.5 + rng() * 4), h / 2, 4 - i * 4.5 - rng() * 2);
       this.scene.add(b);
+      this.scrollers.push({ obj: b, span: 121.5 });
     }
 
     // Street lamps
@@ -275,41 +280,58 @@ export class GameScene {
         bulb.position.set(side * 6.0, 4.6, z);
         this.scene.add(bulb);
         this.lampMats.push(bulbM);
+        this.scrollers.push({ obj: pole, span: 112 }, { obj: bulb, span: 112 });
       }
     }
-
-    this.buildTrafficLight();
   }
 
-  private buildTrafficLight() {
+  /** One full intersection (stop line, crosswalk, signal) as a movable group. */
+  private buildIntersection(zOffset: number): { group: THREE.Group; lamps: THREE.MeshBasicMaterial[] } {
     const g = new THREE.Group();
+    const paint = this.mat(0xd8d8c8);
+    const stop = new THREE.Mesh(new THREE.PlaneGeometry(15.4, 0.5), paint);
+    stop.rotation.x = -Math.PI / 2;
+    stop.position.set(0, 0.01, -3.4);
+    g.add(stop);
+    for (let x = -6.6; x <= 6.6; x += 1.2) {
+      const zebra = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 2.4), paint);
+      zebra.rotation.x = -Math.PI / 2;
+      zebra.position.set(x, 0.01, -5.6);
+      g.add(zebra);
+    }
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 5.4, 6), this.mat(0x2e2e36));
-    pole.position.y = 2.7;
+    pole.position.set(4.6, 2.7, -7.4);
     g.add(pole);
     const arm = new THREE.Mesh(new THREE.BoxGeometry(7.4, 0.16, 0.16), this.mat(0x2e2e36));
-    arm.position.set(-3.7, 5.3, 0);
+    arm.position.set(0.9, 5.3, -7.4);
     g.add(arm);
     const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.35, 0.35), this.mat(0x1a1a20));
-    box.position.set(-4.4, 4.75, 0); // hangs over the two center lanes
+    box.position.set(0.2, 4.75, -7.4); // hangs over the two center lanes
     g.add(box);
-    const colors = [0xff2222, 0xffaa00, 0x22ff44];
-    colors.forEach((c, i) => {
+    const lamps: THREE.MeshBasicMaterial[] = [];
+    [0xff2222, 0xffaa00, 0x22ff44].forEach((c, i) => {
       const m = new THREE.MeshBasicMaterial({ color: c });
       const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), m);
-      lamp.position.set(-4.4, 5.18 - i * 0.42, 0.2);
+      lamp.position.set(0.2, 5.18 - i * 0.42, -7.2);
       g.add(lamp);
-      this.trafficLights.push(m);
+      lamps.push(m);
     });
-    g.position.set(4.6, 0, -7.4); // right at the crosswalk you're stopped at
+    g.position.z = zOffset;
     this.scene.add(g);
-    this.setLight('red');
+    const it = { group: g, lamps };
+    this.setLightFor(it, 'red');
+    return it;
+  }
+
+  private setLightFor(it: { lamps: THREE.MeshBasicMaterial[] }, state: 'red' | 'green') {
+    const on = state === 'red' ? 0 : 2;
+    it.lamps.forEach((m, i) => m.color.setHex(
+      i === on ? (i === 0 ? 0xff2222 : 0x22ff44) : (i === 0 ? 0x441010 : i === 1 ? 0x443310 : 0x104414)
+    ));
   }
 
   setLight(state: 'red' | 'green') {
-    const on = state === 'red' ? 0 : 2;
-    this.trafficLights.forEach((m, i) => m.color.multiplyScalar(0).addScalar(0).setHex(
-      i === on ? (i === 0 ? 0xff2222 : 0x22ff44) : (i === 0 ? 0x441010 : i === 1 ? 0x443310 : 0x104414)
-    ));
+    this.setLightFor(this.intersections[this.curI], state);
   }
 
   // ---- player cockpit --------------------------------------------------------
@@ -394,10 +416,22 @@ export class GameScene {
       : style === 'cube' ? 3.4 : 4.0;
   }
 
+  /** driver head height per body style — the eye-contact gaze tracks this */
+  private static mountYFor(style: OpponentDef['carStyle']): number {
+    return style === 'cube' ? 2.0 : style === 'metro' ? 1.55
+      : style === 'van' ? 1.45 : style === 'wedge' ? 0.98 : 1.25;
+  }
+
+  /** park a car nose-aligned with the player's bumper at intersection offset */
+  private static parkZ(style: OpponentDef['carStyle'], offset = 0): number {
+    return -2.4 + GameScene.carLength(style) / 2 + offset;
+  }
+
   setOpponent(def: OpponentDef) {
     // nose-to-nose with the player at the stop line regardless of body length
     // (front bumper at z=-2.4; car faces -z, so center = front + length/2)
-    this.opponentAnchor.position.set(-2, 0, -2.4 + GameScene.carLength(def.carStyle) / 2);
+    this.opponentAnchor.position.set(-2, 0, GameScene.parkZ(def.carStyle));
+    this.nextAnchor.clear(); // staged copy (if any) is replaced by the real one
     this.opponentGroup.clear();
     this.goopGroup = new THREE.Group();
     const car = this.buildCar(def);
@@ -408,8 +442,7 @@ export class GameScene {
     // Driver's seat (car local +x = far lane side, like the meme: he's in his
     // seat, head turned, staring at you through the glass). The 2D character
     // billboard mounts here and always faces the player camera.
-    const mountY = def.carStyle === 'cube' ? 2.0 : def.carStyle === 'metro' ? 1.85
-      : def.carStyle === 'van' ? 1.45 : def.carStyle === 'wedge' ? 0.98 : 1.25;
+    const mountY = GameScene.mountYFor(def.carStyle);
     const mount = new THREE.Object3D();
     mount.name = `sprite:${def.spriteSlot}`;
     mount.position.set(0.45, mountY, 0.15);
@@ -482,8 +515,9 @@ export class GameScene {
       for (const [x, z] of [[-1, 1.2], [1, 1.2], [-1, -1.2], [1, -1.2]] as const)
         add(new THREE.BoxGeometry(0.5, 0.7, 0.7), tire, x * 1.0, 0.35, z);
     } else if (s === 'metro') {
-      add(new THREE.BoxGeometry(2.4, 2.2, long), body, 0, 1.45, 0);
-      for (let i = -2; i <= 2; i++) add(new THREE.BoxGeometry(2.44, 0.6, 0.9), glass, 0, 1.9, i * 1.4);
+      // slimmed so the driver's window line sits near the player's eye level
+      add(new THREE.BoxGeometry(2.4, 1.9, long), body, 0, 1.3, 0);
+      for (let i = -2; i <= 2; i++) add(new THREE.BoxGeometry(2.44, 0.6, 0.9), glass, 0, 1.55, i * 1.4);
       add(new THREE.BoxGeometry(2.5, 0.35, long), trim, 0, 0.35, 0);
     } else {
       // unibody: lower body + glass greenhouse cabin (so the driver is
@@ -573,13 +607,25 @@ export class GameScene {
     }
   }
 
-  /** Green light: face the road, roll to the next intersection, then reset. */
-  driveToNext(onDone: () => void) {
+  /** Green light: face the road and actually DRIVE — the world streams past,
+   *  the beaten car falls behind, and the next rival is visible ahead,
+   *  parked at the next red light, growing as you pull up beside them. */
+  driveToNext(nextDef: OpponentDef, onDone: () => void) {
     this.driving = true;
     this.driveT = 0;
+    this.driveS = 0;
     this.onDriveDone = onDone;
     this.gaze = 'road'; // eyes back on the road until the next red light
     this.setLight('green');
+    // stage the next rival at the next intersection down the road
+    const far = this.intersections[this.curI === 0 ? 1 : 0];
+    this.setLightFor(far, 'red');
+    this.nextAnchor.clear();
+    this.nextAnchor.add(this.buildCar(nextDef));
+    const driver = makeDriverSprite(nextDef.spriteSlot, 0);
+    driver.position.set(0.45, GameScene.mountYFor(nextDef.carStyle), 0.15);
+    this.nextAnchor.add(driver);
+    this.nextAnchor.position.set(-2, 0, GameScene.parkZ(nextDef.carStyle, -GameScene.SPACING));
   }
 
   // ---- frame ------------------------------------------------------------------
@@ -599,9 +645,11 @@ export class GameScene {
     // subtle idle sway on the player cam (engine running)
     this.camera.position.y = 1.25 + Math.sin(t * 2.1) * 0.008;
 
-    // head turn: smoothly swing between the opponent's window and the road
+    // head turn: smoothly swing between the opponent's window and the road.
+    // Eye contact aims at the DRIVER'S actual head height (buses, cube cars
+    // and low wedges all differ), not a fixed line.
     const gazeTarget = this.gaze === 'opponent'
-      ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, 1.3, this.opponentAnchor.position.z - 0.15)
+      ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05, this.opponentAnchor.position.z - 0.15)
       : new THREE.Vector3(this.camera.position.x, 1.15, this.camera.position.z - 30);
     this.gazeHelper.position.copy(this.camera.position);
     this.gazeHelper.lookAt(gazeTarget);
@@ -619,19 +667,35 @@ export class GameScene {
       }
     }
 
-    // drive transition: world slides past (player "moves" to the next light)
+    // drive phase: the player rolls one block — everything parked streams
+    // past (+z), the two intersections leapfrog, and the staged next rival
+    // slides in from the distance until you stop abreast at their light
     if (this.driving) {
       this.driveT += dt;
-      const speed = Math.min(this.driveT * 6, 14);
-      this.opponentAnchor.position.z += speed * dt * 0.4; // beaten car falls behind
-      // fade handled by UI; after 2.6s snap back and restore
-      if (this.driveT > 2.6) {
+      const T = 4.4;
+      const p = Math.min(1, this.driveT / T);
+      const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; // in-out
+      const s = GameScene.SPACING * ease;
+      const dz = s - this.driveS;
+      this.driveS = s;
+      this.opponentAnchor.position.z += dz; // beaten goop-car falls behind
+      this.nextAnchor.position.z += dz;     // next rival approaches
+      for (const it of this.intersections) {
+        it.group.position.z += dz;
+        if (it.group.position.z > GameScene.SPACING / 2) it.group.position.z -= GameScene.SPACING * 2;
+      }
+      for (const sc of this.scrollers) {
+        sc.obj.position.z += dz;
+        if (sc.obj.position.z > 20) sc.obj.position.z -= sc.span;
+      }
+      // gentle acceleration bob
+      this.camera.position.y = 1.25 + Math.sin(this.driveT * 9) * 0.02 * Math.sin(Math.PI * p);
+      if (p >= 1) {
         this.driving = false;
-        this.opponentAnchor.position.set(-2, 0, -0.4); // setOpponent re-fits z
-        this.setLight('red');
+        this.curI = Math.abs(this.intersections[0].group.position.z) < Math.abs(this.intersections[1].group.position.z) ? 0 : 1;
         const cb = this.onDriveDone;
         this.onDriveDone = null;
-        cb?.();
+        cb?.(); // setOpponent swaps the staged rival for the live one in place
       }
     }
 

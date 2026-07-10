@@ -101,7 +101,7 @@ game.on((e) => {
     setTimeout(() => {
       sfx.green();
       ui.toast('GREEN LIGHT. You are free to go.', 'green');
-      scene.driveToNext(() => {
+      scene.driveToNext(game.opponent, () => {
         scene.setOpponent(game.opponent);
         scene.setShakeAmp(game.shakeAmp);
         applyCosmetics();
