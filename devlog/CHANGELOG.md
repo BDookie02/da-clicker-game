@@ -223,3 +223,14 @@ changed in the build at the moment it was taken.
 - Stop line moved to just past the bumpers, crosswalk and traffic light
   brought to the actual intersection you're stopped at — the forward
   (green-light) view now has the light hanging directly overhead.
+
+## 2026-07-10-15-final-art-ingame.png
+**Build state:** FINAL ART SHIPPED — the game no longer waits on anything.
+- scripts/make-sprites.mjs compiles all 40 named opponents into shaded
+  64px pixel-art busts — five anger stages each, 200 PNGs in
+  public/sprites/ — so the full rage escalation survives the art upgrade.
+- Runtime loader prefers <slot>_a<tier>.png, then <slot>.png (red-tint
+  anger), then procedural. Verified live: The O.G. renders from
+  sprites/char_og_a0.png beside the player at the light.
+- Native projects re-synced with the sprite bundle. Higgsfield (or any
+  artist) can overwrite the same filenames later — pure drop-in.
