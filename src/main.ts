@@ -86,6 +86,7 @@ game.on((e) => {
     scene.setDriverAnger(e.tier); // face gets angrier and redder each tier
     ui.toast(e.label, 'warn');
     sfx.milestone();
+    navigator.vibrate?.(30 + e.tier * 25);
   } else if (e.type === 'defeated') {
     transitioning = true;
     void leaderboards?.submit(game.s.totalTaps);
@@ -94,6 +95,8 @@ game.on((e) => {
     scene.goop(game.equipped('goop'));
     scene.setShakeAmp(0);
     sfx.goop();
+    sfx.horn(game.equipped('horn'));
+    navigator.vibrate?.([80, 40, 160]);
     ui.toast(`${beatenName} is FINISHED. +${e.mentality} Mentality`, 'gold');
     setTimeout(() => {
       sfx.green();
@@ -123,6 +126,21 @@ game.on((e) => {
     ui.toast(`While you were gone the crew earned ${fmt(e.gain)} respect.`, 'gold');
   }
 });
+
+// PS1-style title card: first tap dismisses it (and unlocks WebAudio)
+const title = document.createElement('div');
+title.className = 'title-screen';
+title.innerHTML = `
+  <div class="title-word">DISCIPLINE.</div>
+  <div class="title-sub">a red light story</div>
+  <div class="title-tap">TAP TO ENGAGE</div>`;
+document.body.appendChild(title);
+title.addEventListener('pointerdown', (ev) => {
+  ev.stopPropagation();
+  title.classList.add('gone');
+  setTimeout(() => title.remove(), 450);
+  sfx.green();
+}, { once: true });
 
 // Tap anywhere on the scene (not on UI) to tap
 const onTap = (ev: Event) => {

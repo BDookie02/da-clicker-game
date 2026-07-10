@@ -193,3 +193,21 @@ changed in the build at the moment it was taken.
 - Ad watch-verification re-verified after the refactor (background-tab
   timer throttling correctly pauses the placeholder countdown — the
   anti-cheat working as designed).
+
+## 2026-07-10-13-title-screen.png
+**Build state:** game finalization pass.
+- **Title screen**: PS1-style card (DISCIPLINE. / "a red light story" /
+  TAP TO ENGAGE) — first tap dismisses it without counting as a game tap
+  and unlocks WebAudio.
+- **Final-art drop-in system**: any PNG at `public/sprites/<slot>.png`
+  automatically replaces that character's procedural sprite at runtime
+  (nearest-filtered; anger becomes a red tint + shake). Zero code changes
+  to swap art.
+- **Art pipeline packaged**: docs/ART-PIPELINE.md (30-second Higgsfield
+  OAuth instructions — the one step that requires an interactive session)
+  + docs/sprite-manifest.json with a generation prompt for every one of
+  the 50 sprite slots, all describing our original character designs.
+- **Horn cosmetics are real now**: Sad Violin and Freight Airhorn actually
+  play (synthesized) when an opponent gets finished.
+- **Haptics**: vibration on shake milestones (scaling with tier) and the
+  goop event, on devices that support it.

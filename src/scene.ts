@@ -423,6 +423,16 @@ export class GameScene {
     driver.position.copy(this.spritePos);
     this.opponentGroup.add(driver);
     this.sprite = driver;
+    // final art drop-in: if public/sprites/<slot>.png exists it replaces the
+    // procedural face automatically (anger becomes a red tint + the shake)
+    const slot = this.spriteSlot;
+    loadCustomSprite(slot, (tex) => {
+      if (this.spriteSlot !== slot || !this.sprite) return;
+      const m = (this.sprite as THREE.Sprite).material as THREE.SpriteMaterial;
+      m.map = tex;
+      m.color.setHex([0xffffff, 0xffd8cc, 0xffb4a0, 0xff8a70, 0xff5a44][a]);
+      m.needsUpdate = true;
+    });
   }
 
   private buildCar(def: OpponentDef): THREE.Group {
@@ -823,6 +833,33 @@ function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
   s.scale.set(0.9, 0.9, 1);
   return s;
+}
+
+// Custom sprite loader: checks public/sprites/<slot>.png once per session and
+// caches the result. Final art (Higgsfield or hand-made) drops into that
+// folder and the game uses it with zero code changes; misses fall back to the
+// procedural pixel characters.
+const spriteTexCache = new Map<string, THREE.Texture | null>();
+function loadCustomSprite(slot: string, onLoad: (t: THREE.Texture) => void) {
+  if (spriteTexCache.has(slot)) {
+    const t = spriteTexCache.get(slot);
+    if (t) onLoad(t);
+    return;
+  }
+  spriteTexCache.set(slot, null); // claim while loading; overwritten on success
+  new THREE.TextureLoader().load(
+    `sprites/${slot}.png`,
+    (t) => {
+      t.magFilter = THREE.NearestFilter;
+      t.minFilter = THREE.NearestFilter;
+      t.generateMipmaps = false;
+      t.colorSpace = THREE.SRGBColorSpace;
+      spriteTexCache.set(slot, t);
+      onLoad(t);
+    },
+    undefined,
+    () => { /* no custom art for this slot — procedural stays */ }
+  );
 }
 
 // deterministic tiny PRNG (no Math.random in render setup -> stable look)

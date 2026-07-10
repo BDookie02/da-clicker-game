@@ -58,6 +58,16 @@ class Sfx {
   boost() { this.blip(330, 0.12, 'sawtooth', 0.07, 300); this.blip(495, 0.2, 'sawtooth', 0.05, 400); }
   milestone() { this.blip(220, 0.15, 'sawtooth', 0.08, 60); }
   goop()  { this.noise(0.6, 0.25); this.blip(70, 0.5, 'sine', 0.15, -30); }
+  /** equipped horn cosmetic plays when an opponent is finished */
+  horn(kind?: string) {
+    if (kind === 'violin') {        // sad descending strings
+      [660, 587, 523, 440].forEach((f, i) =>
+        setTimeout(() => this.blip(f, 0.35, 'triangle', 0.07, -20), i * 260));
+    } else if (kind === 'airhorn') { // freight blast, three pumps
+      [0, 220, 440].forEach((d) =>
+        setTimeout(() => { this.blip(233, 0.28, 'sawtooth', 0.11, 8); this.blip(466, 0.28, 'sawtooth', 0.07, 8); }, d));
+    }
+  }
   green() { this.blip(523, 0.1, 'square', 0.06); this.blip(659, 0.1, 'square', 0.06); this.blip(784, 0.2, 'square', 0.06); }
 }
 
