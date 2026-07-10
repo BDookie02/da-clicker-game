@@ -434,16 +434,23 @@ export class GameScene {
     driver.position.copy(this.spritePos);
     this.opponentGroup.add(driver);
     this.sprite = driver;
-    // final art drop-in: if public/sprites/<slot>.png exists it replaces the
-    // procedural face automatically (anger becomes a red tint + the shake)
+    // final art drop-in, best match first:
+    //   sprites/<slot>_a<tier>.png  (full anger stage art)
+    //   sprites/<slot>.png          (single image, anger = red tint)
     const slot = this.spriteSlot;
-    loadCustomSprite(slot, (tex) => {
+    loadCustomSprite(`${slot}_a${a}`, (tex) => {
+      if (this.spriteSlot !== slot || this.spriteAnger !== a || !this.sprite) return;
+      const m = (this.sprite as THREE.Sprite).material as THREE.SpriteMaterial;
+      m.map = tex;
+      m.color.setHex(0xffffff);
+      m.needsUpdate = true;
+    }, () => loadCustomSprite(slot, (tex) => {
       if (this.spriteSlot !== slot || !this.sprite) return;
       const m = (this.sprite as THREE.Sprite).material as THREE.SpriteMaterial;
       m.map = tex;
       m.color.setHex([0xffffff, 0xffd8cc, 0xffb4a0, 0xff8a70, 0xff5a44][a]);
       m.needsUpdate = true;
-    });
+    }));
   }
 
   private buildCar(def: OpponentDef): THREE.Group {
@@ -850,26 +857,23 @@ function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
 // caches the result. Final art (Higgsfield or hand-made) drops into that
 // folder and the game uses it with zero code changes; misses fall back to the
 // procedural pixel characters.
-const spriteTexCache = new Map<string, THREE.Texture | null>();
-function loadCustomSprite(slot: string, onLoad: (t: THREE.Texture) => void) {
-  if (spriteTexCache.has(slot)) {
-    const t = spriteTexCache.get(slot);
-    if (t) onLoad(t);
-    return;
-  }
-  spriteTexCache.set(slot, null); // claim while loading; overwritten on success
+const spriteTexCache = new Map<string, THREE.Texture | null | 'miss'>();
+function loadCustomSprite(key: string, onLoad: (t: THREE.Texture) => void, onMiss?: () => void) {
+  const cached = spriteTexCache.get(key);
+  if (cached === 'miss') { onMiss?.(); return; }
+  if (cached instanceof THREE.Texture) { onLoad(cached); return; }
   new THREE.TextureLoader().load(
-    `sprites/${slot}.png`,
+    `sprites/${key}.png`,
     (t) => {
       t.magFilter = THREE.NearestFilter;
       t.minFilter = THREE.NearestFilter;
       t.generateMipmaps = false;
       t.colorSpace = THREE.SRGBColorSpace;
-      spriteTexCache.set(slot, t);
+      spriteTexCache.set(key, t);
       onLoad(t);
     },
     undefined,
-    () => { /* no custom art for this slot — procedural stays */ }
+    () => { spriteTexCache.set(key, 'miss'); onMiss?.(); }
   );
 }
 
