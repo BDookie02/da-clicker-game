@@ -75,8 +75,28 @@ function art(u, v) {
   return base;
 }
 
+// splash: dark street backdrop with the traffic light centered small
+function splashArt(u, v) {
+  const inner = 0.30; // art occupies the middle band
+  if (u > 0.5 - inner / 2 && u < 0.5 + inner / 2 && v > 0.5 - inner / 2 && v < 0.5 + inner / 2) {
+    return art((u - (0.5 - inner / 2)) / inner, (v - (0.5 - inner / 2)) / inner);
+  }
+  let c = [10, 10, 18];
+  if (Math.floor(v * 512) % 4 === 0) c = [8, 8, 15];
+  return c;
+}
+
 mkdirSync('public', { recursive: true });
 for (const [file, size] of [['icon-512.png', 512], ['icon-192.png', 192], ['apple-touch-icon.png', 180]]) {
   writeFileSync(`public/${file}`, png(size, art));
   console.log(`public/${file} (${size}x${size})`);
 }
+
+// sources for `npx @capacitor/assets generate` (native launcher icons + splash)
+mkdirSync('assets', { recursive: true });
+writeFileSync('assets/icon-only.png', png(1024, art));
+writeFileSync('assets/icon-foreground.png', png(1024, art));
+writeFileSync('assets/icon-background.png', png(1024, () => [10, 10, 18]));
+writeFileSync('assets/splash.png', png(2732, splashArt));
+writeFileSync('assets/splash-dark.png', png(2732, splashArt));
+console.log('assets/: icon-only, icon-foreground, icon-background (1024), splash, splash-dark (2732)');

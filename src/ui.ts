@@ -5,60 +5,9 @@ import { fetchBoardRemote, getWorldList, type LbEntry, type LeaderboardProvider 
 import { API_URL } from './config';
 import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
 
-// ---------------------------------------------------------------------------
-// Rewarded-ad adapter. The placeholder provider fakes an ad with a countdown.
-// For store builds, swap in an AdMob provider (Capacitor community plugin
-// `@capacitor-community/admob`, RewardedAd) behind this same interface —
-// the game only ever calls show() and reads the resolved boolean.
-// ---------------------------------------------------------------------------
-export interface AdProvider {
-  show(lengthSec: number): Promise<boolean>; // true = watched to completion
-}
-
-class PlaceholderAdProvider implements AdProvider {
-  show(lengthSec: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const overlay = el('div', 'ad-overlay');
-      overlay.innerHTML = `
-        <div class="ad-box">
-          <div class="ad-label">AD · PLACEHOLDER</div>
-          <div class="ad-screen">
-            <div class="ad-art">📺</div>
-            <div class="ad-copy">Your ad network renders here.<br/>(AdMob rewarded slot)</div>
-          </div>
-          <div class="ad-timer"></div>
-          <button class="ad-skip" disabled>reward in <span></span>s</button>
-        </div>`;
-      document.body.appendChild(overlay);
-      const btn = overlay.querySelector('.ad-skip') as HTMLButtonElement;
-      const span = btn.querySelector('span')!;
-      span.textContent = String(lengthSec);
-
-      // Verified watch: credit only wall-clock time while the page is actually
-      // visible. Hiding the tab pauses the counter; there is no dismiss/skip,
-      // so the reward is unreachable without a full watch. In store builds the
-      // AdMob provider replaces this — its reward event only fires on SDK-
-      // confirmed completion (enable server-side verification for hard proof).
-      let watched = 0;
-      let lastT = performance.now();
-      const iv = setInterval(() => {
-        const now = performance.now();
-        if (!document.hidden) watched += (now - lastT) / 1000;
-        lastT = now;
-        const left = Math.max(0, Math.ceil(lengthSec - watched));
-        span.textContent = document.hidden ? `${left} (paused)` : String(left);
-        if (watched >= lengthSec) {
-          // auto-redeem on verified completion — no claim click, so a reward
-          // can never be stranded by the window closing
-          clearInterval(iv);
-          btn.disabled = true;
-          btn.innerHTML = 'REWARD CLAIMED ✓';
-          setTimeout(() => { overlay.remove(); resolve(true); }, 600);
-        }
-      }, 250);
-    });
-  }
-}
+// Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
+// placeholder on web. main.ts swaps the provider in via initAds().
+import { PlaceholderAdProvider, type AdProvider } from './ads';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -69,7 +18,7 @@ function el(tag: string, cls?: string, html?: string): HTMLElement {
 
 export class UI {
   root: HTMLElement;
-  private ads: AdProvider = new PlaceholderAdProvider();
+  ads: AdProvider = new PlaceholderAdProvider();
   private panel: HTMLElement | null = null;
   private bars: Record<string, HTMLElement> = {};
   private fade: HTMLElement;

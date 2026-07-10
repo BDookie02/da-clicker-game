@@ -176,3 +176,20 @@ changed in the build at the moment it was taken.
 - Traffic light box recentered over the two middle lanes.
 - Verified full cycle in-browser with real taps: eye contact -> goop ->
   green -> eyes-on-road drive -> arrival -> head turns to Blockhead.
+
+## (no capture) 2026-07-10 — store-ready native integration
+- **Real AdMob rewarded ads coded end-to-end** (src/ads.ts):
+  `@capacitor-community/admob@8` installed and synced into android/ + ios/;
+  provider grants only on the SDK's Rewarded event; ships on Google's
+  official public TEST ids (app ids wired into AndroidManifest.xml and
+  Info.plist) so device ads work before any account exists. Production =
+  paste 2 unit ids + 2 app ids, set TESTING false.
+- Game Center / Play Games plugin installed & synced (dynamic import was
+  already wired).
+- **81 native assets generated**: Android mipmap launcher icons (incl.
+  adaptive fg/bg), portrait/land/dark splash screens, iOS AppIcon + splash
+  set — all from the original pixel traffic-light art via @capacitor/assets.
+- iOS ATT usage string + SKAdNetwork entry added.
+- Ad watch-verification re-verified after the refactor (background-tab
+  timer throttling correctly pauses the placeholder countdown — the
+  anti-cheat working as designed).

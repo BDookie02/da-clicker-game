@@ -5,6 +5,7 @@ import { sfx } from './audio';
 import { API_URL, getDistrict } from './config';
 import { getWorldList, initLeaderboards, submitScoreRemote, type LeaderboardProvider } from './leaderboard';
 import { LocalUsernameService, RemoteUsernameService } from './username';
+import { initAds } from './ads';
 
 const game = new Game();
 // debug/testing handles (harmless in prod; used by automated checks)
@@ -57,6 +58,7 @@ initLeaderboards().then((lb) => {
   ui.lb = lb;
   void lb.submit(game.s.totalTaps);
 });
+initAds().then((ads) => { ui.ads = ads; }); // AdMob on device, placeholder on web
 
 // Unique usernames: real API when configured, local registry otherwise
 ui.names = API_URL
