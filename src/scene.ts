@@ -127,7 +127,7 @@ export class GameScene {
     // side, both stopped at the light. The camera (your head) turns: toward
     // the opponent while the light is red, back to the road when it's green.
     this.camera.position.set(1.55, 1.25, 0); // left (driver's) seat of the lane-2 car
-    this.camera.lookAt(-2.45, 1.3, -3.35);
+    this.camera.lookAt(-2.45, 1.3, -0.55);   // straight across at the neighbor
 
     this.scene.fog = new THREE.Fog(SKIES.day.fog, 10, 55);
     this.hemi = new THREE.HemisphereLight(0xffffff, 0x556677, 2.0);
@@ -154,9 +154,11 @@ export class GameScene {
     this.buildWorld();
     this.buildCockpit();
 
-    // Adjacent lane center, slightly ahead, pointed down the road like normal
-    // traffic — the CAR faces forward; only the driver's head faces you.
-    this.opponentAnchor.position.set(-2, 0, -3.2);
+    // Adjacent lane, truly ABREAST: both front bumpers even at the stop
+    // line, drivers side by side. The CAR faces forward; only the driver's
+    // head faces you. (setOpponent adjusts z per body length so every
+    // style's nose lines up with yours.)
+    this.opponentAnchor.position.set(-2, 0, -0.4);
     this.opponentAnchor.rotation.y = Math.PI; // headlights toward the intersection
     this.opponentAnchor.add(this.opponentGroup);
     this.scene.add(this.opponentAnchor);
@@ -221,15 +223,15 @@ export class GameScene {
       edge.position.set(ex, 0.01, -30);
       this.scene.add(edge);
     }
-    // stop line + crosswalk across all four lanes
+    // stop line just past both front bumpers, then crosswalk, then the light
     const stop = new THREE.Mesh(new THREE.PlaneGeometry(15.4, 0.5), paint);
     stop.rotation.x = -Math.PI / 2;
-    stop.position.set(0, 0.01, -6.2);
+    stop.position.set(0, 0.01, -3.4);
     this.scene.add(stop);
     for (let x = -6.6; x <= 6.6; x += 1.2) {
       const zebra = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 2.4), paint);
       zebra.rotation.x = -Math.PI / 2;
-      zebra.position.set(x, 0.01, -8.4);
+      zebra.position.set(x, 0.01, -5.6);
       this.scene.add(zebra);
     }
 
@@ -298,7 +300,7 @@ export class GameScene {
       g.add(lamp);
       this.trafficLights.push(m);
     });
-    g.position.set(4.6, 0, -8.8);
+    g.position.set(4.6, 0, -7.4); // right at the crosswalk you're stopped at
     this.scene.add(g);
     this.setLight('red');
   }
@@ -386,7 +388,16 @@ export class GameScene {
   }
 
   // ---- opponent cars -----------------------------------------------------------
+  private static carLength(style: OpponentDef['carStyle']): number {
+    return style === 'limo' ? 6.4 : style === 'metro' ? 7.5
+      : style === 'van' || style === 'pickup' ? 4.6
+      : style === 'cube' ? 3.4 : 4.0;
+  }
+
   setOpponent(def: OpponentDef) {
+    // nose-to-nose with the player at the stop line regardless of body length
+    // (front bumper at z=-2.4; car faces -z, so center = front + length/2)
+    this.opponentAnchor.position.set(-2, 0, -2.4 + GameScene.carLength(def.carStyle) / 2);
     this.opponentGroup.clear();
     this.goopGroup = new THREE.Group();
     const car = this.buildCar(def);
@@ -609,7 +620,7 @@ export class GameScene {
       // fade handled by UI; after 2.6s snap back and restore
       if (this.driveT > 2.6) {
         this.driving = false;
-        this.opponentAnchor.position.set(-2, 0, -3.2);
+        this.opponentAnchor.position.set(-2, 0, -0.4); // setOpponent re-fits z
         this.setLight('red');
         const cb = this.onDriveDone;
         this.onDriveDone = null;

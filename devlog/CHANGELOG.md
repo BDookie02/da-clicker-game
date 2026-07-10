@@ -211,3 +211,15 @@ changed in the build at the moment it was taken.
   play (synthesized) when an opponent gets finished.
 - **Haptics**: vibration on shake milestones (scaling with tier) and the
   goop event, on devices that support it.
+
+## 2026-07-10-14-abreast-eyecontact.png / -abreast-forward.png
+**Build state:** positioning corrected to truly side-by-side.
+- The opponent was sitting 3+ meters ahead (diagonal, not parallel). Now
+  both cars are ABREAST: front bumpers even at the stop line, drivers
+  side by side, eye contact straight across the lane (~82° head turn) —
+  the opponent's window fills the side view with the driver dead center.
+- Nose alignment is per body style: limos/metros extend behind you like
+  real long vehicles instead of poking through the crosswalk.
+- Stop line moved to just past the bumpers, crosswalk and traffic light
+  brought to the actual intersection you're stopped at — the forward
+  (green-light) view now has the light hanging directly overhead.
