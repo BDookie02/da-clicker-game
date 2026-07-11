@@ -28,6 +28,8 @@ export class UI {
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
+  /** fired with true when the garage tab opens, false when it closes */
+  onGarage?: (open: boolean) => void;
 
   constructor(private game: Game, private onCosmeticsChanged: () => void) {
     this.root = document.getElementById('app')!;
@@ -158,6 +160,7 @@ export class UI {
     this.panel = el('div', 'panel');
     this.root.appendChild(this.panel);
     this.refreshPanel();
+    this.onGarage?.(tab === 'garage');
     sfx.click();
   }
 
@@ -167,6 +170,7 @@ export class UI {
     this.remoteBoard = null; // refetch live board next open
     this.panel?.remove();
     this.panel = null;
+    this.onGarage?.(false);
   }
 
   get isPanelOpen() { return this.openTab !== null; }

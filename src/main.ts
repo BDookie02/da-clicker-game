@@ -47,6 +47,8 @@ const applyCosmetics = () => {
   scene.setSky(game.equipped('sky') ?? getDistrict(game.s.opponentIndex).sky);
   scene.setDecal(game.equipped('decal'));
   scene.setOrnament(game.equipped('ornament') ?? game.equipped('dash'));
+  scene.setGarageCosmetics(game.equipped('decal'),
+    game.equipped('ornament') ?? game.equipped('dash'), game.equipped('goop'));
 };
 
 const ui = new UI(game, applyCosmetics);
@@ -144,6 +146,7 @@ title.addEventListener('pointerdown', (ev) => {
 
 // Tap anywhere on the scene (not on UI) to tap
 const onTap = (ev: Event) => {
+  if (scene.inGarage) return; // garage has its own swipe/tap controls
   const t = ev.target as HTMLElement;
   if (t.closest('.panel, .menu-row, .ad-overlay, button')) return; // UI handles it
   if (ui.isPanelOpen) { ui.close(); return; } // tapping outside any menu closes it
@@ -152,6 +155,31 @@ const onTap = (ev: Event) => {
   sfx.tap();
   ev.preventDefault();
 };
+
+// garage controls: swipe to orbit the car, clean tap to hop in/out of the seat
+ui.onGarage = (open) => {
+  if (open) { scene.enterGarage(); applyCosmetics(); }
+  else scene.exitGarage();
+};
+let gDrag: { x: number; y: number; moved: boolean } | null = null;
+window.addEventListener('pointerdown', (ev) => {
+  if (!scene.inGarage) return;
+  if ((ev.target as HTMLElement).closest('.panel, .menu-row, button, .ad-overlay')) return;
+  gDrag = { x: ev.clientX, y: ev.clientY, moved: false };
+});
+window.addEventListener('pointermove', (ev) => {
+  if (!scene.inGarage || !gDrag) return;
+  const dx = ev.clientX - gDrag.x, dy = ev.clientY - gDrag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 4) gDrag.moved = true;
+  scene.garageSwipe(dx, dy);
+  gDrag.x = ev.clientX;
+  gDrag.y = ev.clientY;
+});
+window.addEventListener('pointerup', () => {
+  if (!scene.inGarage || !gDrag) return;
+  if (!gDrag.moved) scene.garageTap();
+  gDrag = null;
+});
 canvas.addEventListener('pointerdown', onTap);
 document.getElementById('app')!.addEventListener('pointerdown', onTap);
 

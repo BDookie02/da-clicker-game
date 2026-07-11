@@ -251,3 +251,22 @@ changed in the build at the moment it was taken.
 - Verified numerically and visually: staged rival at -60 -> -26 at
   mid-block -> -0.4 (exact bumper alignment) on arrival; intersections
   leapfrogged; gaze road->opponent; staged copy swapped cleanly.
+
+## 2026-07-10-18-ps1-sedan.png / -ps1-pickup-seated.png / -garage-*.png
+**Build state:** real PS1 vehicle silhouettes, seat-anchor fix, 3D garage.
+- **Vehicles rebuilt as extruded low-poly profiles** — the authentic PS1
+  modeling technique: sloped hoods, raked windshields, trunk decks, rear
+  rakes, hubcapped wheels, head/tail lights, per style (sedan family,
+  hatch, muscle, wedge, van, pickup, limo, bus with sloped nose; cube
+  stays blocky on purpose). No more box-stack "crossy road" cars.
+- **Proper seat anchors**: every style now has a real driver's-seat anchor
+  (height AND cabin position) — pickup drivers sit in the cab instead of
+  the bed, muscle drivers in the rear-set cabin instead of on the hood,
+  bus drivers up front. Sprites, staging, and the eye-contact gaze all
+  track the same anchor.
+- **3D GARAGE**: tapping the Garage tab now opens a real room — cinderblock
+  walls, oil-stained floor, workbench, tire stack, goop display drum (tints
+  with your equipped goop color). Third-person orbit around your car by
+  swiping; a clean tap hops into the driver's seat to inspect the dash
+  ornament and windshield decal up close (decal readable from inside).
+  Cosmetic equips update the 3D view live.

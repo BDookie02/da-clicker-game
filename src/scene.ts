@@ -416,10 +416,21 @@ export class GameScene {
       : style === 'cube' ? 3.4 : 4.0;
   }
 
-  /** driver head height per body style — the eye-contact gaze tracks this */
-  private static mountYFor(style: OpponentDef['carStyle']): number {
-    return style === 'cube' ? 2.0 : style === 'metro' ? 1.55
-      : style === 'van' ? 1.45 : style === 'wedge' ? 0.98 : 1.25;
+  /** the driver's SEAT anchor per body style (head height + cabin position) —
+   *  sprites mount here and the eye-contact gaze tracks it, so drivers sit in
+   *  the actual driver's seat on every silhouette */
+  private static seatFor(style: OpponentDef['carStyle']): { y: number; z: number } {
+    switch (style) {
+      case 'cube':     return { y: 2.0,  z: 0.1 };
+      case 'metro':    return { y: 1.5,  z: 2.7 };  // bus driver up front
+      case 'van':      return { y: 1.42, z: 1.1 };
+      case 'pickup':   return { y: 1.3,  z: 0.75 }; // in the cab, not the bed
+      case 'muscle':   return { y: 1.18, z: -0.5 }; // rear-set cabin
+      case 'wedge':    return { y: 0.92, z: -0.2 };
+      case 'limo':     return { y: 1.22, z: 1.2 };  // chauffeur up front
+      case 'lowrider': return { y: 1.02, z: 0.05 };
+      default:         return { y: 1.22, z: 0.05 }; // sedan family
+    }
   }
 
   /** park a car nose-aligned with the player's bumper at intersection offset */
@@ -442,10 +453,10 @@ export class GameScene {
     // Driver's seat (car local +x = far lane side, like the meme: he's in his
     // seat, head turned, staring at you through the glass). The 2D character
     // billboard mounts here and always faces the player camera.
-    const mountY = GameScene.mountYFor(def.carStyle);
+    const seat = GameScene.seatFor(def.carStyle);
     const mount = new THREE.Object3D();
     mount.name = `sprite:${def.spriteSlot}`;
-    mount.position.set(0.45, mountY, 0.15);
+    mount.position.set(0.45, seat.y, seat.z);
     this.opponentGroup.add(mount);
     // Procedural placeholder driver (classic PS1 billboard) until the real
     // meme character art replaces it — seeded per slot so every driver looks
@@ -486,88 +497,297 @@ export class GameScene {
     }));
   }
 
+  // Real PS1-style low-poly bodies: each car is an extruded side-profile
+  // silhouette (sloped hood, raked windshield, trunk/rake per style) with a
+  // separate glass greenhouse so the driver stays visible. Flat-shaded,
+  // vertex-snapped, dithered by the pipeline — authentic 1997 geometry.
   private buildCar(def: OpponentDef): THREE.Group {
     const g = new THREE.Group();
     const body = this.mat(def.carColor);
     const trim = this.mat(def.carAccent);
-    // see-through glass (PSX-style semi-transparency) so the driver is visible;
-    // interiors hold empty seats until the 2D characters arrive
     const glass = this.mat(0xc8e4f0, { transparent: true, opacity: 0.16 });
     const seatM = this.mat(0x23262c);
     const tire = this.mat(0x18181c);
 
-    const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number, ry = 0) => {
+    const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number) => {
       const mesh = new THREE.Mesh(geo, m);
       mesh.position.set(x, y, z);
-      mesh.rotation.y = ry;
+      g.add(mesh);
+      return mesh;
+    };
+    const P = (pts: [number, number][], w: number, m: THREE.Material) => {
+      const mesh = profileMesh(pts, w, m);
       g.add(mesh);
       return mesh;
     };
 
     const s = def.carStyle;
-    const long = s === 'limo' ? 6.4 : s === 'metro' ? 7.5 : s === 'van' || s === 'pickup' ? 4.6 : 4.0;
-    const tall = s === 'van' || s === 'metro' ? 1.9 : s === 'cube' ? 1.6 : 1.0;
+    const long = GameScene.carLength(s);
+    const seat = GameScene.seatFor(s);
+
+    // shared dressing --------------------------------------------------------
+    const wheels = (r = 0.36, span = long * 0.32, wy = r) => {
+      for (const [x, z] of [[-1, span], [1, span], [-1, -span], [1, -span]] as const) {
+        const w = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.26, 10), tire);
+        w.rotation.z = Math.PI / 2;
+        w.position.set(x * 1.0, wy, z);
+        g.add(w);
+        const h = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.45, r * 0.45, 0.28, 8), this.mat(0x8a8a94));
+        h.rotation.z = Math.PI / 2;
+        h.position.set(x * 1.0, wy, z);
+        g.add(h);
+      }
+    };
+    const lights = (noseY: number, tailY: number) => {
+      const hl = new THREE.MeshBasicMaterial({ color: 0xfff2c8 });
+      const tl = new THREE.MeshBasicMaterial({ color: 0xd83a2a });
+      add(new THREE.BoxGeometry(0.34, 0.14, 0.08), hl, -0.6, noseY, long / 2 - 0.02);
+      add(new THREE.BoxGeometry(0.34, 0.14, 0.08), hl, 0.6, noseY, long / 2 - 0.02);
+      add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, -0.6, tailY, -long / 2 + 0.02);
+      add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, 0.6, tailY, -long / 2 + 0.02);
+    };
+    const seats = (beltY: number) => {
+      add(new THREE.BoxGeometry(1.5, 0.14, 0.6), seatM, 0, beltY + 0.06, seat.z);
+      add(new THREE.BoxGeometry(1.5, 0.5, 0.16), seatM, 0, beltY + 0.28, seat.z - 0.35);
+    };
 
     if (s === 'cube') {
+      // intentionally blocky — that's the joke
       add(new THREE.BoxGeometry(1.9, 1.6, 3.4), body, 0, 1.0, 0);
-      add(new THREE.BoxGeometry(1.4, 0.55, 0.8), seatM, 0, 1.6, 0.1); // bench seat
+      add(new THREE.BoxGeometry(1.4, 0.55, 0.8), seatM, 0, 1.6, seat.z);
       add(new THREE.BoxGeometry(1.7, 0.9, 1.5), glass, 0, 1.85, 0.2);
       for (const [x, z] of [[-1, 1.2], [1, 1.2], [-1, -1.2], [1, -1.2]] as const)
         add(new THREE.BoxGeometry(0.5, 0.7, 0.7), tire, x * 1.0, 0.35, z);
-    } else if (s === 'metro') {
-      // slimmed so the driver's window line sits near the player's eye level
-      add(new THREE.BoxGeometry(2.4, 1.9, long), body, 0, 1.3, 0);
-      for (let i = -2; i <= 2; i++) add(new THREE.BoxGeometry(2.44, 0.6, 0.9), glass, 0, 1.55, i * 1.4);
-      add(new THREE.BoxGeometry(2.5, 0.35, long), trim, 0, 0.35, 0);
-    } else {
-      // unibody: lower body + glass greenhouse cabin (so the driver is
-      // actually visible inside) capped with a body-colored roof slab
-      const bodyH = s === 'wedge' ? 0.45 : 0.62;
-      const bodyY = s === 'wedge' ? 0.5 : 0.62;
-      add(new THREE.BoxGeometry(2.0, bodyH, long), body, 0, bodyY, 0);
-      const cabLen = s === 'limo' ? 2.2 : s === 'muscle' ? 1.7 : s === 'pickup' ? 1.5 : 2.3;
-      const cabH = s === 'van' ? 1.15 : s === 'wedge' ? 0.55 : 0.72;
-      const cabY = bodyY + bodyH / 2 + cabH / 2;
-      const cabZ = s === 'muscle' ? -0.5 : s === 'van' ? 0.4 : s === 'pickup' ? 0.9 : -0.2;
-      // seats first (opaque pass renders before the transparent greenhouse)
-      for (const sx of [0.45, -0.45]) {
-        add(new THREE.BoxGeometry(0.55, 0.16, 0.6), seatM, sx, cabY - cabH / 2 + 0.1, cabZ + 0.25);
-        add(new THREE.BoxGeometry(0.55, 0.55, 0.13), seatM, sx, cabY - cabH / 2 + 0.35, cabZ - 0.1);
-      }
-      const cab = add(new THREE.BoxGeometry(1.7, cabH, cabLen), glass, 0, cabY, cabZ);
-      add(new THREE.BoxGeometry(1.74, 0.1, cabLen * 1.02), body, 0, cabY + cabH / 2, cabZ); // roof
-      if (s === 'taxi') {
-        add(new THREE.BoxGeometry(0.8, 0.22, 0.4), new THREE.MeshBasicMaterial({ color: 0xe8c84a }), 0, cabY + cabH / 2 + 0.16, cabZ);
-      }
-      if (s === 'pickup') {                                   // open bed walls
-        add(new THREE.BoxGeometry(1.9, 0.3, 0.12), trim, 0, 1.05, -long / 2 + 0.06);
-        add(new THREE.BoxGeometry(0.12, 0.3, 1.9), trim, -0.94, 1.05, -1.25);
-        add(new THREE.BoxGeometry(0.12, 0.3, 1.9), trim, 0.94, 1.05, -1.25);
-      }
-      if (s === 'wedge') add(new THREE.BoxGeometry(1.7, 0.1, 0.4), trim, 0, 1.1, -long / 2 + 0.3); // spoiler
-      add(new THREE.BoxGeometry(2.02, 0.16, long * 0.98), trim, 0, 0.3, 0);
-      if (s === 'lowrider') g.position.y = -0.18;
-      if (s === 'muscle') add(new THREE.BoxGeometry(1.6, 0.12, 0.5), trim, 0, 1.15, -1.8); // spoiler
-      if (s === 'divine') {
-        const halo = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.06, 6, 14), new THREE.MeshBasicMaterial({ color: 0xfff8c0 }));
-        halo.rotation.x = Math.PI / 2;
-        halo.position.set(0, 2.1, -0.2);
-        g.add(halo);
-      }
-      const wy = s === 'lowrider' ? 0.28 : 0.32;
-      for (const [x, z] of [[-1, long * 0.32], [1, long * 0.32], [-1, -long * 0.32], [1, -long * 0.32]] as const) {
-        const w = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.26, 8), tire);
-        w.rotation.z = Math.PI / 2;
-        w.position.set(x * 1.02, wy, z);
-        g.add(w);
-      }
-      // headlights toward +z (facing the intersection, angled at player)
-      const hl = new THREE.MeshBasicMaterial({ color: 0xfff2c8 });
-      add(new THREE.BoxGeometry(0.3, 0.14, 0.06), hl, -0.6, 0.72, long / 2 + 0.01);
-      add(new THREE.BoxGeometry(0.3, 0.14, 0.06), hl, 0.6, 0.72, long / 2 + 0.01);
+      lights(0.9, 0.9);
+      return g;
     }
-    void tall;
+
+    if (s === 'metro') {
+      // city bus: sloped nose, long window band, driver up front
+      P([[-3.75, 0.35], [-3.75, 1.0], [3.35, 1.0], [3.75, 0.75], [3.75, 0.35]], 2.4, body);
+      seats(1.0);
+      P([[-3.55, 1.0], [-3.55, 1.8], [3.15, 1.8], [3.6, 1.05]], 2.3, glass);
+      P([[-3.6, 1.8], [-3.6, 1.94], [3.2, 1.94], [3.2, 1.8]], 2.42, body);
+      add(new THREE.BoxGeometry(2.5, 0.3, long * 0.98), trim, 0, 0.32, 0);
+      wheels(0.42, long * 0.34, 0.42);
+      lights(0.7, 0.7);
+      return g;
+    }
+
+    // profile-extruded unibody styles ---------------------------------------
+    type Pts = [number, number][];
+    let low: Pts, gls: Pts, roofSpan: [number, number], beltY = 0.98;
+    switch (s) {
+      case 'muscle':
+        low = [[-2, 0.35], [-2, 0.95], [-1.2, 1.02], [-0.1, 0.95], [1.9, 0.88], [2, 0.6], [2, 0.35]];
+        gls = [[-1.55, 1.0], [-1.1, 1.4], [-0.2, 1.4], [0.3, 0.94]];
+        roofSpan = [-1.14, -0.16];
+        break;
+      case 'wedge':
+        low = [[-2, 0.3], [-2, 0.75], [-1.3, 0.82], [0.2, 0.72], [2.05, 0.42], [2.05, 0.3]];
+        gls = [[-1.25, 0.78], [-0.7, 1.12], [0.15, 1.12], [0.62, 0.72]];
+        roofSpan = [-0.74, 0.19];
+        beltY = 0.78;
+        break;
+      case 'hatch':
+      case 'compact':
+        low = [[-2, 0.34], [-2, 0.95], [1.15, 0.98], [1.85, 0.9], [2, 0.75], [2, 0.34]];
+        gls = [[-1.6, 0.97], [-1.2, 1.45], [0.4, 1.45], [0.92, 0.98]];
+        roofSpan = [-1.24, 0.44];
+        break;
+      case 'van':
+        low = [[-2.3, 0.34], [-2.3, 1.0], [1.5, 1.0], [2.1, 0.9], [2.3, 0.6], [2.3, 0.34]];
+        gls = [[-2.05, 1.0], [-2.0, 1.8], [1.35, 1.8], [1.85, 1.0]];
+        roofSpan = [-2.04, 1.39];
+        beltY = 1.0;
+        break;
+      case 'pickup':
+        low = [[-2.3, 0.34], [-2.3, 0.62], [0.05, 0.62], [0.05, 0.95], [1.35, 0.98], [2.05, 0.9], [2.3, 0.68], [2.3, 0.34]];
+        gls = [[0.12, 0.98], [0.28, 1.5], [1.1, 1.5], [1.52, 0.98]];
+        roofSpan = [0.24, 1.14];
+        break;
+      case 'limo':
+        low = [[-3.2, 0.32], [-3.2, 0.88], [-2.6, 0.98], [2.2, 0.98], [2.9, 0.9], [3.2, 0.75], [3.2, 0.32]];
+        gls = [[-2.4, 0.98], [-2.0, 1.42], [1.5, 1.42], [2.0, 0.98]];
+        roofSpan = [-2.04, 1.54];
+        break;
+      default: // sedan, taxi, lowrider, divine
+        low = [[-2, 0.32], [-2, 0.88], [-1.35, 0.98], [1.1, 0.98], [1.8, 0.92], [2, 0.78], [2, 0.32]];
+        gls = [[-1.15, 0.98], [-0.62, 1.46], [0.42, 1.46], [0.95, 0.98]];
+        roofSpan = [-0.66, 0.46];
+    }
+
+    P(low, 1.9, body);
+    seats(beltY);
+    P(gls, 1.78, glass);
+    P([[roofSpan[0], gls[1][1]], [roofSpan[0], gls[1][1] + 0.1], [roofSpan[1], gls[1][1] + 0.1], [roofSpan[1], gls[1][1]]], 1.84, body);
+    add(new THREE.BoxGeometry(2.02, 0.14, long * 0.96), trim, 0, 0.3, 0);
+    wheels(s === 'wedge' ? 0.32 : 0.36);
+    lights(s === 'wedge' ? 0.42 : 0.78, s === 'wedge' ? 0.5 : 0.78);
+
+    if (s === 'taxi') {
+      add(new THREE.BoxGeometry(0.8, 0.22, 0.4), new THREE.MeshBasicMaterial({ color: 0xe8c84a }), 0, gls[1][1] + 0.24, 0);
+    }
+    if (s === 'pickup') { // open bed rails
+      add(new THREE.BoxGeometry(1.9, 0.24, 0.1), trim, 0, 0.78, -2.24);
+      add(new THREE.BoxGeometry(0.1, 0.24, 2.3), trim, -0.94, 0.78, -1.1);
+      add(new THREE.BoxGeometry(0.1, 0.24, 2.3), trim, 0.94, 0.78, -1.1);
+    }
+    if (s === 'wedge') add(new THREE.BoxGeometry(1.7, 0.1, 0.4), trim, 0, 1.02, -1.75);
+    if (s === 'muscle') add(new THREE.BoxGeometry(1.7, 0.12, 0.45), trim, 0, 1.14, -1.85);
+    if (s === 'lowrider') { g.position.y = -0.16; g.scale.y = 0.92; }
+    if (s === 'divine') {
+      const halo = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.06, 6, 14), new THREE.MeshBasicMaterial({ color: 0xfff8c0 }));
+      halo.rotation.x = Math.PI / 2;
+      halo.position.set(0, 2.1, -0.1);
+      g.add(halo);
+    }
     return g;
+  }
+
+  // ---- garage -------------------------------------------------------------------
+  // A separate 3D room (parked far below the street in the same scene, so it
+  // shares the PSX pipeline). Third-person orbit around the player's car —
+  // swipe to rotate — and tap to hop into the driver's seat to inspect the
+  // dash cosmetics up close.
+  private garageMode = false;
+  private garageBuilt = false;
+  private garageCam = new THREE.PerspectiveCamera(62, 4 / 3, 0.1, 60);
+  private garageCar: THREE.Group | null = null;
+  private garageYaw = 0.8;
+  private garagePitch = 0.3;
+  private garageFP = false;
+  private garageDecal: THREE.Mesh | null = null;
+  private garageOrn: THREE.Mesh | null = null;
+  private garageGoopTop: THREE.MeshLambertMaterial | null = null;
+  private static readonly GO = new THREE.Vector3(0, -200, 0);
+
+  get inGarage() { return this.garageMode; }
+
+  private buildGarage() {
+    this.garageBuilt = true;
+    const GO = GameScene.GO;
+    const room = new THREE.Group();
+    const wallTex = canvasTex(64, (g, s) => {
+      g.fillStyle = '#3a3a40'; g.fillRect(0, 0, s, s);
+      g.strokeStyle = '#2e2e34'; g.lineWidth = 2;
+      for (let y = 0; y <= s; y += 16) { g.beginPath(); g.moveTo(0, y); g.lineTo(s, y); g.stroke(); }
+      for (let y = 0; y < s; y += 16) for (let x = (y / 16) % 2 ? 0 : 16; x <= s; x += 32) {
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + 16); g.stroke();
+      }
+    });
+    wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
+    wallTex.repeat.set(4, 2);
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(14, 5, 14),
+      this.mat(0xffffff, { map: wallTex, side: THREE.BackSide }));
+    shell.position.set(0, 2.5, 0);
+    room.add(shell);
+    const floorTex = canvasTex(64, (g, s) => {
+      g.fillStyle = '#4a4a50'; g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 90; i++) {
+        g.fillStyle = Math.random() > 0.5 ? '#44444a' : '#505056';
+        g.fillRect(Math.random() * s, Math.random() * s, 3, 3);
+      }
+      g.fillStyle = '#3a3a3e'; g.beginPath(); g.ellipse(s * 0.7, s * 0.65, 9, 5, 0.4, 0, 7); g.fill();
+    });
+    floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
+    floorTex.repeat.set(3, 3);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), this.mat(0xffffff, { map: floorTex }));
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0.01;
+    room.add(floor);
+    // ceiling light strip + actual light
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(4, 0.12, 0.5), new THREE.MeshBasicMaterial({ color: 0xfff4d8 }));
+    strip.position.set(0, 4.9, 0);
+    room.add(strip);
+    const bulb = new THREE.PointLight(0xfff0d8, 60, 20);
+    bulb.position.set(0, 4.2, 0);
+    room.add(bulb);
+    // workbench + tire stack set dressing
+    const bench = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.0, 1.0), this.mat(0x5a4a3a));
+    bench.position.set(-5.0, 0.5, -5.8);
+    room.add(bench);
+    const tireM = this.mat(0x18181c);
+    for (let i = 0; i < 3; i++) {
+      const t = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.3, 10), tireM);
+      t.position.set(5.4, 0.16 + i * 0.32, -5.4);
+      room.add(t);
+    }
+    // goop display drum (top tints with the equipped goop color)
+    const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 1.1, 10), this.mat(0x4a5a6a));
+    drum.position.set(4.9, 0.55, 5.0);
+    room.add(drum);
+    this.garageGoopTop = this.mat(0xf2f0e8);
+    const goopTop = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.12, 10), this.garageGoopTop);
+    goopTop.position.set(4.9, 1.14, 5.0);
+    room.add(goopTop);
+    room.position.copy(GO);
+    this.scene.add(room);
+    // the player's car (matches the red street cockpit)
+    this.garageCar = this.buildCar({
+      id: 'player', name: 'player', blurb: '', tapsRequired: 0,
+      carColor: 0x8e2222, carAccent: 0x26262e, carStyle: 'sedan',
+      mentalityReward: 0, spriteSlot: '',
+    });
+    // interior kit so first-person has a real driver's seat view
+    const dash = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.16, 0.34), this.mat(0x1c1c22));
+    dash.position.set(0, 1.02, 0.66);
+    this.garageCar.add(dash);
+    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.04, 6, 12), this.mat(0x26262e));
+    wheel.position.set(-0.42, 1.02, 0.48);
+    wheel.rotation.x = -1.2;
+    this.garageCar.add(wheel);
+    this.garageCar.position.copy(GO);
+    this.scene.add(this.garageCar);
+  }
+
+  enterGarage() {
+    if (!this.garageBuilt) this.buildGarage();
+    this.garageMode = true;
+    this.garageFP = false;
+  }
+
+  exitGarage() { this.garageMode = false; }
+
+  /** swipe = orbit (third-person) or look sway (first-person handled by orbit too) */
+  garageSwipe(dx: number, dy: number) {
+    this.garageYaw -= dx * 0.008;
+    this.garagePitch = Math.min(0.9, Math.max(0.06, this.garagePitch + dy * 0.004));
+  }
+
+  /** tap toggles third-person orbit <-> first-person dashboard view */
+  garageTap() { this.garageFP = !this.garageFP; }
+
+  setGarageCosmetics(decal?: string, ornament?: string, goop?: string) {
+    if (!this.garageBuilt || !this.garageCar) return;
+    if (this.garageDecal) { this.garageCar.remove(this.garageDecal); this.garageDecal = null; }
+    if (decal) {
+      const tex = canvasTex(128, (g, s) => {
+        g.clearRect(0, 0, s, s);
+        g.font = 'bold 18px monospace';
+        g.textAlign = 'center';
+        g.fillStyle = '#ffffff';
+        g.strokeStyle = '#000000';
+        g.lineWidth = 3;
+        g.strokeText(decal, s / 2, s / 2);
+        g.fillText(decal, s / 2, s / 2);
+      });
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.62),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide }));
+      m.position.set(0, 1.24, 0.72);
+      m.rotation.x = -0.73; // lies on the windshield slope, readable both sides
+      this.garageCar.add(m);
+      this.garageDecal = m;
+    }
+    if (this.garageOrn) { this.garageCar.remove(this.garageOrn); this.garageOrn = null; }
+    if (ornament) {
+      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.08, 0),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(ornament) }));
+      m.position.set(-0.38, 1.06, 0.52); // on the dash, driver's side
+      this.garageCar.add(m);
+      this.garageOrn = m;
+    }
+    if (this.garageGoopTop) this.garageGoopTop.color.set(goop ?? '#f2f0e8');
   }
 
   // ---- effects ------------------------------------------------------------------
@@ -622,8 +842,9 @@ export class GameScene {
     this.setLightFor(far, 'red');
     this.nextAnchor.clear();
     this.nextAnchor.add(this.buildCar(nextDef));
+    const nseat = GameScene.seatFor(nextDef.carStyle);
     const driver = makeDriverSprite(nextDef.spriteSlot, 0);
-    driver.position.set(0.45, GameScene.mountYFor(nextDef.carStyle), 0.15);
+    driver.position.set(0.45, nseat.y, nseat.z);
     this.nextAnchor.add(driver);
     this.nextAnchor.position.set(-2, 0, GameScene.parkZ(nextDef.carStyle, -GameScene.SPACING));
   }
@@ -632,6 +853,29 @@ export class GameScene {
   render(dt: number) {
     this.time += dt;
     this.pulse = Math.max(0, this.pulse - dt * 3.2);
+
+    // garage view: orbit or driver's-seat camera, same PSX pipeline
+    if (this.garageMode) {
+      const GO = GameScene.GO;
+      if (this.garageFP) {
+        // driver's seat: dash, wheel, ornament and windshield decal in view
+        this.garageCam.position.set(GO.x - 0.42, GO.y + 1.3, GO.z - 0.12);
+        this.garageCam.lookAt(GO.x - 0.15, GO.y + 1.02, GO.z + 1.6);
+      } else {
+        const r = 5.6;
+        this.garageCam.position.set(
+          GO.x + Math.sin(this.garageYaw) * Math.cos(this.garagePitch) * r,
+          GO.y + 0.6 + Math.sin(this.garagePitch) * r,
+          GO.z + Math.cos(this.garageYaw) * Math.cos(this.garagePitch) * r,
+        );
+        this.garageCam.lookAt(GO.x, GO.y + 0.85, GO.z);
+      }
+      this.renderer.setRenderTarget(this.rt);
+      this.renderer.render(this.scene, this.garageCam);
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.compScene, this.compCam);
+      return;
+    }
 
     // opponent shake: tier amplitude + per-tap pulse kick
     const a = this.shakeAmp * (1 + this.pulse * 2.5);
@@ -649,7 +893,7 @@ export class GameScene {
     // Eye contact aims at the DRIVER'S actual head height (buses, cube cars
     // and low wedges all differ), not a fixed line.
     const gazeTarget = this.gaze === 'opponent'
-      ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05, this.opponentAnchor.position.z - 0.15)
+      ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05, this.opponentAnchor.position.z - this.spritePos.z)
       : new THREE.Vector3(this.camera.position.x, 1.15, this.camera.position.z - 30);
     this.gazeHelper.position.copy(this.camera.position);
     this.gazeHelper.lookAt(gazeTarget);
@@ -710,6 +954,8 @@ export class GameScene {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.garageCam.aspect = w / h;
+    this.garageCam.updateProjectionMatrix();
     const rw = Math.round(PSX_H * (w / h));
     this.rt.setSize(rw, PSX_H);
     this.psxRes.set(rw, PSX_H);
@@ -915,6 +1161,19 @@ function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
   s.scale.set(0.9, 0.9, 1);
   return s;
+}
+
+// Extrudes a 2D side-profile silhouette (points in car (z, y) space, +z =
+// front) across the car's width — the classic PS1 way to model a vehicle.
+function profileMesh(pts: [number, number][], width: number, mat: THREE.Material): THREE.Mesh {
+  const shape = new THREE.Shape();
+  shape.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i][0], pts[i][1]);
+  shape.closePath();
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: width, bevelEnabled: false });
+  geo.translate(0, 0, -width / 2);
+  geo.rotateY(-Math.PI / 2); // profile axis -> car +z, extrusion -> car x
+  return new THREE.Mesh(geo, mat);
 }
 
 // Custom sprite loader: checks public/sprites/<slot>.png once per session and
