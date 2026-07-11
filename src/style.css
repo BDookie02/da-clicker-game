@@ -147,6 +147,21 @@ html, body {
   margin-bottom: 8px;
 }
 .panel-head .x { flex: 0; padding: 2px 10px; }
+
+/* garage: shorter bottom sheet so the 3D car shows above it */
+.panel-garage { max-height: 42vh; bottom: max(10px, env(safe-area-inset-bottom)); }
+.panel-garage.collapsed { max-height: none; background: transparent; border: none; padding: 0; }
+.garage-head { display: flex; align-items: center; justify-content: space-between; }
+.garage-head span { color: #ffd890; letter-spacing: 2px; }
+.garage-head button, .garage-bar button {
+  font-family: inherit; font-weight: bold; background: #1c1c2c; color: #ffd890;
+  border: 2px solid #4a4a70; border-bottom-width: 3px; padding: 6px 12px; font-size: 11px; cursor: pointer;
+}
+.garage-bar {
+  position: absolute; left: 8px; right: 8px; bottom: max(10px, env(safe-area-inset-bottom));
+  display: flex; gap: 8px; justify-content: space-between;
+}
+.garage-bar button { flex: 1; padding: 12px 8px; }
 .panel-note { font-size: 10px; color: #8a8ab0; margin-bottom: 8px; line-height: 1.5; }
 .row {
   display: flex;

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { OpponentDef } from './config';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,10 @@ export class GameScene {
   private psxRes = new THREE.Vector2(320, 240);
 
   private static readonly SPACING = 60;       // distance between red lights
+  // vertical world-height the eye-contact view frames at the opponent's
+  // distance — the FOV is derived from this so the driver stays the same
+  // prominent size on any screen shape (portrait phones included)
+  private static readonly FRAME_H = 3.1;
   private opponentGroup = new THREE.Group();  // car + goop, shaken as a unit
   private opponentAnchor = new THREE.Group(); // world placement
   private nextAnchor = new THREE.Group();     // next rival, staged at the next light
@@ -466,6 +471,7 @@ export class GameScene {
     this.spriteAnger = -1;
     this.setDriverAnger(0);
     this.gaze = 'opponent'; // new rival at the light: head turns to face them
+    this.reframe();         // re-derive FOV for this car's distance
   }
 
   /** Redraw the driver at an anger tier (0 calm .. 4 furious & beet red). */
@@ -739,6 +745,57 @@ export class GameScene {
     this.garageCar.add(wheel);
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
+    // upgrade to the real Higgsfield PS1 car mesh when it loads (procedural
+    // above is the instant fallback); snap + flat-shade it into the pipeline
+    this.loadCarMesh('models/car_sedan_meshy.glb', (mesh) => {
+      if (!this.garageCar) return;
+      // hide the procedural body but keep the interior kit (dash/wheel/seats)
+      for (const c of [...this.garageCar.children]) {
+        if ((c as THREE.Mesh).geometry) (c as THREE.Mesh).visible = false;
+      }
+      mesh.position.set(0, 0, 0);
+      this.garageCar.add(mesh);
+      this.garageMeshReady = true;
+    }); // keep meshy's own baked PS1 texture
+  }
+
+  private garageMeshReady = false;
+
+  /** Load a GLB, normalize it to ~4-unit length sitting on the floor, apply
+   *  the PSX vertex-snap + flat shading, and hand back the prepared group. */
+  private loadCarMesh(url: string, onReady: (m: THREE.Group) => void, tint?: number) {
+    new GLTFLoader().load(url, (gltf) => {
+      const root = gltf.scene;
+      const box = new THREE.Box3().setFromObject(root);
+      const size = new THREE.Vector3(); box.getSize(size);
+      const center = new THREE.Vector3(); box.getCenter(center);
+      const targetLen = 4.2;
+      const scale = targetLen / Math.max(size.x, size.z);
+      const g = new THREE.Group();
+      root.position.sub(center);            // center at origin
+      root.scale.setScalar(scale);
+      root.position.multiplyScalar(scale);
+      root.position.y += (size.y * scale) / 2; // sit on the floor
+      // orient: image_to_3d faces +Z toward camera; our cars face -Z (forward)
+      root.rotation.y = Math.PI;
+      // largest mesh = the body; tint it toward the car's paint color
+      let biggest: THREE.Mesh | null = null; let bMax = 0;
+      root.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const mb = new THREE.Box3().setFromObject(m); const ms = new THREE.Vector3(); mb.getSize(ms);
+        const vol = ms.x * ms.y * ms.z; if (vol > bMax) { bMax = vol; biggest = m; }
+        const mat = m.material as THREE.MeshStandardMaterial;
+        if (mat) { mat.flatShading = true; psxify(mat, this.psxRes); mat.needsUpdate = true; }
+      });
+      if (tint !== undefined && biggest) {
+        const bm = (biggest as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        bm.color.setHex(tint);
+        if (bm.map) bm.map = null; // drop pale baked texture so the tint reads
+      }
+      g.add(root);
+      onReady(g);
+    }, undefined, () => { /* load failed — procedural car stays */ });
   }
 
   enterGarage() {
@@ -949,11 +1006,26 @@ export class GameScene {
     this.renderer.render(this.compScene, this.compCam);
   }
 
+  /** Derive vertical FOV so a fixed world-height frames at the opponent's
+   *  distance — keeps the driver a consistent prominent size and centered
+   *  across every aspect ratio, so eye contact works in portrait too. */
+  private reframe() {
+    const dist = this.camera.position.distanceTo(
+      new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05,
+        this.opponentAnchor.position.z - this.spritePos.z));
+    // narrow screens (portrait) get a touch more height so the car body still
+    // reads under the face; wide screens frame tighter on the face
+    const aspect = this.camera.aspect;
+    const h = GameScene.FRAME_H * (aspect < 1 ? 1 + (1 - aspect) * 0.55 : 1);
+    this.camera.fov = 2 * Math.atan((h / 2) / Math.max(1, dist)) * (180 / Math.PI);
+    this.camera.updateProjectionMatrix();
+  }
+
   private onResize() {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    this.reframe();
     this.garageCam.aspect = w / h;
     this.garageCam.updateProjectionMatrix();
     const rw = Math.round(PSX_H * (w / h));

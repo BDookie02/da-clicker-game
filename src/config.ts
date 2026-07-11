@@ -158,13 +158,15 @@ export interface UpgradeDef {
 }
 
 // Tap-power upgrades (the "technology" track)
+// Steep cost growth (1.33–1.42) so income can't trivially max everything —
+// each level is a real decision, not a spam-buy.
 export const UPGRADES: UpgradeDef[] = [
-  { id: 'focus',    name: 'Focus',            desc: '+1 respect per tap. Lock in.',                       baseCost: 15,      costGrowth: 1.15, tapAdd: 1 },
-  { id: 'grip',     name: 'Grip Strength',    desc: '+5 per tap. Years of training.',                     baseCost: 200,     costGrowth: 1.16, tapAdd: 5 },
-  { id: 'wrist',    name: 'Wrist Cardio',     desc: '+25 per tap. Unmatched endurance.',                  baseCost: 2500,    costGrowth: 1.17, tapAdd: 25 },
-  { id: 'posture',  name: 'Sigma Posture',    desc: '+120 per tap. Sit up straight at the light.',        baseCost: 30000,   costGrowth: 1.18, tapAdd: 120 },
-  { id: 'eyecont',  name: 'Eye Contact',      desc: 'x2 tap power. Never blink first.',                   baseCost: 500000,  costGrowth: 8.0,  tapAdd: 0, tapMult: 2, maxLevel: 8 },
-  { id: 'mindset',  name: 'Monk Mindset',     desc: '+900 per tap. Inner peace, outer violence.',         baseCost: 400000,  costGrowth: 1.19, tapAdd: 900 },
+  { id: 'focus',    name: 'Focus',            desc: '+1 respect per tap. Lock in.',                       baseCost: 25,      costGrowth: 1.33, tapAdd: 1 },
+  { id: 'grip',     name: 'Grip Strength',    desc: '+5 per tap. Years of training.',                     baseCost: 400,     costGrowth: 1.34, tapAdd: 5 },
+  { id: 'wrist',    name: 'Wrist Cardio',     desc: '+25 per tap. Unmatched endurance.',                  baseCost: 6000,    costGrowth: 1.36, tapAdd: 25 },
+  { id: 'posture',  name: 'Sigma Posture',    desc: '+120 per tap. Sit up straight at the light.',        baseCost: 90000,   costGrowth: 1.38, tapAdd: 120 },
+  { id: 'eyecont',  name: 'Eye Contact',      desc: 'x2 tap power. Never blink first.',                   baseCost: 1500000, costGrowth: 12.0, tapAdd: 0, tapMult: 2, maxLevel: 8 },
+  { id: 'mindset',  name: 'Monk Mindset',     desc: '+900 per tap. Inner peace, outer violence.',         baseCost: 1500000, costGrowth: 1.42, tapAdd: 900 },
 ];
 
 export interface CrewDef {
@@ -178,12 +180,12 @@ export interface CrewDef {
 
 // Idle generators (the "crew of astronauts" track)
 export const CREW: CrewDef[] = [
-  { id: 'hypeman',  name: 'Hype Man',          desc: 'Rides shotgun. Taps for you.',            baseCost: 60,      costGrowth: 1.15, tapsPerSec: 1 },
-  { id: 'backseat', name: 'Backseat Guy',      desc: 'How did he even get in here?',            baseCost: 800,     costGrowth: 1.15, tapsPerSec: 8 },
-  { id: 'camera',   name: 'Street Cameraman',  desc: 'Films everything vertically.',            baseCost: 9000,    costGrowth: 1.16, tapsPerSec: 45 },
-  { id: 'editor',   name: 'TikTok Editor',     desc: 'Adds the caption in real time.',          baseCost: 95000,   costGrowth: 1.16, tapsPerSec: 260 },
-  { id: 'coach',    name: 'Discipline Coach',  desc: 'Screams "MENTALITY" out the window.',     baseCost: 1000000, costGrowth: 1.17, tapsPerSec: 1600 },
-  { id: 'monk',     name: 'Traffic Monk',      desc: 'Meditates on the hood. Radiates focus.',  baseCost: 12000000,costGrowth: 1.18, tapsPerSec: 10000 },
+  { id: 'hypeman',  name: 'Hype Man',          desc: 'Rides shotgun. Taps for you.',            baseCost: 120,     costGrowth: 1.32, tapsPerSec: 1 },
+  { id: 'backseat', name: 'Backseat Guy',      desc: 'How did he even get in here?',            baseCost: 1600,    costGrowth: 1.33, tapsPerSec: 8 },
+  { id: 'camera',   name: 'Street Cameraman',  desc: 'Films everything vertically.',            baseCost: 20000,   costGrowth: 1.34, tapsPerSec: 45 },
+  { id: 'editor',   name: 'TikTok Editor',     desc: 'Adds the caption in real time.',          baseCost: 260000,  costGrowth: 1.36, tapsPerSec: 260 },
+  { id: 'coach',    name: 'Discipline Coach',  desc: 'Screams "MENTALITY" out the window.',     baseCost: 3500000, costGrowth: 1.38, tapsPerSec: 1600 },
+  { id: 'monk',     name: 'Traffic Monk',      desc: 'Meditates on the hood. Radiates focus.',  baseCost: 45000000,costGrowth: 1.40, tapsPerSec: 10000 },
 ];
 
 export interface CosmeticDef {
@@ -197,29 +199,29 @@ export interface CosmeticDef {
 
 // Aesthetic unlockables (the reskinned "milestone rewards") — all meme-themed.
 export const COSMETICS: CosmeticDef[] = [
-  { id: 'orn_napkin',   name: 'First Napkin Ornament', desc: 'A napkin on the dash. Historic.',              cost: 10,  slot: 'ornament', value: '#e8e4d8' },
-  { id: 'decal_ment',   name: '"MENTALITY" Decal',     desc: 'Top text for your windshield.',                cost: 15,  slot: 'decal',    value: 'MENTALITY' },
-  { id: 'decal_disc',   name: '"discipline" Decal',    desc: 'Bottom text. Lowercase. Powerful.',            cost: 15,  slot: 'decal',    value: 'discipline' },
-  { id: 'goop_gold',    name: 'Golden Goop',           desc: 'The finish of champions.',                     cost: 40,  slot: 'goop',     value: '#e6c84a' },
-  { id: 'goop_slime',   name: 'Toxic Goop',            desc: 'Radioactive green. Unsanitary.',               cost: 40,  slot: 'goop',     value: '#7be04a' },
-  { id: 'sky_sunset',   name: 'Golden Hour',           desc: 'Cinematic sunset for your edits.',             cost: 25,  slot: 'sky',      value: 'sunset' },
-  { id: 'sky_vapor',    name: 'Vaporwave Night',       desc: 'A E S T H E T I C intersection.',              cost: 25,  slot: 'sky',      value: 'vapor' },
-  { id: 'horn_sad',     name: 'Sad Violin Horn',       desc: 'Plays when opponents finish.',                 cost: 30,  slot: 'horn',     value: 'violin' },
-  { id: 'dash_gd',      name: 'Difficulty Face Dice',  desc: 'Fuzzy dice, but they judge you.',              cost: 20,  slot: 'dash',     value: 'gd' },
-  { id: 'orn_cowboy',   name: 'Tiny Steel Cowboy',     desc: 'Bobblehead doing a pose on your dash.',        cost: 35,  slot: 'ornament', value: '#7a4a9e' },
-  { id: 'decal_bottom', name: '"bottom text" Decal',   desc: 'The caption completes itself.',                cost: 20,  slot: 'decal',    value: 'bottom text' },
-  { id: 'decal_aura',   name: '"AURA +1000" Decal',    desc: 'Certified aura farming equipment.',            cost: 25,  slot: 'decal',    value: 'AURA +1000' },
-  { id: 'decal_engage', name: '"DO NOT ENGAGE" Decal', desc: 'They will engage anyway.',                     cost: 25,  slot: 'decal',    value: 'DO NOT ENGAGE' },
-  { id: 'goop_pink',    name: 'Bubblegum Goop',        desc: 'Smells like victory and strawberries.',        cost: 45,  slot: 'goop',     value: '#f0a0c8' },
-  { id: 'goop_blue',    name: 'Wiper Fluid Goop',      desc: 'Technically car-related.',                     cost: 45,  slot: 'goop',     value: '#4a9ae0' },
-  { id: 'goop_oil',     name: 'Crude Oil Goop',        desc: 'Environmentally devastating finish.',          cost: 60,  slot: 'goop',     value: '#1c1c22' },
-  { id: 'sky_storm',    name: 'Stormchaser',           desc: 'Permanent dramatic weather.',                  cost: 30,  slot: 'sky',      value: 'storm' },
-  { id: 'sky_noir',     name: 'Film Noir',             desc: 'The city knows what it did.',                  cost: 30,  slot: 'sky',      value: 'noir' },
-  { id: 'sky_toxic',    name: 'Toxic Hour',            desc: 'The air is 40% regret.',                       cost: 30,  slot: 'sky',      value: 'toxic' },
-  { id: 'sky_mint',     name: 'Mint Condition',        desc: 'Refreshing. Suspiciously so.',                 cost: 30,  slot: 'sky',      value: 'mint' },
-  { id: 'orn_cone',     name: 'Tiny Traffic Cone',     desc: 'A fallen soldier from the Kingpin wars.',      cost: 25,  slot: 'ornament', value: '#e8862a' },
-  { id: 'orn_monk',     name: 'Dashboard Monk',        desc: 'Radiates focus onto your steering wheel.',     cost: 45,  slot: 'ornament', value: '#e8c84a' },
-  { id: 'horn_air',     name: 'Freight Airhorn',       desc: 'Startles opponents mid-shake.',                cost: 35,  slot: 'horn',     value: 'airhorn' },
+  { id: 'orn_napkin',   name: 'First Napkin Ornament', desc: 'A napkin on the dash. Historic.',              cost: 50,  slot: 'ornament', value: '#e8e4d8' },
+  { id: 'decal_ment',   name: '"MENTALITY" Decal',     desc: 'Top text for your windshield.',                cost: 75,  slot: 'decal',    value: 'MENTALITY' },
+  { id: 'decal_disc',   name: '"discipline" Decal',    desc: 'Bottom text. Lowercase. Powerful.',            cost: 75,  slot: 'decal',    value: 'discipline' },
+  { id: 'goop_gold',    name: 'Golden Goop',           desc: 'The finish of champions.',                     cost: 200,  slot: 'goop',     value: '#e6c84a' },
+  { id: 'goop_slime',   name: 'Toxic Goop',            desc: 'Radioactive green. Unsanitary.',               cost: 200,  slot: 'goop',     value: '#7be04a' },
+  { id: 'sky_sunset',   name: 'Golden Hour',           desc: 'Cinematic sunset for your edits.',             cost: 125,  slot: 'sky',      value: 'sunset' },
+  { id: 'sky_vapor',    name: 'Vaporwave Night',       desc: 'A E S T H E T I C intersection.',              cost: 125,  slot: 'sky',      value: 'vapor' },
+  { id: 'horn_sad',     name: 'Sad Violin Horn',       desc: 'Plays when opponents finish.',                 cost: 150,  slot: 'horn',     value: 'violin' },
+  { id: 'dash_gd',      name: 'Difficulty Face Dice',  desc: 'Fuzzy dice, but they judge you.',              cost: 100,  slot: 'dash',     value: 'gd' },
+  { id: 'orn_cowboy',   name: 'Tiny Steel Cowboy',     desc: 'Bobblehead doing a pose on your dash.',        cost: 175,  slot: 'ornament', value: '#7a4a9e' },
+  { id: 'decal_bottom', name: '"bottom text" Decal',   desc: 'The caption completes itself.',                cost: 100,  slot: 'decal',    value: 'bottom text' },
+  { id: 'decal_aura',   name: '"AURA +1000" Decal',    desc: 'Certified aura farming equipment.',            cost: 125,  slot: 'decal',    value: 'AURA +1000' },
+  { id: 'decal_engage', name: '"DO NOT ENGAGE" Decal', desc: 'They will engage anyway.',                     cost: 125,  slot: 'decal',    value: 'DO NOT ENGAGE' },
+  { id: 'goop_pink',    name: 'Bubblegum Goop',        desc: 'Smells like victory and strawberries.',        cost: 225,  slot: 'goop',     value: '#f0a0c8' },
+  { id: 'goop_blue',    name: 'Wiper Fluid Goop',      desc: 'Technically car-related.',                     cost: 225,  slot: 'goop',     value: '#4a9ae0' },
+  { id: 'goop_oil',     name: 'Crude Oil Goop',        desc: 'Environmentally devastating finish.',          cost: 300,  slot: 'goop',     value: '#1c1c22' },
+  { id: 'sky_storm',    name: 'Stormchaser',           desc: 'Permanent dramatic weather.',                  cost: 150,  slot: 'sky',      value: 'storm' },
+  { id: 'sky_noir',     name: 'Film Noir',             desc: 'The city knows what it did.',                  cost: 150,  slot: 'sky',      value: 'noir' },
+  { id: 'sky_toxic',    name: 'Toxic Hour',            desc: 'The air is 40% regret.',                       cost: 150,  slot: 'sky',      value: 'toxic' },
+  { id: 'sky_mint',     name: 'Mint Condition',        desc: 'Refreshing. Suspiciously so.',                 cost: 150,  slot: 'sky',      value: 'mint' },
+  { id: 'orn_cone',     name: 'Tiny Traffic Cone',     desc: 'A fallen soldier from the Kingpin wars.',      cost: 125,  slot: 'ornament', value: '#e8862a' },
+  { id: 'orn_monk',     name: 'Dashboard Monk',        desc: 'Radiates focus onto your steering wheel.',     cost: 225,  slot: 'ornament', value: '#e8c84a' },
+  { id: 'horn_air',     name: 'Freight Airhorn',       desc: 'Startles opponents mid-shake.',                cost: 175,  slot: 'horn',     value: 'airhorn' },
 ];
 
 export interface BoosterDef {

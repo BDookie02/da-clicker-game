@@ -25,6 +25,7 @@ export class UI {
   private openTab: string | null = null;
   private prestigeArmed = false;
   private remoteBoard: LbEntry[] | null = null;
+  private garageSheetOpen = true; // cosmetics list visible over the 3D garage
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
@@ -156,8 +157,9 @@ export class UI {
   private toggle(tab: string) {
     if (this.openTab === tab) return this.close();
     this.openTab = tab;
+    this.garageSheetOpen = true;
     this.panel?.remove();
-    this.panel = el('div', 'panel');
+    this.panel = el('div', tab === 'garage' ? 'panel panel-garage' : 'panel');
     this.root.appendChild(this.panel);
     this.refreshPanel();
     this.onGarage?.(tab === 'garage');
@@ -206,13 +208,27 @@ export class UI {
           `${fmt(cost)} R`, g.s.respect >= cost, 'crew'));
       }
     } else if (this.openTab === 'garage') {
-      rows.push(`<div class="panel-note">Aesthetic unlockables. Placeholder art — final meme skins land via the asset pipeline.</div>`);
-      for (const c of COSMETICS) {
-        const owned = g.s.ownedCosmetics.includes(c.id);
-        const equipped = g.s.equippedCosmetics[c.slot] === c.id;
-        rows.push(row(c.id, `${c.name}${equipped ? ' ✓' : ''}`, c.desc,
-          owned ? (equipped ? 'UNEQUIP' : 'EQUIP') : `${c.cost} M`,
-          owned || g.s.mentality >= c.cost, 'cosmetic'));
+      // Garage is a 3D room behind the UI. The cosmetics list is a collapsible
+      // bottom sheet — collapsing it reveals the car; a dedicated EXIT leaves.
+      if (this.garageSheetOpen) {
+        rows.length = 0; // custom header for garage
+        rows.push(`<div class="panel-head garage-head">
+          <button class="g-exit">‹ EXIT</button>
+          <span>GARAGE</span>
+          <button class="g-collapse">▾ HIDE</button></div>`);
+        rows.push(`<div class="panel-note">Swipe the car to rotate · tap it to sit inside. Equip cosmetics to see them on your ride.</div>`);
+        for (const c of COSMETICS) {
+          const owned = g.s.ownedCosmetics.includes(c.id);
+          const equipped = g.s.equippedCosmetics[c.slot] === c.id;
+          rows.push(row(c.id, `${c.name}${equipped ? ' ✓' : ''}`, c.desc,
+            owned ? (equipped ? 'UNEQUIP' : 'EQUIP') : `${c.cost} M`,
+            owned || g.s.mentality >= c.cost, 'cosmetic'));
+        }
+      } else {
+        rows.length = 0; // collapsed: just controls, car fully visible
+        rows.push(`<div class="garage-bar">
+          <button class="g-exit">‹ EXIT GARAGE</button>
+          <button class="g-show">▴ COSMETICS</button></div>`);
       }
     } else if (this.openTab === 'ranks') {
       const native = !!this.lb && this.lb.platform !== 'web';
@@ -255,7 +271,15 @@ export class UI {
     }
 
     this.panel.innerHTML = rows.join('');
-    this.panel.querySelector('.x')!.addEventListener('click', () => this.close());
+    this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
+    // garage-specific controls
+    this.panel.querySelector('.g-exit')?.addEventListener('click', () => this.close());
+    this.panel.querySelector('.g-collapse')?.addEventListener('click', () => {
+      this.garageSheetOpen = false; this.panel!.classList.add('collapsed'); this.refreshPanel();
+    });
+    this.panel.querySelector('.g-show')?.addEventListener('click', () => {
+      this.garageSheetOpen = true; this.panel!.classList.remove('collapsed'); this.refreshPanel();
+    });
     this.panel.querySelectorAll('.row button').forEach((btn) => {
       btn.addEventListener('click', (ev) => {
         ev.stopPropagation();

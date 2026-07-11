@@ -1,0 +1,9 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# SPA-style fallback (single page game)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
