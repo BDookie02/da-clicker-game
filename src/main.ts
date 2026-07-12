@@ -125,7 +125,7 @@ game.on((e) => {
   } else if (e.type === 'boost') {
     ui.toast(`BOOST ACTIVE: x${e.mult} for ${e.seconds}s`, 'gold');
   } else if (e.type === 'offline') {
-    ui.toast(`While you were gone the crew earned ${fmt(e.gain)} respect.`, 'gold');
+    ui.showOfflineModal(e.gain, e.seconds); // collect, or double it with an ad
   }
 });
 
@@ -158,8 +158,12 @@ const onTap = (ev: Event) => {
 
 // garage controls: swipe to orbit the car, clean tap to hop in/out of the seat
 ui.onGarage = (open) => {
-  if (open) { scene.enterGarage(); applyCosmetics(); }
-  else scene.exitGarage();
+  // seamless: quick black dip, HUD hides inside the garage
+  ui.quickFade(() => {
+    document.body.classList.toggle('in-garage', open);
+    if (open) { scene.enterGarage(); applyCosmetics(); }
+    else scene.exitGarage();
+  });
 };
 let gDrag: { x: number; y: number; moved: boolean } | null = null;
 window.addEventListener('pointerdown', (ev) => {

@@ -61,6 +61,29 @@ html, body {
 .stat .v { display: block; font-size: 15px; text-shadow: 2px 2px 0 #000; }
 .stat .v.gold { color: #e6c84a; }
 
+.quick-buy {
+  position: absolute;
+  bottom: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  font-family: inherit;
+  font-weight: bold;
+  font-size: 12px;
+  color: #0a0a12;
+  background: #ffd890;
+  border: 2px solid #e66a2a;
+  border-bottom-width: 4px;
+  padding: 9px 16px;
+  cursor: pointer;
+  max-width: 86vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.quick-buy:active { transform: translateX(-50%) translateY(2px); border-bottom-width: 2px; }
+body.in-garage .quick-buy { display: none; }
+
 .boost-pill {
   position: absolute;
   top: 58px;
@@ -234,6 +257,14 @@ html, body {
   z-index: 40;
 }
 .fade.on { opacity: 0.9; }
+.fade.quick { transition: opacity 0.16s; background: #000; }
+.fade.quick.on { opacity: 1; }
+
+/* inside the garage the street HUD disappears — garage bar is the only UI */
+body.in-garage .hud-top,
+body.in-garage .opp-bar,
+body.in-garage .menu-row,
+body.in-garage .boost-pill { display: none; }
 
 /* title card */
 .title-screen {

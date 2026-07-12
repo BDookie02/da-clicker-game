@@ -632,7 +632,8 @@ export class GameScene {
     lights(s === 'wedge' ? 0.42 : 0.78, s === 'wedge' ? 0.5 : 0.78);
 
     if (s === 'taxi') {
-      add(new THREE.BoxGeometry(0.8, 0.22, 0.4), new THREE.MeshBasicMaterial({ color: 0xe8c84a }), 0, gls[1][1] + 0.24, 0);
+      const sign = add(new THREE.BoxGeometry(0.8, 0.22, 0.4), new THREE.MeshBasicMaterial({ color: 0xe8c84a }), 0, gls[1][1] + 0.24, 0);
+      sign.userData.keep = true; // survives fleet-mesh swap
     }
     if (s === 'pickup') { // open bed rails
       add(new THREE.BoxGeometry(1.9, 0.24, 0.1), trim, 0, 0.78, -2.24);
@@ -646,8 +647,11 @@ export class GameScene {
       const halo = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.06, 6, 14), new THREE.MeshBasicMaterial({ color: 0xfff8c0 }));
       halo.rotation.x = Math.PI / 2;
       halo.position.set(0, 2.1, -0.1);
+      halo.userData.keep = true; // survives fleet-mesh swap
       g.add(halo);
     }
+    // upgrade to a Higgsfield mesh when/if the asset exists (silent fallback)
+    this.attachFleetMesh(g, def);
     return g;
   }
 
@@ -663,6 +667,8 @@ export class GameScene {
   private garageYaw = 0.8;
   private garagePitch = 0.3;
   private garageFP = false;
+  private fpYaw = 0;          // first-person head yaw (0 = windshield)
+  private fpPitch = -0.08;    // slight natural downward gaze at the dash
   private garageDecal: THREE.Mesh | null = null;
   private garageOrn: THREE.Mesh | null = null;
   private garageGoopTop: THREE.MeshLambertMaterial | null = null;
@@ -763,7 +769,7 @@ export class GameScene {
 
   /** Load a GLB, normalize it to ~4-unit length sitting on the floor, apply
    *  the PSX vertex-snap + flat shading, and hand back the prepared group. */
-  private loadCarMesh(url: string, onReady: (m: THREE.Group) => void, tint?: number) {
+  private loadCarMesh(url: string, onReady: (m: THREE.Group) => void, tint?: number, onFail?: () => void) {
     new GLTFLoader().load(url, (gltf) => {
       const root = gltf.scene;
       const box = new THREE.Box3().setFromObject(root);
@@ -795,7 +801,58 @@ export class GameScene {
       }
       g.add(root);
       onReady(g);
-    }, undefined, () => { /* load failed — procedural car stays */ });
+    }, undefined, () => { onFail?.(); /* load failed — procedural car stays */ });
+  }
+
+  // ---- Higgsfield fleet meshes ------------------------------------------------
+  // ONE neutral-white PS1 mesh covers the whole sedan family: the white baked
+  // texture multiplies with each opponent's paint color, and scale variants
+  // produce hatch/compact/lowrider/limo silhouettes.
+  private static carMeshCache = new Map<string, Promise<THREE.Group | null>>();
+
+  private static meshFor(style: OpponentDef['carStyle']): { url: string; scale: [number, number, number] } | null {
+    const S: Partial<Record<OpponentDef['carStyle'], [number, number, number]>> = {
+      sedan: [1, 1, 1], taxi: [1, 1, 1], divine: [1, 1, 1],
+      hatch: [1, 1.04, 0.9], compact: [0.94, 0.97, 0.88],
+      lowrider: [1.02, 0.84, 1], limo: [1, 0.96, 1.52],
+    };
+    const sc = S[style];
+    return sc ? { url: 'models/car_sedan_white.glb', scale: sc } : null;
+  }
+
+  private carMeshMaster(url: string): Promise<THREE.Group | null> {
+    let p = GameScene.carMeshCache.get(url);
+    if (!p) {
+      p = new Promise<THREE.Group | null>((res) =>
+        this.loadCarMesh(url, (m) => res(m), undefined, () => res(null)));
+      GameScene.carMeshCache.set(url, p);
+    }
+    return p;
+  }
+
+  /** swap a procedural car for a tinted Higgsfield mesh when it's available */
+  private attachFleetMesh(g: THREE.Group, def: OpponentDef) {
+    const src = GameScene.meshFor(def.carStyle);
+    if (!src) return; // style keeps its procedural body (cube stays the joke)
+    void this.carMeshMaster(src.url).then((master) => {
+      if (!master || !g.parent) return;
+      const inst = master.clone(true);
+      inst.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const mat = (m.material as THREE.MeshStandardMaterial).clone();
+        mat.flatShading = true;
+        mat.color.setHex(def.carColor); // white texture x paint = opponent color
+        psxify(mat, this.psxRes);       // clone drops onBeforeCompile — reapply
+        mat.needsUpdate = true;
+        m.material = mat;
+      });
+      inst.scale.set(src.scale[0], src.scale[1], src.scale[2]);
+      for (const c of [...g.children]) {
+        if (!c.userData.keep) c.visible = false; // hide procedural body
+      }
+      g.add(inst);
+    });
   }
 
   enterGarage() {
@@ -806,14 +863,22 @@ export class GameScene {
 
   exitGarage() { this.garageMode = false; }
 
-  /** swipe = orbit (third-person) or look sway (first-person handled by orbit too) */
+  /** swipe: third-person orbits the car; first-person looks around the cabin */
   garageSwipe(dx: number, dy: number) {
-    this.garageYaw -= dx * 0.008;
-    this.garagePitch = Math.min(0.9, Math.max(0.06, this.garagePitch + dy * 0.004));
+    if (this.garageFP) {
+      this.fpYaw -= dx * 0.006;
+      this.fpPitch = Math.min(0.7, Math.max(-0.7, this.fpPitch - dy * 0.004));
+    } else {
+      this.garageYaw -= dx * 0.008;
+      this.garagePitch = Math.min(0.9, Math.max(0.06, this.garagePitch + dy * 0.004));
+    }
   }
 
-  /** tap toggles third-person orbit <-> first-person dashboard view */
-  garageTap() { this.garageFP = !this.garageFP; }
+  /** tap toggles third-person orbit <-> first-person driver's seat */
+  garageTap() {
+    this.garageFP = !this.garageFP;
+    if (this.garageFP) { this.fpYaw = 0; this.fpPitch = -0.08; } // face the windshield
+  }
 
   setGarageCosmetics(decal?: string, ornament?: string, goop?: string) {
     if (!this.garageBuilt || !this.garageCar) return;
@@ -915,9 +980,14 @@ export class GameScene {
     if (this.garageMode) {
       const GO = GameScene.GO;
       if (this.garageFP) {
-        // driver's seat: dash, wheel, ornament and windshield decal in view
-        this.garageCam.position.set(GO.x - 0.42, GO.y + 1.3, GO.z - 0.12);
-        this.garageCam.lookAt(GO.x - 0.15, GO.y + 1.02, GO.z + 1.6);
+        // driver's seat with free look: swipe to look around the cabin
+        const eye = new THREE.Vector3(GO.x - 0.42, GO.y + 1.3, GO.z - 0.12);
+        this.garageCam.position.copy(eye);
+        this.garageCam.lookAt(
+          eye.x + Math.sin(this.fpYaw) * Math.cos(this.fpPitch),
+          eye.y + Math.sin(this.fpPitch),
+          eye.z + Math.cos(this.fpYaw) * Math.cos(this.fpPitch),
+        );
       } else {
         const r = 5.6;
         this.garageCam.position.set(

@@ -240,6 +240,16 @@ export const BOOSTERS: BoosterDef[] = [
   { id: 'mega',  name: 'Director\'s Cut', desc: 'Watch a 30s ad → 10x everything for 90s.', adSeconds: 30, mult: 10, durationSec: 90 },
 ];
 
+// THE LAB — permanent upgrades bought with Mentality; survive New Route.
+// (The premium-currency progression sink: Mentality buys power, not just looks.)
+export interface LabDef { id: string; name: string; desc: string; cost: number; }
+export const LAB: LabDef[] = [
+  { id: 'lab_grip',    name: 'Muscle Memory',    desc: 'PERMANENT +50 respect per tap, survives New Route.',      cost: 120 },
+  { id: 'lab_offline', name: 'Dream Discipline', desc: 'Offline earnings rate 50% → 80%.',                        cost: 200 },
+  { id: 'lab_boost',   name: 'Extended Cut',     desc: 'Ad boosters last 40% longer.',                            cost: 300 },
+  { id: 'lab_mental',  name: 'Aura Compounder',  desc: '+30% Mentality from every defeated opponent.',            cost: 450 },
+];
+
 export const SAVE_KEY = 'discipline-clicker-save-v1';
 
 // Backend (usernames + worldwide taps board). Empty string = local placeholder

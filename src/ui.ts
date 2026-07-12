@@ -1,4 +1,4 @@
-import { BOOSTERS, COSMETICS, CREW, UPGRADES, type BoosterDef } from './config';
+import { BOOSTERS, COSMETICS, CREW, LAB, UPGRADES, type BoosterDef } from './config';
 import { fmt, PRESTIGE_STEP, type Game } from './state';
 import { sfx } from './audio';
 import { fetchBoardRemote, getWorldList, type LbEntry, type LeaderboardProvider } from './leaderboard';
@@ -43,6 +43,7 @@ export class UI {
         <button class="stat mute" id="btn-mute" title="sound">🔊</button>
       </div>
       <div class="boost-pill" id="boost-pill" hidden></div>
+      <button class="quick-buy" id="quick-buy" hidden></button>
       <div class="opp-bar">
         <div class="opp-name" id="opp-name"></div>
         <div class="bar"><div class="fill" id="opp-fill"></div>
@@ -69,6 +70,18 @@ export class UI {
       });
     });
 
+    // quick-buy: the always-visible "next affordable purchase" (constant
+    // cadence — no menu diving for the next power bump)
+    document.getElementById('quick-buy')!.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const best = this.game.cheapestAffordable();
+      if (!best) return;
+      if (best.kind === 'upgrades' ? this.game.buyUpgrade(best.id) : this.game.buyCrew(best.id)) {
+        sfx.buy();
+        this.refresh();
+      }
+    });
+
     const muteBtn = document.getElementById('btn-mute')!;
     muteBtn.textContent = sfx.muted ? '🔇' : '🔊';
     muteBtn.addEventListener('click', (ev) => {
@@ -87,6 +100,13 @@ export class UI {
     setText('opp-name', `RED LIGHT ${g.s.opponentIndex + 1} — ${g.opponent.name}`);
     setText('opp-blurb', g.opponent.blurb);
     (document.getElementById('opp-fill')!).style.width = `${(g.progress01 * 100).toFixed(1)}%`;
+
+    const qb = document.getElementById('quick-buy')!;
+    const best = g.cheapestAffordable();
+    if (best && !this.isPanelOpen) {
+      qb.hidden = false;
+      qb.textContent = `⚡ ${best.name} — ${fmt(best.cost)} R`;
+    } else qb.hidden = true;
 
     const pill = document.getElementById('boost-pill')!;
     if (g.boostActive) {
@@ -157,13 +177,56 @@ export class UI {
   private toggle(tab: string) {
     if (this.openTab === tab) return this.close();
     this.openTab = tab;
-    this.garageSheetOpen = true;
+    // garage opens with the sheet COLLAPSED — you see your car first,
+    // cosmetics list is one tap away
+    this.garageSheetOpen = tab !== 'garage';
     this.panel?.remove();
-    this.panel = el('div', tab === 'garage' ? 'panel panel-garage' : 'panel');
+    this.panel = el('div', tab === 'garage' ? 'panel panel-garage collapsed' : 'panel');
     this.root.appendChild(this.panel);
     this.refreshPanel();
     this.onGarage?.(tab === 'garage');
     sfx.click();
+  }
+
+  /** Offline earnings collect: take it, or double it with an ad. */
+  showOfflineModal(gain: number, seconds: number) {
+    const overlay = el('div', 'ad-overlay');
+    overlay.innerHTML = `
+      <div class="ad-box">
+        <div class="ad-label">WHILE YOU WERE GONE</div>
+        <div class="ad-screen">
+          <div class="ad-art">😴</div>
+          <div class="ad-copy">Your crew kept tapping for ${Math.round(seconds / 60)} min.<br/>
+          They earned <b style="color:#e6c84a">${fmt(gain)} Respect</b>.</div>
+        </div>
+        <div class="name-actions">
+          <button class="off-collect">COLLECT</button>
+          <button class="off-double">📺 COLLECT ×2</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.off-collect')!.addEventListener('click', () => {
+      overlay.remove();
+      this.refresh();
+    });
+    overlay.querySelector('.off-double')!.addEventListener('click', async () => {
+      overlay.remove();
+      const watched = await this.ads.show(15);
+      if (watched) {
+        this.game.s.respect += gain; // second copy of the earnings
+        sfx.buy();
+        this.toast(`DOUBLED: +${fmt(gain)} bonus Respect`, 'gold');
+      }
+      this.refresh();
+    });
+  }
+
+  /** fast black dip for scene transitions (garage in/out) */
+  quickFade(cb: () => void) {
+    this.fade.classList.add('quick', 'on');
+    setTimeout(() => { cb(); }, 180);
+    setTimeout(() => this.fade.classList.remove('on'), 320);
+    setTimeout(() => this.fade.classList.remove('quick'), 650);
   }
 
   close() {
@@ -199,6 +262,13 @@ export class UI {
         const cost = g.upgradeCost(u.id);
         rows.push(row(u.id, u.name, `Lv ${lv}${maxed ? ' MAX' : ''} · ${u.desc}`,
           maxed ? '—' : `${fmt(cost)} R`, !maxed && g.s.respect >= cost, 'upgrades'));
+      }
+      // THE LAB: permanent Mentality upgrades, survive New Route
+      rows.push(`<div class="panel-note">🧪 THE LAB — permanent upgrades bought with Mentality. These survive New Route.</div>`);
+      for (const l of LAB) {
+        const owned = g.hasLab(l.id);
+        rows.push(row(l.id, `${l.name}${owned ? ' ✓' : ''}`, l.desc,
+          owned ? 'OWNED' : `${l.cost} M`, !owned && g.s.mentality >= l.cost, 'lab'));
       }
     } else if (this.openTab === 'crew') {
       for (const c of CREW) {
@@ -299,7 +369,8 @@ export class UI {
         this.prestigeArmed = false;
         if (g.prestige()) { this.close(); return; }
       }
-    } else if (kind === 'upgrades') { if (g.buyUpgrade(id)) sfx.buy(); }
+    } else if (kind === 'lab') { if (g.buyLab(id)) sfx.buy(); }
+    else if (kind === 'upgrades') { if (g.buyUpgrade(id)) sfx.buy(); }
     else if (kind === 'crew') { if (g.buyCrew(id)) sfx.buy(); }
     else if (kind === 'cosmetic') {
       if (g.s.ownedCosmetics.includes(id)) g.toggleCosmetic(id);

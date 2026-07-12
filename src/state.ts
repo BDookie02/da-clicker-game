@@ -1,7 +1,16 @@
 import {
-  BOOSTERS, COSMETICS, CREW, SAVE_KEY, SHAKE_TIERS, UPGRADES,
+  BOOSTERS, COSMETICS, CREW, LAB, SAVE_KEY, SHAKE_TIERS, UPGRADES,
   getOpponent, type BoosterDef,
 } from './config';
+
+// Balls-Bounce-style piecewise curve: first purchases stay cheap so something
+// is always nearly affordable (constant early cadence), then costs steepen
+// hard so late levels are real decisions.
+function tieredCost(base: number, growth: number, lv: number): number {
+  const soft = Math.min(lv, 8);
+  const hard = Math.max(0, lv - 8);
+  return Math.round(base * Math.pow(1.13, soft) * Math.pow(growth, hard));
+}
 
 export interface SaveData {
   username: string | null;
@@ -14,6 +23,7 @@ export interface SaveData {
   upgradeLevels: Record<string, number>;
   crewCounts: Record<string, number>;
   ownedCosmetics: string[];
+  labOwned: string[];                  // permanent LAB upgrades (survive prestige)
   equippedCosmetics: Partial<Record<string, string>>; // slot -> cosmetic id
   boostMult: number;
   boostEndsAt: number;                 // epoch ms
@@ -32,6 +42,7 @@ const fresh = (): SaveData => ({
   upgradeLevels: {},
   crewCounts: {},
   ownedCosmetics: [],
+  labOwned: [],
   equippedCosmetics: {},
   boostMult: 1,
   boostEndsAt: 0,
@@ -91,8 +102,10 @@ export class Game {
   get prestigeRequirement(): number { return PRESTIGE_BASE + PRESTIGE_STEP * this.s.prestiges; }
   get canPrestige(): boolean { return this.s.opponentIndex >= this.prestigeRequirement; }
 
+  hasLab(id: string): boolean { return this.s.labOwned.includes(id); }
+
   get respectPerTap(): number {
-    let add = 1;
+    let add = 1 + (this.hasLab('lab_grip') ? 50 : 0);
     let mult = 1;
     for (const u of UPGRADES) {
       const lv = this.s.upgradeLevels[u.id] ?? 0;
@@ -110,14 +123,41 @@ export class Game {
 
   upgradeCost(id: string): number {
     const u = UPGRADES.find(x => x.id === id)!;
-    const lv = this.s.upgradeLevels[id] ?? 0;
-    return Math.round(u.baseCost * Math.pow(u.costGrowth, lv));
+    if (u.tapMult) { // multiplier upgrades keep their pure exponential wall
+      return Math.round(u.baseCost * Math.pow(u.costGrowth, this.s.upgradeLevels[id] ?? 0));
+    }
+    return tieredCost(u.baseCost, u.costGrowth, this.s.upgradeLevels[id] ?? 0);
   }
 
   crewCost(id: string): number {
     const c = CREW.find(x => x.id === id)!;
-    const n = this.s.crewCounts[id] ?? 0;
-    return Math.round(c.baseCost * Math.pow(c.costGrowth, n));
+    return tieredCost(c.baseCost, c.costGrowth, this.s.crewCounts[id] ?? 0);
+  }
+
+  /** cheapest thing you can afford RIGHT NOW — powers the HUD quick-buy */
+  cheapestAffordable(): { kind: 'upgrades' | 'crew'; id: string; name: string; cost: number } | null {
+    let best: { kind: 'upgrades' | 'crew'; id: string; name: string; cost: number } | null = null;
+    for (const u of UPGRADES) {
+      const lv = this.s.upgradeLevels[u.id] ?? 0;
+      if (u.maxLevel && lv >= u.maxLevel) continue;
+      const cost = this.upgradeCost(u.id);
+      if (cost <= this.s.respect && (!best || cost < best.cost)) best = { kind: 'upgrades', id: u.id, name: u.name, cost };
+    }
+    for (const c of CREW) {
+      const cost = this.crewCost(c.id);
+      if (cost <= this.s.respect && (!best || cost < best.cost)) best = { kind: 'crew', id: c.id, name: c.name, cost };
+    }
+    return best;
+  }
+
+  labCost(id: string): number { return LAB.find(l => l.id === id)!.cost; }
+
+  buyLab(id: string): boolean {
+    const l = LAB.find(x => x.id === id)!;
+    if (this.s.labOwned.includes(id) || this.s.mentality < l.cost) return false;
+    this.s.mentality -= l.cost;
+    this.s.labOwned.push(id);
+    return true;
   }
 
   // ---- actions --------------------------------------------------------------
@@ -150,11 +190,12 @@ export class Game {
     }
     if (this.s.opponentProgress >= this.opponent.tapsRequired) {
       const beaten = this.opponent;
-      this.s.mentality += beaten.mentalityReward;
+      const reward = Math.round(beaten.mentalityReward * (this.hasLab('lab_mental') ? 1.3 : 1));
+      this.s.mentality += reward;
       this.s.opponentIndex += 1;
       this.s.opponentProgress = 0;
       this.lastTier = 0;
-      this.emit({ type: 'defeated', mentality: beaten.mentalityReward, name: beaten.name });
+      this.emit({ type: 'defeated', mentality: reward, name: beaten.name });
     }
   }
 
@@ -219,13 +260,14 @@ export class Game {
   /** Called by the ad service after a rewarded ad completes. No daily cap. */
   grantBooster(b: BoosterDef) {
     const now = Date.now();
+    const dur = b.durationSec * (this.hasLab('lab_boost') ? 1.4 : 1) * 1000;
     if (this.boostActive && this.s.boostMult === b.mult) {
-      this.s.boostEndsAt += b.durationSec * 1000;       // same tier: extend
+      this.s.boostEndsAt += dur;                        // same tier: extend
     } else if (!this.boostActive || b.mult >= this.s.boostMult) {
       this.s.boostMult = b.mult;                        // higher tier: replace
-      this.s.boostEndsAt = now + b.durationSec * 1000;
+      this.s.boostEndsAt = now + dur;
     } else {
-      this.s.boostEndsAt += (b.durationSec * 1000) / 2; // lower tier: extend half
+      this.s.boostEndsAt += dur / 2;                    // lower tier: extend half
     }
     this.s.adsWatched += 1;
     this.emit({ type: 'boost', mult: this.s.boostMult, seconds: Math.round((this.s.boostEndsAt - now) / 1000) });
@@ -250,7 +292,8 @@ export class Game {
     if (away > 30) {
       let rps = 0;
       for (const c of CREW) rps += (this.s.crewCounts[c.id] ?? 0) * c.tapsPerSec;
-      const gain = Math.round(rps * away * 0.5); // offline earns at 50%
+      const rate = this.s.labOwned?.includes('lab_offline') ? 0.8 : 0.5;
+      const gain = Math.round(rps * away * rate);
       if (gain > 0) {
         this.s.respect += gain;
         this.s.opponentProgress += gain;
