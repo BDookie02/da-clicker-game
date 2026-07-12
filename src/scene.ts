@@ -94,7 +94,7 @@ export class GameScene {
   // vertical world-height the eye-contact view frames at the opponent's
   // distance — the FOV is derived from this so the driver stays the same
   // prominent size on any screen shape (portrait phones included)
-  private static readonly FRAME_H = 3.1;
+  private static readonly FRAME_H = 4.7;
   private opponentGroup = new THREE.Group();  // car + goop, shaken as a unit
   private opponentAnchor = new THREE.Group(); // world placement
   private nextAnchor = new THREE.Group();     // next rival, staged at the next light
