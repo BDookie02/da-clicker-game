@@ -669,6 +669,8 @@ export class GameScene {
   private garageFP = false;
   private fpYaw = 0;          // first-person head yaw (0 = windshield)
   private fpPitch = -0.08;    // slight natural downward gaze at the dash
+  private fpZoom = 1;         // first-person zoom (FOV scale)
+  private garageDist = 5.6;   // third-person orbit radius
   private garageDecal: THREE.Mesh | null = null;
   private garageOrn: THREE.Mesh | null = null;
   private garageGoopTop: THREE.MeshLambertMaterial | null = null;
@@ -880,6 +882,15 @@ export class GameScene {
     if (this.garageFP) { this.fpYaw = 0; this.fpPitch = -0.08; } // face the windshield
   }
 
+  /** pinch/wheel zoom: third-person changes orbit distance, first-person FOV */
+  garageZoom(delta: number) {
+    if (this.garageFP) {
+      this.fpZoom = Math.min(1.6, Math.max(0.55, this.fpZoom + delta * 0.4));
+    } else {
+      this.garageDist = Math.min(9, Math.max(2.6, this.garageDist + delta));
+    }
+  }
+
   setGarageCosmetics(decal?: string, ornament?: string, goop?: string) {
     if (!this.garageBuilt || !this.garageCar) return;
     if (this.garageDecal) { this.garageCar.remove(this.garageDecal); this.garageDecal = null; }
@@ -981,6 +992,8 @@ export class GameScene {
       const GO = GameScene.GO;
       if (this.garageFP) {
         // driver's seat with free look: swipe to look around the cabin
+        this.garageCam.fov = 62 / this.fpZoom;
+        this.garageCam.updateProjectionMatrix();
         const eye = new THREE.Vector3(GO.x - 0.42, GO.y + 1.3, GO.z - 0.12);
         this.garageCam.position.copy(eye);
         this.garageCam.lookAt(
@@ -989,7 +1002,8 @@ export class GameScene {
           eye.z + Math.cos(this.fpYaw) * Math.cos(this.fpPitch),
         );
       } else {
-        const r = 5.6;
+        if (this.garageCam.fov !== 62) { this.garageCam.fov = 62; this.garageCam.updateProjectionMatrix(); }
+        const r = this.garageDist;
         this.garageCam.position.set(
           GO.x + Math.sin(this.garageYaw) * Math.cos(this.garagePitch) * r,
           GO.y + 0.6 + Math.sin(this.garagePitch) * r,

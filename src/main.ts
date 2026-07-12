@@ -156,34 +156,75 @@ const onTap = (ev: Event) => {
   ev.preventDefault();
 };
 
-// garage controls: swipe to orbit the car, clean tap to hop in/out of the seat
+// A fixed, always-on-top EXIT button — can never be covered by the sheet or
+// canvas, so leaving the garage always works on any screen/aspect.
+let garageExitBtn: HTMLButtonElement | null = null;
+function showGarageExit() {
+  if (garageExitBtn) return;
+  const b = document.createElement('button');
+  b.className = 'garage-exit-fixed';
+  b.textContent = '‹ EXIT GARAGE';
+  b.addEventListener('click', (e) => { e.stopPropagation(); ui.close(); });
+  b.addEventListener('pointerdown', (e) => e.stopPropagation());
+  document.body.appendChild(b);
+  garageExitBtn = b;
+}
+function hideGarageExit() { garageExitBtn?.remove(); garageExitBtn = null; }
+
+// garage controls: swipe to orbit / look, pinch to zoom, tap to sit in/out
 ui.onGarage = (open) => {
-  // seamless: quick black dip, HUD hides inside the garage
   ui.quickFade(() => {
     document.body.classList.toggle('in-garage', open);
-    if (open) { scene.enterGarage(); applyCosmetics(); }
-    else scene.exitGarage();
+    if (open) { scene.enterGarage(); applyCosmetics(); showGarageExit(); }
+    else { scene.exitGarage(); hideGarageExit(); }
   });
 };
-let gDrag: { x: number; y: number; moved: boolean } | null = null;
+
+const gPointers = new Map<number, { x: number; y: number }>();
+let gMoved = false;
+let gPinchDist = 0;
+const isUI = (t: EventTarget | null) =>
+  !!(t as HTMLElement)?.closest?.('.panel, .menu-row, button, .ad-overlay, .garage-exit-fixed');
+
 window.addEventListener('pointerdown', (ev) => {
-  if (!scene.inGarage) return;
-  if ((ev.target as HTMLElement).closest('.panel, .menu-row, button, .ad-overlay')) return;
-  gDrag = { x: ev.clientX, y: ev.clientY, moved: false };
+  if (!scene.inGarage || isUI(ev.target)) return;
+  gPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (gPointers.size === 1) gMoved = false;
+  if (gPointers.size === 2) {
+    const [a, b] = [...gPointers.values()];
+    gPinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+  }
 });
 window.addEventListener('pointermove', (ev) => {
-  if (!scene.inGarage || !gDrag) return;
-  const dx = ev.clientX - gDrag.x, dy = ev.clientY - gDrag.y;
-  if (Math.abs(dx) + Math.abs(dy) > 4) gDrag.moved = true;
-  scene.garageSwipe(dx, dy);
-  gDrag.x = ev.clientX;
-  gDrag.y = ev.clientY;
+  const p = gPointers.get(ev.pointerId);
+  if (!scene.inGarage || !p) return;
+  const dx = ev.clientX - p.x, dy = ev.clientY - p.y;
+  p.x = ev.clientX; p.y = ev.clientY;
+  if (gPointers.size >= 2) {
+    // pinch: change orbit zoom by the two-finger spread delta
+    const [a, b] = [...gPointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (gPinchDist) scene.garageZoom((gPinchDist - d) * 0.01);
+    gPinchDist = d;
+    gMoved = true;
+  } else {
+    if (Math.abs(dx) + Math.abs(dy) > 4) gMoved = true;
+    scene.garageSwipe(dx, dy);
+  }
 });
-window.addEventListener('pointerup', () => {
-  if (!scene.inGarage || !gDrag) return;
-  if (!gDrag.moved) scene.garageTap();
-  gDrag = null;
-});
+const endPointer = (ev: PointerEvent) => {
+  if (!gPointers.has(ev.pointerId)) return;
+  const wasSingle = gPointers.size === 1;
+  gPointers.delete(ev.pointerId);
+  if (scene.inGarage && wasSingle && !gMoved) scene.garageTap();
+  if (gPointers.size < 2) gPinchDist = 0;
+};
+window.addEventListener('pointerup', endPointer);
+window.addEventListener('pointercancel', endPointer);
+// mouse wheel = zoom on desktop
+window.addEventListener('wheel', (ev) => {
+  if (scene.inGarage && !isUI(ev.target)) scene.garageZoom(ev.deltaY * 0.003);
+}, { passive: true });
 canvas.addEventListener('pointerdown', onTap);
 document.getElementById('app')!.addEventListener('pointerdown', onTap);
 

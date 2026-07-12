@@ -129,10 +129,28 @@ body.in-garage .quick-buy { display: none; }
   bottom: max(10px, env(safe-area-inset-bottom));
   left: 8px;
   right: 8px;
-  display: flex;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
   z-index: 10;
 }
+/* always-reachable garage exit — fixed, above everything */
+.garage-exit-fixed {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  z-index: 100;
+  font-family: inherit;
+  font-weight: bold;
+  font-size: 13px;
+  color: #ffd890;
+  background: rgba(20, 20, 34, 0.92);
+  border: 2px solid #e66a2a;
+  border-bottom-width: 4px;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+.garage-exit-fixed:active { transform: translateY(2px); border-bottom-width: 2px; }
 .menu-row button, .panel button, .ad-skip {
   font-family: inherit;
   font-weight: bold;
@@ -147,6 +165,15 @@ body.in-garage .quick-buy { display: none; }
 }
 .menu-row button:active, .panel button:active { transform: translateY(2px); border-bottom-width: 2px; }
 .menu-row button.hot { border-color: #e66a2a; color: #ffd890; }
+/* grid cells: shrink to fit, clip long labels instead of overlapping */
+.menu-row button {
+  min-width: 0;
+  font-size: clamp(8px, 2.6vw, 11px);
+  padding: 10px 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .panel {
   position: absolute;
