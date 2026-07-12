@@ -106,6 +106,7 @@ export class GameScene {
   private sprite: THREE.Object3D | null = null; // 2D driver billboard
   private spriteSlot = '';
   private spriteAnger = -1;
+  private spriteHasCustom = false;
   private spritePos = new THREE.Vector3();
   private lampMats: THREE.MeshBasicMaterial[] = [];
   private dashDecal: THREE.Mesh | null = null;
@@ -469,6 +470,7 @@ export class GameScene {
     this.spriteSlot = def.spriteSlot;
     this.spritePos.copy(mount.position);
     this.spriteAnger = -1;
+    this.spriteHasCustom = false; // re-detect custom art for this opponent
     this.setDriverAnger(0);
     this.gaze = 'opponent'; // new rival at the light: head turns to face them
     this.reframe();         // re-derive FOV for this car's distance
@@ -479,28 +481,37 @@ export class GameScene {
     const a = Math.max(0, Math.min(4, Math.floor(tier)));
     if (a === this.spriteAnger || !this.spriteSlot) return;
     this.spriteAnger = a;
+    const slot = this.spriteSlot;
+
+    // apply custom art to a sprite: per-tier <slot>_a<tier>.png if present,
+    // else single <slot>.png with a per-tier red tint. Sets spriteHasCustom
+    // so future tier changes reuse this sprite instead of flashing procedural.
+    const applyCustom = (sprite: THREE.Sprite) => {
+      loadCustomSprite(`${slot}_a${a}`, (tex) => {
+        if (this.spriteSlot !== slot || this.spriteAnger !== a || sprite !== this.sprite) return;
+        const m = sprite.material as THREE.SpriteMaterial;
+        m.map = tex; m.color.setHex(0xffffff); m.needsUpdate = true;
+        this.spriteHasCustom = true;
+      }, () => loadCustomSprite(slot, (tex) => {
+        if (this.spriteSlot !== slot || sprite !== this.sprite) return;
+        const m = sprite.material as THREE.SpriteMaterial;
+        m.map = tex;
+        m.color.setHex([0xffffff, 0xffd8cc, 0xffb4a0, 0xff8a70, 0xff5a44][a]);
+        m.needsUpdate = true;
+        this.spriteHasCustom = true;
+      }));
+    };
+
+    // custom face already showing → just update it in place (no flash)
+    if (this.sprite && this.spriteHasCustom) { applyCustom(this.sprite as THREE.Sprite); return; }
+
+    // otherwise (re)build the procedural face, then upgrade to custom art
     if (this.sprite) this.opponentGroup.remove(this.sprite);
-    const driver = makeDriverSprite(this.spriteSlot, a);
+    const driver = makeDriverSprite(slot, a);
     driver.position.copy(this.spritePos);
     this.opponentGroup.add(driver);
     this.sprite = driver;
-    // final art drop-in, best match first:
-    //   sprites/<slot>_a<tier>.png  (full anger stage art)
-    //   sprites/<slot>.png          (single image, anger = red tint)
-    const slot = this.spriteSlot;
-    loadCustomSprite(`${slot}_a${a}`, (tex) => {
-      if (this.spriteSlot !== slot || this.spriteAnger !== a || !this.sprite) return;
-      const m = (this.sprite as THREE.Sprite).material as THREE.SpriteMaterial;
-      m.map = tex;
-      m.color.setHex(0xffffff);
-      m.needsUpdate = true;
-    }, () => loadCustomSprite(slot, (tex) => {
-      if (this.spriteSlot !== slot || !this.sprite) return;
-      const m = (this.sprite as THREE.Sprite).material as THREE.SpriteMaterial;
-      m.map = tex;
-      m.color.setHex([0xffffff, 0xffd8cc, 0xffb4a0, 0xff8a70, 0xff5a44][a]);
-      m.needsUpdate = true;
-    }));
+    applyCustom(driver);
   }
 
   // Real PS1-style low-poly bodies: each car is an extruded side-profile

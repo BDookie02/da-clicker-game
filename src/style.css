@@ -57,9 +57,9 @@ html, body {
   cursor: pointer;
   color: #e8e8f0;
 }
-.stat .k { display: block; font-size: 9px; color: #8a8ab0; letter-spacing: 1px; }
-.stat .v { display: block; font-size: 15px; text-shadow: 2px 2px 0 #000; }
-.stat .v.gold { color: #e6c84a; }
+.stat .k { display: block; font-size: clamp(10px, 2.6vw, 12px); color: #a0a0c8; letter-spacing: 1px; }
+.stat .v { display: block; font-size: clamp(16px, 4.4vw, 20px); text-shadow: 2px 2px 0 #000; }
+.stat .v.gold { color: #f2d24a; }
 
 .quick-buy {
   position: absolute;
@@ -107,8 +107,8 @@ body.in-garage .quick-buy { display: none; }
   z-index: 10;
   text-align: center;
 }
-.opp-name { font-size: 13px; letter-spacing: 1px; text-shadow: 2px 2px 0 #000; }
-.opp-blurb { font-size: 10px; color: #9a9ac0; margin-top: 3px; text-shadow: 1px 1px 0 #000; }
+.opp-name { font-size: clamp(15px, 4vw, 19px); letter-spacing: 1px; text-shadow: 2px 2px 0 #000; }
+.opp-blurb { font-size: clamp(12px, 3.2vw, 14px); color: #b4b4d8; margin-top: 4px; text-shadow: 1px 1px 0 #000; line-height: 1.35; }
 .bar {
   position: relative;
   height: 14px;
@@ -191,7 +191,7 @@ body.in-garage .quick-buy { display: none; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 14px;
+  font-size: clamp(16px, 4.2vw, 19px);
   letter-spacing: 2px;
   color: #ffd890;
   margin-bottom: 8px;
@@ -212,7 +212,7 @@ body.in-garage .quick-buy { display: none; }
   display: flex; gap: 8px; justify-content: space-between;
 }
 .garage-bar button { flex: 1; padding: 12px 8px; }
-.panel-note { font-size: 10px; color: #8a8ab0; margin-bottom: 8px; line-height: 1.5; }
+.panel-note { font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-bottom: 8px; line-height: 1.55; }
 .row {
   display: flex;
   align-items: center;
@@ -221,9 +221,9 @@ body.in-garage .quick-buy { display: none; }
   border-bottom: 1px solid #22223a;
 }
 .row-txt { flex: 1; min-width: 0; }
-.row-name { font-size: 12px; }
-.row-desc { font-size: 10px; color: #8a8ab0; margin-top: 2px; }
-.row button { flex: 0 0 92px; padding: 8px 4px; font-size: 10px; }
+.row-name { font-size: clamp(13px, 3.4vw, 15px); }
+.row-desc { font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-top: 3px; line-height: 1.4; }
+.row button { flex: 0 0 100px; padding: 10px 4px; font-size: clamp(11px, 3vw, 13px); }
 .row button:disabled { opacity: 0.4; cursor: default; }
 
 /* worldwide leaderboard list */
@@ -261,8 +261,8 @@ body.in-garage .quick-buy { display: none; }
 .toast {
   background: rgba(8, 8, 18, 0.9);
   border: 2px solid #4a4a70;
-  padding: 6px 14px;
-  font-size: 12px;
+  padding: 8px 16px;
+  font-size: clamp(13px, 3.4vw, 15px);
   opacity: 0;
   transform: translateY(-8px);
   transition: all 0.3s;
