@@ -608,7 +608,7 @@ export class GameScene {
       add(new THREE.BoxGeometry(1.9, 1.35, 3.4), body, 0, 0.875, 0);   // lower body, top ~1.55
       interior();                                                       // seat/dash/wheel at the sill
       add(new THREE.BoxGeometry(1.75, 0.78, 1.7), glass, 0, 1.94, 0.15); // greenhouse above the body
-      add(new THREE.BoxGeometry(1.82, 0.1, 1.78), body, 0, 2.33, 0.15);  // roof cap
+      // cube roof cap removed — open-top
       for (const [x, z] of [[-1, 1.2], [1, 1.2], [-1, -1.2], [1, -1.2]] as const)
         add(new THREE.BoxGeometry(0.5, 0.7, 0.7), tire, x * 1.0, 0.35, z);
       lights(0.9, 0.9);
@@ -620,7 +620,7 @@ export class GameScene {
       P([[-3.75, 0.35], [-3.75, 1.0], [3.35, 1.0], [3.75, 0.75], [3.75, 0.35]], 2.4, body);
       interior();
       P([[-3.55, 1.0], [-3.55, 1.8], [3.15, 1.8], [3.6, 1.05]], 2.3, glass);
-      P([[-3.6, 1.8], [-3.6, 1.94], [3.2, 1.94], [3.2, 1.8]], 2.42, body);
+      // bus roof removed — open-top
       add(new THREE.BoxGeometry(2.5, 0.3, long * 0.98), trim, 0, 0.32, 0);
       wheels(0.42, long * 0.34, 0.42);
       lights(0.7, 0.7);
@@ -673,7 +673,7 @@ export class GameScene {
     P(low, 1.9, body);
     interior();
     P(gls, 1.78, glass);
-    P([[roofSpan[0], gls[1][1]], [roofSpan[0], gls[1][1] + 0.1], [roofSpan[1], gls[1][1] + 0.1], [roofSpan[1], gls[1][1]]], 1.84, body);
+    // roof removed — open-top so the interior bay + driver are exposed
     add(new THREE.BoxGeometry(2.02, 0.14, long * 0.96), trim, 0, 0.3, 0);
     wheels(s === 'wedge' ? 0.32 : 0.36);
     lights(s === 'wedge' ? 0.42 : 0.78, s === 'wedge' ? 0.5 : 0.78);
