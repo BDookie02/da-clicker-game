@@ -592,9 +592,14 @@ export class GameScene {
     // a real cabin interior: two seats, a dashboard, and a steering wheel in
     // front of the driver — all sized to the window so they read through glass
     const interior = () => {
+      // seat backrest top sits JUST BELOW the driver's neck (his sprite center)
+      const dp = GameScene.driverPlace(s);
+      const backTop = dp.y - GameScene.bodyDrop(s) - 0.05; // local space
+      const backH = 0.34;
+      const backCY = backTop - backH / 2;
       for (const px of [0.45, -0.45]) {
-        add(new THREE.BoxGeometry(0.6, 0.1, 0.5), seatM, px, cab.sill + 0.02, cab.z - 0.12);   // cushion
-        add(new THREE.BoxGeometry(0.6, 0.44, 0.12), seatM, px, cab.sill + 0.23, cab.z - 0.34); // backrest
+        add(new THREE.BoxGeometry(0.6, 0.1, 0.5), seatM, px, backCY - backH / 2 + 0.02, cab.z - 0.05); // cushion
+        add(new THREE.BoxGeometry(0.6, backH, 0.12), seatM, px, backCY, cab.z - 0.34);                 // backrest
       }
       add(new THREE.BoxGeometry(1.66, 0.16, 0.26), dashM, 0, cab.sill + 0.06, cab.z + 0.52);   // dashboard
       const sw = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.03, 6, 12), dashM);            // wheel
