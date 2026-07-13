@@ -6,6 +6,7 @@ import { API_URL, getDistrict } from './config';
 import { getWorldList, initLeaderboards, submitScoreRemote, type LeaderboardProvider } from './leaderboard';
 import { LocalUsernameService, RemoteUsernameService } from './username';
 import { initAds } from './ads';
+import { initPurchases } from './purchases';
 
 const game = new Game();
 // debug/testing handles (harmless in prod; used by automated checks)
@@ -220,6 +221,29 @@ const endPointer = (ev: PointerEvent) => {
   if (gPointers.size < 2) gPinchDist = 0;
 };
 scene.onGarageShop = () => ui.openGarageShop();
+
+// wire the premium-currency (M) store provider
+initPurchases().then((p) => { ui.purchases = p; });
+
+// green bouncing arrow that hovers over the garage laptop to say "tap here"
+const shopArrow = document.createElement('div');
+shopArrow.className = 'garage-arrow';
+shopArrow.textContent = '▼';
+shopArrow.hidden = true;
+document.body.appendChild(shopArrow);
+function updateShopArrow() {
+  const p = scene.garageLaptopScreen();
+  const shopOpen = ui.isPanelOpen && !document.querySelector('.panel.collapsed');
+  if (p && scene.inGarage && !shopOpen) {
+    shopArrow.hidden = false;
+    shopArrow.style.left = `${p.x}px`;
+    shopArrow.style.top = `${p.y - 54}px`;
+  } else {
+    shopArrow.hidden = true;
+  }
+  requestAnimationFrame(updateShopArrow);
+}
+requestAnimationFrame(updateShopArrow);
 window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', endPointer);
 // mouse wheel = zoom on desktop

@@ -8,6 +8,7 @@ import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
 import { PlaceholderAdProvider, type AdProvider } from './ads';
+import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -19,6 +20,7 @@ function el(tag: string, cls?: string, html?: string): HTMLElement {
 export class UI {
   root: HTMLElement;
   ads: AdProvider = new PlaceholderAdProvider();
+  purchases: PurchaseProvider = new PlaceholderPurchases();
   private panel: HTMLElement | null = null;
   private bars: Record<string, HTMLElement> = {};
   private fade: HTMLElement;
@@ -174,6 +176,76 @@ export class UI {
     });
   }
 
+  /** The M (Mentality) store: buy premium currency with real money, or watch
+   *  a rewarded ad for a small amount (roughly the ad's worth). */
+  showMShop() {
+    const ov = el('div', 'ad-overlay');
+    const packRows = M_PACKS.map(p => `
+      <div class="row">
+        <div class="row-txt"><div class="row-name">💎 ${fmt(p.amount)} M${p.tag ? ` <span class="mtag">${p.tag}</span>` : ''}</div>
+          <div class="row-desc">${p.bonus ? `${p.bonus} bonus` : 'Starter pack'}</div></div>
+        <button data-pack="${p.id}">${p.price}</button>
+      </div>`).join('');
+    ov.innerHTML = `
+      <div class="ad-box mshop">
+        <div class="panel-head">GET MORE M<button class="x">✕</button></div>
+        <div class="panel-note">M is premium currency for cosmetics & The Lab. Buy it, or watch an ad for a little.</div>
+        <div class="row mshop-ad">
+          <div class="row-txt"><div class="row-name">📺 Watch ad → +${AD_M_REWARD} M</div>
+            <div class="row-desc">Free. As much M as the ad is worth.</div></div>
+          <button class="m-ad">WATCH</button>
+        </div>
+        ${packRows}
+      </div>`;
+    document.body.appendChild(ov);
+    const close = () => ov.remove();
+    ov.querySelector('.x')!.addEventListener('click', close);
+    ov.querySelector('.m-ad')!.addEventListener('click', async () => {
+      const watched = await this.ads.show(15);
+      if (watched) {
+        this.game.s.mentality += AD_M_REWARD;
+        this.game.save();
+        sfx.buy();
+        this.toast(`+${AD_M_REWARD} M`, 'gold');
+        this.refresh();
+      }
+    });
+    ov.querySelectorAll('.row button[data-pack]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        const pack = M_PACKS.find(p => p.id === (b as HTMLElement).dataset.pack)!;
+        const ok = await this.purchases.buy(pack);
+        if (ok) {
+          this.game.s.mentality += pack.amount;
+          this.game.save();
+          sfx.buy();
+          this.toast(`Purchased ${fmt(pack.amount)} M!`, 'gold');
+          this.refresh();
+        }
+      });
+    });
+  }
+
+  /** Shown when a purchase fails for lack of M — routes to the M store. */
+  needMoreM(shortBy?: number) {
+    const ov = el('div', 'ad-overlay');
+    ov.innerHTML = `
+      <div class="ad-box">
+        <div class="ad-label">NOT ENOUGH M</div>
+        <div class="ad-screen">
+          <div class="ad-art">💎</div>
+          <div class="ad-copy">You need more <b style="color:#e6c84a">M</b>${shortBy ? ` (${fmt(shortBy)} short)` : ''}.<br/>
+          Watch an ad to earn some, or grab a pack.</div>
+        </div>
+        <div class="name-actions">
+          <button class="nm-cancel">NOT NOW</button>
+          <button class="nm-shop">📺 GET M</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('.nm-cancel')!.addEventListener('click', () => ov.remove());
+    ov.querySelector('.nm-shop')!.addEventListener('click', () => { ov.remove(); this.showMShop(); });
+  }
+
   /** Laptop tapped in the garage → expand the cosmetics shop sheet. */
   openGarageShop() {
     if (this.openTab !== 'garage') return;
@@ -277,7 +349,7 @@ export class UI {
       for (const l of LAB) {
         const owned = g.hasLab(l.id);
         rows.push(row(l.id, `${l.name}${owned ? ' ✓' : ''}`, l.desc,
-          owned ? 'OWNED' : `${l.cost} M`, !owned && g.s.mentality >= l.cost, 'lab'));
+          owned ? 'OWNED' : `${l.cost} M`, !owned, 'lab')); // clickable even if unaffordable → prompt
       }
     } else if (this.openTab === 'crew') {
       for (const c of CREW) {
@@ -296,12 +368,15 @@ export class UI {
           <span>GARAGE</span>
           <button class="g-collapse">▾ HIDE</button></div>`);
         rows.push(`<div class="panel-note">Swipe the car to rotate · tap it to sit inside. Equip cosmetics to see them on your ride.</div>`);
+        // premium currency store — buy M or watch an ad for it
+        rows.push(row('getm', `💎 Get More M — you have ${fmt(g.s.mentality)}`,
+          'Buy premium M, or watch an ad for a little.', 'STORE', true, 'getm'));
         for (const c of COSMETICS) {
           const owned = g.s.ownedCosmetics.includes(c.id);
           const equipped = g.s.equippedCosmetics[c.slot] === c.id;
           rows.push(row(c.id, `${c.name}${equipped ? ' ✓' : ''}`, c.desc,
             owned ? (equipped ? 'UNEQUIP' : 'EQUIP') : `${c.cost} M`,
-            owned || g.s.mentality >= c.cost, 'cosmetic'));
+            true, 'cosmetic')); // always clickable → buy or "need more M" prompt
         }
       } else {
         rows.length = 0; // collapsed: just controls, car fully visible
@@ -378,12 +453,21 @@ export class UI {
         this.prestigeArmed = false;
         if (g.prestige()) { this.close(); return; }
       }
-    } else if (kind === 'lab') { if (g.buyLab(id)) sfx.buy(); }
+    } else if (kind === 'lab') {
+      const l = LAB.find(x => x.id === id);
+      if (g.buyLab(id)) sfx.buy();
+      else if (l && !g.hasLab(id) && g.s.mentality < l.cost) { this.needMoreM(l.cost - g.s.mentality); return; }
+    }
     else if (kind === 'upgrades') { if (g.buyUpgrade(id)) sfx.buy(); }
     else if (kind === 'crew') { if (g.buyCrew(id)) sfx.buy(); }
+    else if (kind === 'getm') { this.showMShop(); return; }
     else if (kind === 'cosmetic') {
+      const c = COSMETICS.find(x => x.id === id);
       if (g.s.ownedCosmetics.includes(id)) g.toggleCosmetic(id);
-      else if (!g.buyCosmetic(id)) return;
+      else if (!g.buyCosmetic(id)) {
+        if (c && g.s.mentality < c.cost) this.needMoreM(c.cost - g.s.mentality);
+        return;
+      }
       sfx.buy();
       this.onCosmeticsChanged();
     } else if (kind === 'lb') {

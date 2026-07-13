@@ -151,6 +151,22 @@ body.in-garage .quick-buy { display: none; }
   cursor: pointer;
 }
 .garage-exit-fixed:active { transform: translateY(2px); border-bottom-width: 2px; }
+/* bouncing green arrow pointing at the garage shop laptop */
+.garage-arrow {
+  position: fixed;
+  z-index: 95;
+  transform: translateX(-50%);
+  color: #4ae66a;
+  font-size: 34px;
+  text-shadow: 0 0 8px #4ae66a, 2px 2px 0 #000;
+  pointer-events: none;
+  animation: arrowbob 0.7s ease-in-out infinite alternate;
+}
+@keyframes arrowbob { from { margin-top: -8px; } to { margin-top: 8px; } }
+/* M store */
+.ad-box.mshop { max-height: 80vh; overflow-y: auto; text-align: left; width: min(94vw, 420px); }
+.mtag { color: #4ae66a; font-size: 9px; border: 1px solid #4ae66a; padding: 1px 4px; letter-spacing: 1px; }
+.mshop-ad { border-bottom: 2px solid #4a4a70; }
 .menu-row button, .panel button, .ad-skip {
   font-family: inherit;
   font-weight: bold;

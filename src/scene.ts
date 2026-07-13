@@ -798,21 +798,9 @@ export class GameScene {
     this.garageCar.add(wheel);
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
-    // upgrade to the real Higgsfield PS1 car mesh when it loads (procedural
-    // above is the instant fallback); snap + flat-shade it into the pipeline
-    this.loadCarMesh('models/car_sedan_meshy.glb', (mesh) => {
-      if (!this.garageCar) return;
-      // hide the procedural body but keep the interior kit (dash/wheel/seats)
-      for (const c of [...this.garageCar.children]) {
-        if ((c as THREE.Mesh).geometry) (c as THREE.Mesh).visible = false;
-      }
-      mesh.position.set(0, 0, 0);
-      this.garageCar.add(mesh);
-      this.garageMeshReady = true;
-    }); // keep meshy's own baked PS1 texture
+    // NOTE: the procedural car is the customizable one — cosmetics (paint,
+    // decal, ornament, goop) apply to it. No Higgsfield mesh overlay here.
   }
-
-  private garageMeshReady = false;
 
   /** Load a GLB, normalize it to ~4-unit length sitting on the floor, apply
    *  the PSX vertex-snap + flat shading, and hand back the prepared group. */
@@ -933,6 +921,17 @@ export class GameScene {
     }
     this.garageFP = !this.garageFP;
     if (this.garageFP) { this.fpYaw = 0; this.fpPitch = -0.08; } // face the windshield
+  }
+
+  /** Screen position of the garage laptop (for the "open shop" arrow), or
+   *  null when it's behind the camera / not in third-person garage view. */
+  garageLaptopScreen(): { x: number; y: number } | null {
+    if (!this.garageMode || this.garageFP || !this.garageLaptop) return null;
+    const n = new THREE.Vector3();
+    this.garageLaptop.getWorldPosition(n);
+    n.project(this.garageCam);
+    if (n.z > 1) return null; // behind camera
+    return { x: (n.x * 0.5 + 0.5) * window.innerWidth, y: (-n.y * 0.5 + 0.5) * window.innerHeight };
   }
 
   /** pinch/wheel zoom: third-person changes orbit distance, first-person FOV */
