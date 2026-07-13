@@ -107,6 +107,7 @@ export class GameScene {
   private spriteSlot = '';
   private spriteAnger = -1;
   private spriteHasCustom = false;
+  private driverScale = 0.65; // sprite scale for the current opponent (per cabin)
   private spritePos = new THREE.Vector3();
   private lampMats: THREE.MeshBasicMaterial[] = [];
   private dashDecal: THREE.Mesh | null = null;
@@ -425,18 +426,40 @@ export class GameScene {
   /** the driver's SEAT anchor per body style (head height + cabin position) —
    *  sprites mount here and the eye-contact gaze tracks it, so drivers sit in
    *  the actual driver's seat on every silhouette */
-  private static seatFor(style: OpponentDef['carStyle']): { y: number; z: number } {
+  // Each cabin's window in LOCAL car space: sill = bottom of glass, roof = top
+  // of glass, z = the driver seat front/back. The driver's SIZE and HEIGHT are
+  // derived from this (below) so he always sits in the seat with headroom to
+  // the ceiling — never clipping or floating — on every vehicle.
+  private static cabinFor(style: OpponentDef['carStyle']): { sill: number; roof: number; z: number } {
     switch (style) {
-      case 'cube':     return { y: 2.0,  z: 0.1 };
-      case 'metro':    return { y: 1.5,  z: 2.7 };  // bus driver up front
-      case 'van':      return { y: 1.42, z: 1.1 };
-      case 'pickup':   return { y: 1.3,  z: 0.75 }; // in the cab, not the bed
-      case 'muscle':   return { y: 1.18, z: -0.5 }; // rear-set cabin
-      case 'wedge':    return { y: 0.92, z: -0.2 };
-      case 'limo':     return { y: 1.22, z: 1.2 };  // chauffeur up front
-      case 'lowrider': return { y: 1.02, z: 0.05 };
-      default:         return { y: 1.22, z: 0.05 }; // sedan family
+      case 'cube':     return { sill: 1.42, roof: 2.28, z: 0.15 };
+      case 'metro':    return { sill: 1.05, roof: 1.78, z: 2.7 };
+      case 'van':      return { sill: 1.05, roof: 1.76, z: 1.1 };
+      case 'pickup':   return { sill: 1.0,  roof: 1.48, z: 0.7 };
+      case 'muscle':   return { sill: 0.98, roof: 1.38, z: -0.5 };
+      case 'wedge':    return { sill: 0.76, roof: 1.10, z: -0.2 };
+      case 'limo':     return { sill: 1.0,  roof: 1.40, z: 1.2 };
+      case 'hatch':
+      case 'compact':  return { sill: 1.0,  roof: 1.43, z: -0.25 };
+      default:         return { sill: 1.0,  roof: 1.44, z: 0.1 }; // sedan/taxi/lowrider/divine
     }
+  }
+
+  /** vertical translate applied to the car mesh (lowrider rides low); the
+   *  driver sprite (a sibling of the car) gets the same offset so it matches */
+  private static bodyDrop(style: OpponentDef['carStyle']): number {
+    return style === 'lowrider' ? -0.16 : 0;
+  }
+
+  /** driver sprite scale + world Y so his head fills the window with a clear
+   *  gap to the ceiling, seated above the cushion — universal across cars */
+  private static driverPlace(style: OpponentDef['carStyle']): { y: number; scale: number; z: number } {
+    const cab = GameScene.cabinFor(style);
+    const winH = cab.roof - cab.sill;
+    const scale = winH * 1.5;                   // big prominent head in the window
+    // seat him so head-top sits a clear gap below the roof (headroom visible)
+    const y = cab.roof - winH * 0.2 - scale * 0.48 + GameScene.bodyDrop(style);
+    return { y, scale, z: cab.z };
   }
 
   /** park a car nose-aligned with the player's bumper at intersection offset */
@@ -459,10 +482,11 @@ export class GameScene {
     // Driver's seat (car local +x = far lane side, like the meme: he's in his
     // seat, head turned, staring at you through the glass). The 2D character
     // billboard mounts here and always faces the player camera.
-    const seat = GameScene.seatFor(def.carStyle);
+    const dp = GameScene.driverPlace(def.carStyle);
+    this.driverScale = dp.scale;
     const mount = new THREE.Object3D();
     mount.name = `sprite:${def.spriteSlot}`;
-    mount.position.set(0.45, seat.y, seat.z);
+    mount.position.set(0.45, dp.y, dp.z);
     this.opponentGroup.add(mount);
     // Procedural placeholder driver (classic PS1 billboard) until the real
     // meme character art replaces it — seeded per slot so every driver looks
@@ -508,6 +532,7 @@ export class GameScene {
     // otherwise (re)build the procedural face, then upgrade to custom art
     if (this.sprite) this.opponentGroup.remove(this.sprite);
     const driver = makeDriverSprite(slot, a);
+    driver.scale.set(this.driverScale, this.driverScale, 1); // fit this cabin
     driver.position.copy(this.spritePos);
     this.opponentGroup.add(driver);
     this.sprite = driver;
@@ -540,7 +565,8 @@ export class GameScene {
 
     const s = def.carStyle;
     const long = GameScene.carLength(s);
-    const seat = GameScene.seatFor(s);
+    const cab = GameScene.cabinFor(s);
+    const dashM = this.mat(0x14161c);
 
     // shared dressing --------------------------------------------------------
     const wheels = (r = 0.36, span = long * 0.32, wy = r) => {
@@ -563,15 +589,24 @@ export class GameScene {
       add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, -0.6, tailY, -long / 2 + 0.02);
       add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, 0.6, tailY, -long / 2 + 0.02);
     };
-    const seats = (beltY: number) => {
-      add(new THREE.BoxGeometry(1.5, 0.14, 0.6), seatM, 0, beltY + 0.06, seat.z);
-      add(new THREE.BoxGeometry(1.5, 0.5, 0.16), seatM, 0, beltY + 0.28, seat.z - 0.35);
+    // a real cabin interior: two seats, a dashboard, and a steering wheel in
+    // front of the driver — all sized to the window so they read through glass
+    const interior = () => {
+      for (const px of [0.45, -0.45]) {
+        add(new THREE.BoxGeometry(0.6, 0.1, 0.5), seatM, px, cab.sill + 0.02, cab.z - 0.12);   // cushion
+        add(new THREE.BoxGeometry(0.6, 0.44, 0.12), seatM, px, cab.sill + 0.23, cab.z - 0.34); // backrest
+      }
+      add(new THREE.BoxGeometry(1.66, 0.16, 0.26), dashM, 0, cab.sill + 0.06, cab.z + 0.52);   // dashboard
+      const sw = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.03, 6, 12), dashM);            // wheel
+      sw.position.set(0.45, cab.sill + 0.14, cab.z + 0.34);
+      sw.rotation.x = -1.15;
+      g.add(sw);
     };
 
     if (s === 'cube') {
       // intentionally blocky — that's the joke
       add(new THREE.BoxGeometry(1.9, 1.6, 3.4), body, 0, 1.0, 0);
-      add(new THREE.BoxGeometry(1.4, 0.55, 0.8), seatM, 0, 1.6, seat.z);
+      add(new THREE.BoxGeometry(1.4, 0.55, 0.8), seatM, 0, 1.6, cab.z);
       add(new THREE.BoxGeometry(1.7, 0.9, 1.5), glass, 0, 1.85, 0.2);
       for (const [x, z] of [[-1, 1.2], [1, 1.2], [-1, -1.2], [1, -1.2]] as const)
         add(new THREE.BoxGeometry(0.5, 0.7, 0.7), tire, x * 1.0, 0.35, z);
@@ -582,7 +617,7 @@ export class GameScene {
     if (s === 'metro') {
       // city bus: sloped nose, long window band, driver up front
       P([[-3.75, 0.35], [-3.75, 1.0], [3.35, 1.0], [3.75, 0.75], [3.75, 0.35]], 2.4, body);
-      seats(1.0);
+      interior();
       P([[-3.55, 1.0], [-3.55, 1.8], [3.15, 1.8], [3.6, 1.05]], 2.3, glass);
       P([[-3.6, 1.8], [-3.6, 1.94], [3.2, 1.94], [3.2, 1.8]], 2.42, body);
       add(new THREE.BoxGeometry(2.5, 0.3, long * 0.98), trim, 0, 0.32, 0);
@@ -593,7 +628,7 @@ export class GameScene {
 
     // profile-extruded unibody styles ---------------------------------------
     type Pts = [number, number][];
-    let low: Pts, gls: Pts, roofSpan: [number, number], beltY = 0.98;
+    let low: Pts, gls: Pts, roofSpan: [number, number];
     switch (s) {
       case 'muscle':
         low = [[-2, 0.35], [-2, 0.95], [-1.2, 1.02], [-0.1, 0.95], [1.9, 0.88], [2, 0.6], [2, 0.35]];
@@ -604,7 +639,7 @@ export class GameScene {
         low = [[-2, 0.3], [-2, 0.75], [-1.3, 0.82], [0.2, 0.72], [2.05, 0.42], [2.05, 0.3]];
         gls = [[-1.25, 0.78], [-0.7, 1.12], [0.15, 1.12], [0.62, 0.72]];
         roofSpan = [-0.74, 0.19];
-        beltY = 0.78;
+
         break;
       case 'hatch':
       case 'compact':
@@ -616,7 +651,7 @@ export class GameScene {
         low = [[-2.3, 0.34], [-2.3, 1.0], [1.5, 1.0], [2.1, 0.9], [2.3, 0.6], [2.3, 0.34]];
         gls = [[-2.05, 1.0], [-2.0, 1.8], [1.35, 1.8], [1.85, 1.0]];
         roofSpan = [-2.04, 1.39];
-        beltY = 1.0;
+
         break;
       case 'pickup':
         low = [[-2.3, 0.34], [-2.3, 0.62], [0.05, 0.62], [0.05, 0.95], [1.35, 0.98], [2.05, 0.9], [2.3, 0.68], [2.3, 0.34]];
@@ -635,7 +670,7 @@ export class GameScene {
     }
 
     P(low, 1.9, body);
-    seats(beltY);
+    interior();
     P(gls, 1.78, glass);
     P([[roofSpan[0], gls[1][1]], [roofSpan[0], gls[1][1] + 0.1], [roofSpan[1], gls[1][1] + 0.1], [roofSpan[1], gls[1][1]]], 1.84, body);
     add(new THREE.BoxGeometry(2.02, 0.14, long * 0.96), trim, 0, 0.3, 0);
@@ -653,7 +688,7 @@ export class GameScene {
     }
     if (s === 'wedge') add(new THREE.BoxGeometry(1.7, 0.1, 0.4), trim, 0, 1.02, -1.75);
     if (s === 'muscle') add(new THREE.BoxGeometry(1.7, 0.12, 0.45), trim, 0, 1.14, -1.85);
-    if (s === 'lowrider') { g.position.y = -0.16; g.scale.y = 0.92; }
+    if (s === 'lowrider') g.position.y = -0.16; // pure drop, no scale (driver matches)
     if (s === 'divine') {
       const halo = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.06, 6, 14), new THREE.MeshBasicMaterial({ color: 0xfff8c0 }));
       halo.rotation.x = Math.PI / 2;
@@ -1027,9 +1062,10 @@ export class GameScene {
     this.setLightFor(far, 'red');
     this.nextAnchor.clear();
     this.nextAnchor.add(this.buildCar(nextDef));
-    const nseat = GameScene.seatFor(nextDef.carStyle);
+    const ndp = GameScene.driverPlace(nextDef.carStyle);
     const driver = makeDriverSprite(nextDef.spriteSlot, 0);
-    driver.position.set(0.45, nseat.y, nseat.z);
+    driver.scale.set(ndp.scale, ndp.scale, 1);
+    driver.position.set(0.45, ndp.y, ndp.z);
     this.nextAnchor.add(driver);
     this.nextAnchor.position.set(-2, 0, GameScene.parkZ(nextDef.carStyle, -GameScene.SPACING));
   }
@@ -1145,14 +1181,20 @@ export class GameScene {
   /** Derive vertical FOV so a fixed world-height frames at the opponent's
    *  distance — keeps the driver a consistent prominent size and centered
    *  across every aspect ratio, so eye contact works in portrait too. */
+  /** Frame so the OPPONENT'S HEAD is the hero — ~11% of screen height, dead
+   *  center. We zoom to the driver's actual head size (derived from his sprite
+   *  scale), so the face is prominent on every vehicle; the car is scaled up
+   *  around it and may run off-screen (that's intended). */
   private reframe() {
     const dist = this.camera.position.distanceTo(
       new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05,
         this.opponentAnchor.position.z - this.spritePos.z));
-    // narrow screens (portrait) get a touch more height so the car body still
-    // reads under the face; wide screens frame tighter on the face
+    const headWorld = 0.44 * this.driverScale;   // head ≈ top 44% of the bust
+    const targetFrac = 0.125;                     // head is the hero: ~12% of frame
+    // visible world-height that makes the head the target fraction; portrait
+    // gets a touch more height so a sliver of car reads under the face
     const aspect = this.camera.aspect;
-    const h = GameScene.FRAME_H * (aspect < 1 ? 1 + (1 - aspect) * 0.55 : 1);
+    const h = (headWorld / targetFrac) * (aspect < 1 ? 1 + (1 - aspect) * 0.4 : 1);
     this.camera.fov = 2 * Math.atan((h / 2) / Math.max(1, dist)) * (180 / Math.PI);
     this.camera.updateProjectionMatrix();
   }
