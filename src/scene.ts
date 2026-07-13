@@ -601,9 +601,11 @@ export class GameScene {
         add(new THREE.BoxGeometry(0.6, 0.1, 0.5), seatM, px, backCY - backH / 2 + 0.02, cab.z - 0.05); // cushion
         add(new THREE.BoxGeometry(0.6, backH, 0.12), seatM, px, backCY, cab.z - 0.34);                 // backrest
       }
-      add(new THREE.BoxGeometry(1.66, 0.16, 0.26), dashM, 0, cab.sill + 0.06, cab.z + 0.52);   // dashboard
-      const sw = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.03, 6, 12), dashM);            // wheel
-      sw.position.set(0.45, cab.sill + 0.14, cab.z + 0.34);
+      // steering wheel top sits just BELOW the driver's nose; dash below it
+      const wy = (dp.y - GameScene.bodyDrop(s)) - 0.06; // just under the nose (local)
+      add(new THREE.BoxGeometry(1.66, 0.16, 0.26), dashM, 0, wy - 0.16, cab.z + 0.52); // dashboard
+      const sw = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.03, 6, 12), dashM);    // wheel
+      sw.position.set(0.45, wy, cab.z + 0.34);
       sw.rotation.x = -1.15;
       g.add(sw);
     };
