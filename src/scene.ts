@@ -682,6 +682,8 @@ export class GameScene {
   private fpPitch = -0.08;    // slight natural downward gaze at the dash
   private fpZoom = 1;         // first-person zoom (FOV scale)
   private garageDist = 5.6;   // third-person orbit radius
+  private garageLaptop: THREE.Object3D | null = null; // tap it to open the shop
+  onGarageShop?: () => void;  // fired when the garage laptop is tapped
   private garageDecal: THREE.Mesh | null = null;
   private garageOrn: THREE.Mesh | null = null;
   private garageGoopTop: THREE.MeshLambertMaterial | null = null;
@@ -728,10 +730,42 @@ export class GameScene {
     const bulb = new THREE.PointLight(0xfff0d8, 60, 20);
     bulb.position.set(0, 4.2, 0);
     room.add(bulb);
-    // workbench + tire stack set dressing
-    const bench = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.0, 1.0), this.mat(0x5a4a3a));
-    bench.position.set(-5.0, 0.5, -5.8);
-    room.add(bench);
+    // shop desk with a laptop terminal (tap it to open the cosmetics shop)
+    const desk = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.9, 1), this.mat(0x5a4a3a));
+    desk.position.set(-5.2, 0.45, -5.6);
+    room.add(desk);
+    const legM = this.mat(0x2a2e2e);
+    for (const [lx, lz] of [[-1.2, -0.35], [-1.2, 0.35], [1.2, -0.35], [1.2, 0.35]] as const) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), legM);
+      leg.position.set(-5.2 + lx, 0, -5.6 + lz);
+      room.add(leg);
+    }
+    const laptop = new THREE.Group();
+    const lbase = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.04, 0.5), this.mat(0x2a2e2e));
+    lbase.position.set(0, 0.02, 0); laptop.add(lbase);
+    const lscreen = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.5, 0.03), this.mat(0x1c1e28));
+    lscreen.position.set(0, 0.27, -0.2); lscreen.rotation.x = 0.15; laptop.add(lscreen);
+    const lglow = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.38, 0.02), new THREE.MeshBasicMaterial({ color: 0x88d5ff }));
+    lglow.position.set(0, 0.26, -0.205); lglow.rotation.x = 0.15; laptop.add(lglow);
+    const lkeys = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.02, 0.38), this.mat(0x22262a));
+    lkeys.position.set(0, 0.04, 0.04); laptop.add(lkeys);
+    laptop.position.set(-5.2, 0.9, -5.6);
+    laptop.userData.isLaptop = true;
+    room.add(laptop);
+    this.garageLaptop = laptop;
+    // desk lamp
+    const lamp = new THREE.Group();
+    const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.05, 8), this.mat(0x3a3a3e));
+    lampBase.position.set(0, 0.025, 0); lamp.add(lampBase);
+    const lampStick = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 6), this.mat(0x2a2e2e));
+    lampStick.position.set(0, 0.2, 0); lampStick.rotation.z = 0.3; lamp.add(lampStick);
+    const lampShade = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.12, 8), this.mat(0x8a7a4a));
+    lampShade.position.set(0.1, 0.35, 0); lampShade.rotation.z = 0.3; lamp.add(lampShade);
+    const lampLight = new THREE.PointLight(0xffe8b0, 15, 3);
+    lampLight.position.set(0.1, 0.32, 0); lamp.add(lampLight);
+    lamp.position.set(-4.8, 0.9, -5.2);
+    room.add(lamp);
+    // tire stack set dressing
     const tireM = this.mat(0x18181c);
     for (let i = 0; i < 3; i++) {
       const t = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.3, 10), tireM);
@@ -887,8 +921,16 @@ export class GameScene {
     }
   }
 
-  /** tap toggles third-person orbit <-> first-person driver's seat */
-  garageTap() {
+  /** tap the laptop → open the shop; tap elsewhere → toggle first-person seat */
+  garageTap(x?: number, y?: number) {
+    if (this.garageLaptop && x !== undefined && y !== undefined) {
+      const n = new THREE.Vector3();
+      this.garageLaptop.getWorldPosition(n);
+      n.project(this.garageCam);
+      const sx = (n.x * 0.5 + 0.5) * window.innerWidth;
+      const sy = (-n.y * 0.5 + 0.5) * window.innerHeight;
+      if (Math.abs(sx - x) < 46 && Math.abs(sy - y) < 46) { this.onGarageShop?.(); return; }
+    }
     this.garageFP = !this.garageFP;
     if (this.garageFP) { this.fpYaw = 0; this.fpPitch = -0.08; } // face the windshield
   }

@@ -174,6 +174,15 @@ export class UI {
     });
   }
 
+  /** Laptop tapped in the garage → expand the cosmetics shop sheet. */
+  openGarageShop() {
+    if (this.openTab !== 'garage') return;
+    this.garageSheetOpen = true;
+    this.panel?.classList.remove('collapsed');
+    this.refreshPanel();
+    sfx.click();
+  }
+
   private toggle(tab: string) {
     if (this.openTab === tab) return this.close();
     this.openTab = tab;

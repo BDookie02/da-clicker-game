@@ -216,9 +216,10 @@ const endPointer = (ev: PointerEvent) => {
   if (!gPointers.has(ev.pointerId)) return;
   const wasSingle = gPointers.size === 1;
   gPointers.delete(ev.pointerId);
-  if (scene.inGarage && wasSingle && !gMoved) scene.garageTap();
+  if (scene.inGarage && wasSingle && !gMoved) scene.garageTap(ev.clientX, ev.clientY);
   if (gPointers.size < 2) gPinchDist = 0;
 };
+scene.onGarageShop = () => ui.openGarageShop();
 window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', endPointer);
 // mouse wheel = zoom on desktop
