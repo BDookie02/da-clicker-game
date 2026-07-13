@@ -432,7 +432,7 @@ export class GameScene {
   // the ceiling — never clipping or floating — on every vehicle.
   private static cabinFor(style: OpponentDef['carStyle']): { sill: number; roof: number; z: number } {
     switch (style) {
-      case 'cube':     return { sill: 1.42, roof: 2.28, z: 0.15 };
+      case 'cube':     return { sill: 1.55, roof: 2.28, z: 0.15 }; // greenhouse above the body
       case 'metro':    return { sill: 1.05, roof: 1.78, z: 2.7 };
       case 'van':      return { sill: 1.05, roof: 1.76, z: 1.1 };
       case 'pickup':   return { sill: 1.0,  roof: 1.48, z: 0.7 };
@@ -604,10 +604,11 @@ export class GameScene {
     };
 
     if (s === 'cube') {
-      // intentionally blocky — that's the joke
-      add(new THREE.BoxGeometry(1.9, 1.6, 3.4), body, 0, 1.0, 0);
-      add(new THREE.BoxGeometry(1.4, 0.55, 0.8), seatM, 0, 1.6, cab.z);
-      add(new THREE.BoxGeometry(1.7, 0.9, 1.5), glass, 0, 1.85, 0.2);
+      // blocky — the joke — but with a glass greenhouse so the driver shows
+      add(new THREE.BoxGeometry(1.9, 1.35, 3.4), body, 0, 0.875, 0);   // lower body, top ~1.55
+      interior();                                                       // seat/dash/wheel at the sill
+      add(new THREE.BoxGeometry(1.75, 0.78, 1.7), glass, 0, 1.94, 0.15); // greenhouse above the body
+      add(new THREE.BoxGeometry(1.82, 0.1, 1.78), body, 0, 2.33, 0.15);  // roof cap
       for (const [x, z] of [[-1, 1.2], [1, 1.2], [-1, -1.2], [1, -1.2]] as const)
         add(new THREE.BoxGeometry(0.5, 0.7, 0.7), tire, x * 1.0, 0.35, z);
       lights(0.9, 0.9);
