@@ -165,14 +165,19 @@ body.in-garage .quick-buy { display: none; }
 }
 .menu-row button:active, .panel button:active { transform: translateY(2px); border-bottom-width: 2px; }
 .menu-row button.hot { border-color: #e66a2a; color: #ffd890; }
-/* grid cells: shrink to fit, clip long labels instead of overlapping */
+/* grid cells: shrink to fit and WRAP labels (never truncate/overlap) */
 .menu-row button {
   min-width: 0;
-  font-size: clamp(8px, 2.6vw, 11px);
-  padding: 10px 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: clamp(9px, 2.6vw, 12px);
+  padding: 8px 1px;
+  line-height: 1.05;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 42px;
 }
 
 .panel {
