@@ -6,8 +6,30 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import sharp from 'sharp';
 
-const TOKEN = JSON.parse(readFileSync('.higgsfield-token.json', 'utf8')).access_token;
-const STYLE = '1997 PlayStation-era low-poly 3D rendered character portrait, triangulated low-polygon head, flat-shaded polygons, affine texture warping, dithered 15-bit color, jagged silhouette edges, retro console render, head and shoulders bust, facing viewer, unbroken eye contact with camera, original character: ';
+let TOKEN = JSON.parse(readFileSync('.higgsfield-token.json', 'utf8')).access_token;
+
+// Silent refresh via the stored refresh_token (access tokens are short-lived).
+async function refreshToken() {
+  const tok = JSON.parse(readFileSync('.higgsfield-token.json', 'utf8'));
+  const r = await fetch('https://mcp.higgsfield.ai/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tok.refresh_token, client_id: 'lxi3tUZQs7h0urUC' }),
+  });
+  const j = await r.json();
+  if (r.ok && j.access_token) {
+    if (!j.refresh_token) j.refresh_token = tok.refresh_token;
+    j.obtained_at = new Date().toISOString();
+    writeFileSync('.higgsfield-token.json', JSON.stringify(j, null, 2));
+    TOKEN = j.access_token;
+    return true;
+  }
+  console.error('token refresh failed:', JSON.stringify(j).slice(0, 200));
+  return false;
+}
+// Exact proven exemplar prompt — the one that generated the O.G. hero the user
+// approved. Keeps every new character consistent with the existing pixel-art busts.
+const STYLE = 'chunky 90s pixel-art bust, PS1 memory-card portrait style, hard black outline, limited palette, head and shoulders, facing viewer, unbroken eye contact with camera, original character: ';
 const BG = '. solid flat pure magenta background';
 
 // Remaining roster — every prompt pushes meme-lineage recognizability to the
@@ -93,19 +115,36 @@ async function waitForUrl(slot, jobId) {
   throw new Error(`${slot}: timed out waiting for job ${jobId}`);
 }
 
+const isMagenta = (r, g, b) => r > 120 && b > 90 && g < 120 && (r - g) > 50 && (b - g) > 20;
+
 async function keyAndInstall(slot, srcPath) {
-  const img = sharp(srcPath).ensureAlpha();
-  const { data, info } = await img.raw().toBuffer({ resolveWithObject: true });
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i], g = data[i + 1], b = data[i + 2];
-    // key out magenta-ish: strong red+blue, weak green
-    if (r > 130 && b > 110 && g < 110 && Math.abs(r - b) < 110) data[i + 3] = 0;
+  const { data, info } = await sharp(srcPath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const W = info.width, H = info.height;
+  // 1) find the magenta backdrop's bounding box, crop to it — drops any
+  // console/CRT frame or letterbox the model draws outside the magenta card.
+  let minX = W, minY = H, maxX = 0, maxY = 0, found = false;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4;
+    if (isMagenta(data[o], data[o + 1], data[o + 2])) {
+      found = true;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
   }
-  // key -> trim -> crush to PS1 fidelity (56px, 24-colour dithered palette)
-  const keyed = await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } })
-    .trim()
+  if (!found) { minX = 0; minY = 0; maxX = W - 1; maxY = H - 1; }
+  const cw = maxX - minX + 1, ch = maxY - minY + 1;
+  const crop = Buffer.alloc(cw * ch * 4);
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+    const so = ((minY + y) * W + (minX + x)) * 4, doo = (y * cw + x) * 4;
+    const r = data[so], g = data[so + 1], b = data[so + 2];
+    crop[doo] = r; crop[doo + 1] = g; crop[doo + 2] = b;
+    crop[doo + 3] = isMagenta(r, g, b) ? 0 : data[so + 3]; // 2) key magenta -> transparent
+  }
+  // 3) trim remaining transparent margin -> crush to PS1 fidelity (56px)
+  const keyed = await sharp(crop, { raw: { width: cw, height: ch, channels: 4 } })
+    .trim({ threshold: 20 })
     .resize(56, 56, { fit: 'inside', kernel: 'nearest' })
-    .png({ palette: true, colours: 24, dither: 0.8 })
+    .png({ palette: true, colours: 28, dither: 0.7 })
     .toBuffer();
   await sharp(keyed).toFile(`public/sprites/${slot}.png`);
   console.log(`${slot}: installed public/sprites/${slot}.png (PS1-crushed)`);
@@ -114,9 +153,14 @@ async function keyAndInstall(slot, srcPath) {
 for (const [slot, path] of Object.entries(PREDONE)) {
   if (existsSync(path)) await keyAndInstall(slot, path);
 }
+await refreshToken();
+let done = 0;
 for (const [slot, desc] of BATCH) {
+  if (done > 0 && done % 8 === 0) await refreshToken(); // keep token warm across the batch
+  done++;
   try {
-    const jobId = await generate(slot, desc);
+    let jobId = await generate(slot, desc);
+    if (!jobId) { await refreshToken(); jobId = await generate(slot, desc); } // retry once on expiry
     if (!jobId) continue;
     const url = await waitForUrl(slot, jobId);
     const raw = Buffer.from(await (await fetch(url)).arrayBuffer());

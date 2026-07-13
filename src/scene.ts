@@ -604,10 +604,22 @@ export class GameScene {
       // steering wheel top sits just BELOW the driver's nose; dash below it
       const wy = (dp.y - GameScene.bodyDrop(s)) - 0.06; // just under the nose (local)
       add(new THREE.BoxGeometry(1.66, 0.16, 0.26), dashM, 0, wy - 0.16, cab.z + 0.52); // dashboard
-      const sw = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.03, 6, 12), dashM);    // wheel
-      sw.position.set(0.45, wy, cab.z + 0.44); // flush up against the dash (no stem gap)
-      sw.rotation.x = -1.15;
-      g.add(sw);
+      // steering wheel: a proper ring the driver faces (tilted back toward
+      // him), with spokes, mounted in front of the driver against the dash.
+      const wheel = new THREE.Group();
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.03, 8, 16), dashM);
+      wheel.add(rim);
+      for (const rz of [0, Math.PI / 2, Math.PI]) {
+        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.025, 0.025), dashM);
+        spoke.rotation.z = rz;
+        wheel.add(spoke);
+      }
+      wheel.position.set(0.45, wy - 0.1, cab.z + 0.28);
+      // recline the wheel back and up so its face points toward the driver
+      // (who sits above/behind it), like a real steering column — the camera,
+      // slightly above, then sees it as a foreshortened ring, not facing out.
+      wheel.rotation.x = -1.95;
+      g.add(wheel);
     };
 
     if (s === 'cube') {
@@ -1248,7 +1260,8 @@ function lerpHex(a: string, b: string, t: number): string {
 interface DriverLook {
   skin: string; shirt: string;
   hair?: string;                       // undefined = bald
-  hairStyle?: 'flat' | 'mohawk' | 'afro' | 'spiky' | 'long';
+  hairStyle?: 'flat' | 'mohawk' | 'afro' | 'spiky' | 'long' | 'buzz' | 'bald' | 'bob' | 'slick';
+  eyes?: string;                       // iris color (default warm brown)
   hat?: 'cap' | 'cowboy' | 'beanie' | 'halo' | 'horns' | 'crown' | 'helmet' | 'chef' | 'wizard';
   hatColor?: string;
   shades?: boolean;                    // sunglasses band
@@ -1333,98 +1346,222 @@ function lookFor(slot: string): DriverLook {
   };
 }
 
+// High-detail painterly driver portrait. Drawn at 96px with organic shapes and
+// layered light/shadow, then crushed by the PS1 pipeline — reads as a real face
+// through the windshield instead of a flat blocky sprite. Identity comes from
+// DRIVER_LOOKS (skin/hair/hat/eyes/accessories) so every name looks like itself.
 function makeDriverSprite(slot: string, anger = 0): THREE.Sprite {
   const L = lookFor(slot);
   const a = Math.max(0, Math.min(4, anger));
-  const skin = lerpHex(L.skin, '#d82818', (a / 4) * 0.8);
+  const skin = lerpHex(L.skin, '#d82818', (a / 4) * 0.75);
+  const dark = (c: string, t: number) => lerpHex(c, '#000000', t);
+  const lite = (c: string, t: number) => lerpHex(c, '#ffffff', t);
+  const hairC = L.hair ?? '#2a2018';
+  const eyeC = L.eyes ?? '#4a3320';
+  const hs = L.hairStyle ?? 'flat';
+  const bald = hs === 'bald' || (!L.hair && !L.hat);
 
-  const tex = canvasTex(48, (g) => {
-    g.clearRect(0, 0, 48, 48);
+  const S = 96;
+  const tex = canvasTex(S, (g) => {
+    g.clearRect(0, 0, S, S);
+    g.lineJoin = 'round';
+    const ell = (cx: number, cy: number, rx: number, ry: number) => {
+      g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); g.fill();
+    };
+    const CX = 48, CY = 44, RX = 22, RY = 26;   // head ellipse
+    const clipHead = () => { g.beginPath(); g.ellipse(CX, CY, RX, RY, 0, 0, Math.PI * 2); g.clip(); };
+
     if (L.glow) {                                             // radiant aura
-      g.fillStyle = 'rgba(255,244,180,0.5)';
-      g.fillRect(10, 2, 28, 34); g.fillRect(6, 32, 36, 16);
+      const gr = g.createRadialGradient(CX, CY, 6, CX, CY, 46);
+      gr.addColorStop(0, 'rgba(255,246,190,0.55)'); gr.addColorStop(1, 'rgba(255,246,190,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, S, S);
     }
-    // hard black outline so every look reads through glass at 240p
-    g.fillStyle = '#000000';
-    g.fillRect(12, 4, 24, 30);                                // head
-    g.fillRect(7, 32, 34, 16);                                // torso
-    g.fillStyle = L.shirt; g.fillRect(9, 35, 30, 13);         // shoulders
-    g.fillStyle = skin;
-    g.fillRect(20, 29, 8, 7);                                 // neck
-    g.fillRect(14, 8, 20, 23);                                // face
-    if (L.facePaint) { g.fillStyle = L.facePaint; g.fillRect(14, 8, 20, 23); }
-    // hair / hats
-    if (L.hair && !L.hat) {
-      g.fillStyle = L.hair;
-      const hs = L.hairStyle ?? 'flat';
-      if (hs === 'flat')   { g.fillRect(13, 5, 22, 6); g.fillRect(13, 5, 4, 13); }
-      if (hs === 'mohawk') { g.fillRect(21, 0, 6, 11); }
-      if (hs === 'afro')   { g.fillRect(11, 1, 26, 9); g.fillRect(9, 4, 4, 9); g.fillRect(35, 4, 4, 9); }
-      if (hs === 'spiky')  { g.fillRect(13, 5, 22, 4); for (let x = 14; x < 34; x += 5) g.fillRect(x, 1, 3, 5); }
-      if (hs === 'long')   { g.fillRect(13, 5, 22, 6); g.fillRect(12, 5, 5, 24); g.fillRect(31, 5, 5, 24); }
+
+    // ---- shoulders / shirt (behind everything) ----
+    g.fillStyle = dark(L.shirt, 0.12);
+    g.beginPath();
+    g.moveTo(8, 96); g.lineTo(20, 74); g.quadraticCurveTo(48, 66, 76, 74); g.lineTo(88, 96);
+    g.closePath(); g.fill();
+    g.fillStyle = lite(L.shirt, 0.14);                        // shoulder highlight
+    g.beginPath(); g.moveTo(20, 74); g.quadraticCurveTo(34, 70, 46, 72); g.lineTo(40, 96); g.lineTo(16, 96); g.closePath(); g.fill();
+    g.fillStyle = L.shirt;                                    // collar
+    g.beginPath(); g.moveTo(34, 72); g.lineTo(48, 84); g.lineTo(62, 72); g.quadraticCurveTo(48, 70, 34, 72); g.closePath(); g.fill();
+
+    // ---- neck ----
+    g.fillStyle = dark(skin, 0.1); g.fillRect(38, 60, 20, 16);
+    g.fillStyle = dark(skin, 0.32);                           // jaw shadow on neck
+    g.beginPath(); g.ellipse(48, 62, 15, 6, 0, 0, Math.PI * 2); g.fill();
+
+    // ---- ears ----
+    if (bald || hs !== 'afro') {
+      g.fillStyle = skin; ell(26, 46, 4, 6); ell(70, 46, 4, 6);
+      g.fillStyle = dark(skin, 0.28); ell(27, 47, 2, 3); ell(69, 47, 2, 3);
     }
-    if (L.hat === 'cap')    { g.fillStyle = L.hatColor!; g.fillRect(12, 3, 24, 7); g.fillRect(30, 8, 10, 3); }
-    if (L.hat === 'beanie') { g.fillStyle = L.hatColor!; g.fillRect(12, 3, 24, 9); }
-    if (L.hat === 'cowboy') { g.fillStyle = L.hatColor!; g.fillRect(16, 1, 16, 6); g.fillRect(8, 6, 32, 3); }
-    if (L.hat === 'horns')  { g.fillStyle = L.hatColor!; g.fillRect(11, 1, 4, 8); g.fillRect(33, 1, 4, 8); }
-    if (L.hat === 'halo')   { g.fillStyle = L.hatColor!; g.fillRect(15, 0, 18, 2); }
-    if (L.hat === 'crown')  { g.fillStyle = L.hatColor!; g.fillRect(13, 2, 22, 5); for (let x = 14; x < 34; x += 6) g.fillRect(x, 0, 3, 4); }
-    if (L.hat === 'helmet') { g.fillStyle = L.hatColor!; g.fillRect(11, 2, 26, 10); g.fillRect(11, 2, 3, 18); g.fillRect(34, 2, 3, 18); }
-    if (L.hat === 'chef')   { g.fillStyle = L.hatColor!; g.fillRect(14, 0, 20, 9); g.fillRect(12, 6, 24, 4); }
-    if (L.hat === 'wizard') { g.fillStyle = L.hatColor!; g.fillRect(20, 0, 8, 4); g.fillRect(16, 3, 16, 4); g.fillRect(10, 6, 28, 3); }
-    if (L.headphones) {
-      g.fillStyle = '#1a1a1e';
-      g.fillRect(11, 12, 4, 8); g.fillRect(33, 12, 4, 8); g.fillRect(12, 2, 24, 3);
+
+    // ---- head base + modelled shading ----
+    g.fillStyle = skin; ell(CX, CY, RX, RY);
+    g.save(); clipHead();
+    g.fillStyle = dark(skin, 0.16); ell(CX + 11, CY + 4, 16, 25);        // right/core shadow
+    g.fillStyle = dark(skin, 0.24); ell(CX, CY + 20, 18, 12);            // under-jaw shadow
+    g.fillStyle = lite(skin, 0.18); ell(CX - 8, CY - 8, 11, 14);         // forehead/cheek highlight
+    g.fillStyle = lerpHex(skin, '#d8563a', 0.25 + a * 0.12);             // cheek warmth (flushes w/ anger)
+    ell(CX - 9, CY + 6, 5, 4); ell(CX + 10, CY + 6, 5, 4);
+    g.restore();
+    if (L.facePaint) { g.fillStyle = L.facePaint; g.save(); clipHead(); g.fillRect(0, 0, S, S); g.restore(); }
+
+    const eyeY = CY - 2, eL = CX - 9, eR = CX + 9;
+
+    // ---- back hair (behind head, for volume styles) ----
+    if (!L.hat && (hs === 'long' || hs === 'afro' || hs === 'bob')) {
+      g.fillStyle = dark(hairC, 0.15);
+      if (hs === 'afro') ell(CX, CY - 8, 26, 22);
+      else { g.beginPath(); g.moveTo(24, 22); g.quadraticCurveTo(16, 60, 24, 78); g.lineTo(72, 78); g.quadraticCurveTo(80, 60, 72, 22); g.closePath(); g.fill(); }
     }
-    // eyes: narrow with anger, red pupils past tier 2 (shades/visor replace them)
+
+    // ---- eyes ----
+    const openBase = a >= 4 ? 2.4 : a >= 3 ? 3.0 : a >= 2 ? 3.8 : 4.6;
+    const drawEye = (ex: number) => {
+      g.fillStyle = dark(skin, 0.22); ell(ex, eyeY, 6.2, 4.4);           // socket
+      g.fillStyle = '#f3efe6'; ell(ex, eyeY, 5.4, openBase);            // sclera
+      g.fillStyle = a >= 3 ? '#f0c8b0' : '#f3efe6';
+      g.fillStyle = eyeC; ell(ex + 1, eyeY, 2.9, Math.min(2.9, openBase)); // iris (glances toward player)
+      g.fillStyle = a >= 3 ? '#3a0808' : '#141414'; ell(ex + 1, eyeY, 1.5, Math.min(1.5, openBase)); // pupil
+      g.fillStyle = '#ffffff'; ell(ex + 2.1, eyeY - 1, 0.9, 0.9);        // catchlight
+      g.fillStyle = dark(skin, 0.3);                                     // upper lid line
+      g.fillRect(ex - 5, eyeY - openBase - 0.5, 10, 1.2);
+    };
     if (L.visor) {
-      g.fillStyle = a >= 3 ? '#e04a2a' : '#4ae0c0';
-      g.fillRect(14, 13, 20, 7);
+      g.fillStyle = dark('#101018', 0); g.save(); clipHead(); g.fillStyle = '#12141c';
+      g.fillRect(CX - 18, eyeY - 6, 36, 12); g.restore();
+      const gl = a >= 3 ? '#ff6a3a' : '#4ae0c0';
+      g.fillStyle = gl; g.fillRect(CX - 16, eyeY - 3, 32, 4);
+      g.fillStyle = lite(gl, 0.5); g.fillRect(CX - 16, eyeY - 3, 10, 2);
     } else if (L.shades) {
-      g.fillStyle = '#0a0a0a'; g.fillRect(14, 14, 20, 5);
-      if (a >= 3) { g.fillStyle = '#c01010'; g.fillRect(17, 16, 3, 2); g.fillRect(28, 16, 3, 2); } // glare through
+      g.fillStyle = '#0c0c10'; g.beginPath();
+      g.ellipse(eL, eyeY, 7, 5, 0, 0, Math.PI * 2); g.ellipse(eR, eyeY, 7, 5, 0, 0, Math.PI * 2); g.fill();
+      g.fillRect(CX - 3, eyeY - 1, 6, 2);                                // bridge
+      g.fillStyle = 'rgba(255,255,255,0.25)'; g.fillRect(eL - 4, eyeY - 3, 4, 2); g.fillRect(eR - 4, eyeY - 3, 4, 2);
+      if (a >= 3) { g.fillStyle = '#e02020'; ell(eL, eyeY, 2, 1.5); ell(eR, eyeY, 2, 1.5); }
     } else if (L.eyepatch) {
-      g.fillStyle = '#111111'; g.fillRect(15, 13, 8, 6); g.fillRect(14, 12, 20, 2);
-      const eyeH = a >= 3 ? 3 : 5;
-      g.fillStyle = '#ffffff'; g.fillRect(26, 15, 6, eyeH);
-      g.fillStyle = a >= 3 ? '#c01010' : '#111111'; g.fillRect(28, 16, 3, Math.min(3, eyeH));
-    } else {
-      const eyeH = a >= 3 ? 3 : a >= 2 ? 4 : 6;
-      g.fillStyle = '#ffffff';
-      g.fillRect(16, 15, 6, eyeH); g.fillRect(26, 15, 6, eyeH);
-      g.fillStyle = a >= 3 ? '#c01010' : '#111111';
-      g.fillRect(18, 16, 3, Math.min(3, eyeH)); g.fillRect(28, 16, 3, Math.min(3, eyeH));
+      drawEye(eR);
+      g.fillStyle = '#0d0d0d'; ell(eL, eyeY, 6.5, 5.5);
+      g.strokeStyle = '#0d0d0d'; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(eL - 8, eyeY - 7); g.lineTo(eR + 8, eyeY + 6); g.stroke();
+    } else { drawEye(eL); drawEye(eR); }
+
+    // ---- brows (angle into a V with anger) ----
+    if (!L.visor) {
+      g.strokeStyle = dark(hairC, 0.1); g.lineWidth = 2.6; g.lineCap = 'round';
+      const drop = a * 2.2;
+      g.beginPath(); g.moveTo(eL - 6, eyeY - 7 + (a > 0 ? -1 : 0)); g.lineTo(eL + 6, eyeY - 6.5 + drop * 0.5); g.stroke();
+      g.beginPath(); g.moveTo(eR + 6, eyeY - 7 + (a > 0 ? -1 : 0)); g.lineTo(eR - 6, eyeY - 6.5 + drop * 0.5); g.stroke();
     }
-    // brows: angle into a V as anger rises
-    g.fillStyle = '#111111';
-    for (let i = 0; i < 7; i++) {
-      const drop = Math.floor((i * a) / 4);
-      g.fillRect(15 + i, 11 + drop, 1, 3);
-      g.fillRect(32 - i, 11 + drop, 1, 3);
+
+    // ---- nose ----
+    g.fillStyle = dark(skin, 0.16);
+    g.beginPath(); g.moveTo(CX - 2, eyeY + 2); g.lineTo(CX - 4, eyeY + 12); g.lineTo(CX + 4, eyeY + 12); g.closePath(); g.fill();
+    g.fillStyle = lite(skin, 0.16); g.fillRect(CX - 1, eyeY + 1, 2, 10);  // bridge highlight
+    g.fillStyle = dark(skin, 0.34); ell(CX - 3, eyeY + 12, 1.3, 1); ell(CX + 3, eyeY + 12, 1.3, 1); // nostrils
+
+    // ---- facial hair (under mouth) ----
+    if (L.beard) {
+      g.fillStyle = dark(hairC, 0.05); g.save(); clipHead();
+      g.beginPath(); g.moveTo(CX - 17, eyeY + 6); g.quadraticCurveTo(CX, CY + RY + 4, CX + 17, eyeY + 6);
+      g.quadraticCurveTo(CX, eyeY + 20, CX - 17, eyeY + 6); g.fill(); g.restore();
     }
-    // facial hair first — the mouth draws over it (teeth carve through beards)
-    if (L.beard)    { g.fillStyle = L.hair ?? '#2a2018'; g.fillRect(14, 24, 20, 8); g.fillRect(17, 30, 14, 4); }
-    if (L.mustache) { g.fillStyle = L.hair ?? '#2a2018'; g.fillRect(17, 22, 14, 3); }
-    // lower face: mask/bandana cover the mouth, otherwise anger mouth
+    if (L.mustache && !L.mask && !L.bandana) {
+      g.fillStyle = dark(hairC, 0.05);
+      g.beginPath(); g.moveTo(CX - 9, eyeY + 15); g.quadraticCurveTo(CX, eyeY + 20, CX + 9, eyeY + 15);
+      g.quadraticCurveTo(CX, eyeY + 17, CX - 9, eyeY + 15); g.fill();
+    }
+
+    // ---- mouth ----
+    const my = eyeY + 20;
     if (L.mask || L.bandana) {
-      g.fillStyle = L.bandana ? '#8e3a2e' : (L.hatColor ?? '#22222a');
-      g.fillRect(14, 21, 20, 10);
-      if (L.bandana) { g.fillStyle = '#6e2a20'; for (let x = 16; x < 32; x += 4) g.fillRect(x, 24, 2, 2); }
+      g.fillStyle = L.bandana ? '#9a4234' : (L.hatColor ?? '#20232c');
+      g.save(); clipHead();
+      g.beginPath(); g.moveTo(CX - 18, eyeY + 4); g.lineTo(CX - 15, CY + RY); g.lineTo(CX + 15, CY + RY); g.lineTo(CX + 18, eyeY + 4);
+      g.quadraticCurveTo(CX, eyeY + 12, CX - 18, eyeY + 4); g.fill(); g.restore();
+      if (L.bandana) { g.fillStyle = '#742c22'; for (let x = -12; x <= 12; x += 6) ell(CX + x, my, 1.2, 1.2); }
     } else if (a < 3) {
-      g.fillRect(21 - a * 2, 26, 6 + a * 4, 2);
+      g.strokeStyle = dark(skin, 0.45); g.lineWidth = 2; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(CX - 7 - a, my); g.quadraticCurveTo(CX, my + 1 + a, CX + 7 + a, my); g.stroke();
     } else {
-      g.fillStyle = '#111111'; g.fillRect(16, 24, 16, 6);     // open snarl
-      g.fillStyle = '#ffffff'; g.fillRect(17, 25, 14, 3);     // teeth
-      g.fillStyle = '#111111';
-      for (let x = 19; x < 31; x += 3) g.fillRect(x, 25, 1, 3);
+      g.fillStyle = '#3a1414';                                           // open snarl
+      g.beginPath(); g.ellipse(CX, my + 1, 9, 5, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#f0ece0'; g.fillRect(CX - 8, my - 2, 16, 3);        // top teeth
+      g.fillStyle = '#2a0e0e'; for (let x = -6; x <= 6; x += 3) g.fillRect(CX + x, my - 2, 1, 3);
     }
     if (L.stubble) {
-      g.fillStyle = 'rgba(40,30,20,0.55)';
-      g.fillRect(15, 24, 4, 6); g.fillRect(29, 24, 4, 6); g.fillRect(15, 29, 18, 2);
+      g.save(); clipHead(); g.fillStyle = 'rgba(30,22,14,0.4)';
+      g.beginPath(); g.moveTo(CX - 16, eyeY + 8); g.quadraticCurveTo(CX, CY + RY + 2, CX + 16, eyeY + 8);
+      g.quadraticCurveTo(CX, eyeY + 16, CX - 16, eyeY + 8); g.fill(); g.restore();
     }
+
+    // ---- hair (front) ----
+    if (!L.hat && !bald) {
+      g.fillStyle = hairC;
+      const cap = () => { g.beginPath(); g.ellipse(CX, CY - 12, RX + 1, 16, 0, Math.PI, Math.PI * 2); g.fill(); };
+      if (hs === 'flat' || hs === 'slick' || hs === 'bob') {
+        cap();
+        g.fillRect(CX - RX, CY - 14, 6, hs === 'bob' ? 30 : 16);        // side sweep
+        g.fillRect(CX + RX - 5, CY - 14, 5, hs === 'bob' ? 30 : 12);
+        if (hs === 'slick') { g.fillStyle = lite(hairC, 0.25); g.fillRect(CX - 12, CY - 20, 20, 3); }
+      } else if (hs === 'buzz') {
+        g.globalAlpha = 0.9; cap(); g.globalAlpha = 1;
+      } else if (hs === 'mohawk') {
+        g.beginPath(); g.moveTo(CX - 4, CY - 26); g.lineTo(CX + 4, CY - 26); g.lineTo(CX + 5, CY - 6); g.lineTo(CX - 5, CY - 6); g.closePath(); g.fill();
+      } else if (hs === 'afro') {
+        ell(CX, CY - 14, RX + 4, 16);
+      } else if (hs === 'spiky') {
+        cap();
+        for (let x = CX - 16; x <= CX + 16; x += 7) { g.beginPath(); g.moveTo(x, CY - 22); g.lineTo(x + 4, CY - 30); g.lineTo(x + 7, CY - 22); g.closePath(); g.fill(); }
+      } else if (hs === 'long') {
+        cap(); g.fillRect(CX - RX - 1, CY - 16, 6, 40); g.fillRect(CX + RX - 5, CY - 16, 6, 40);
+      }
+      g.fillStyle = lite(hairC, 0.28);                                   // hair sheen
+      g.fillRect(CX - 14, CY - 24, 14, 2);
+    }
+
+    // ---- hats ----
+    const hc = L.hatColor ?? '#2e2e36';
+    if (L.hat === 'cap') {
+      g.fillStyle = hc; g.beginPath(); g.ellipse(CX, CY - 14, RX, 12, 0, Math.PI, Math.PI * 2); g.fill();
+      g.fillRect(CX - RX, CY - 14, 2 * RX, 4);
+      g.fillStyle = dark(hc, 0.2); g.beginPath(); g.ellipse(CX + 14, CY - 10, 14, 4, 0, 0, Math.PI); g.fill(); // brim
+    } else if (L.hat === 'beanie') {
+      g.fillStyle = hc; g.beginPath(); g.ellipse(CX, CY - 12, RX + 1, 15, 0, Math.PI, Math.PI * 2); g.fill();
+      g.fillStyle = lite(hc, 0.12); g.fillRect(CX - RX - 1, CY - 12, 2 * RX + 2, 4);                          // fold
+    } else if (L.hat === 'cowboy') {
+      g.fillStyle = hc; g.beginPath(); g.ellipse(CX, CY - 8, RX + 12, 6, 0, 0, Math.PI * 2); g.fill();        // brim
+      g.beginPath(); g.ellipse(CX, CY - 16, 15, 12, 0, Math.PI, Math.PI * 2); g.fill();                       // crown
+      g.fillStyle = dark(hc, 0.25); g.fillRect(CX - 15, CY - 12, 30, 3);
+    } else if (L.hat === 'helmet') {
+      g.fillStyle = hc; g.beginPath(); g.ellipse(CX, CY - 6, RX + 2, RY - 4, 0, Math.PI, Math.PI * 2); g.fill();
+      g.fillStyle = lite(hc, 0.2); ell(CX - 8, CY - 16, 6, 5);
+    } else if (L.hat === 'chef') {
+      g.fillStyle = hc; g.fillRect(CX - 16, CY - 14, 32, 8);
+      ell(CX - 10, CY - 20, 9, 9); ell(CX + 10, CY - 20, 9, 9); ell(CX, CY - 24, 11, 11);
+    } else if (L.hat === 'wizard') {
+      g.fillStyle = hc; g.beginPath(); g.moveTo(CX, CY - 40); g.lineTo(CX + 18, CY - 8); g.lineTo(CX - 18, CY - 8); g.closePath(); g.fill();
+      g.fillStyle = lite(hc, 0.2); g.fillRect(CX - 18, CY - 10, 36, 3);
+    } else if (L.hat === 'crown') {
+      g.fillStyle = hc; g.beginPath(); g.moveTo(CX - 16, CY - 10); g.lineTo(CX - 16, CY - 20); g.lineTo(CX - 8, CY - 14);
+      g.lineTo(CX, CY - 22); g.lineTo(CX + 8, CY - 14); g.lineTo(CX + 16, CY - 20); g.lineTo(CX + 16, CY - 10); g.closePath(); g.fill();
+    } else if (L.hat === 'horns') {
+      g.fillStyle = hc; g.beginPath(); g.moveTo(CX - 14, CY - 12); g.quadraticCurveTo(CX - 26, CY - 24, CX - 20, CY - 30); g.quadraticCurveTo(CX - 14, CY - 20, CX - 8, CY - 16); g.fill();
+      g.beginPath(); g.moveTo(CX + 14, CY - 12); g.quadraticCurveTo(CX + 26, CY - 24, CX + 20, CY - 30); g.quadraticCurveTo(CX + 14, CY - 20, CX + 8, CY - 16); g.fill();
+    } else if (L.hat === 'halo') {
+      g.strokeStyle = hc; g.lineWidth = 3; g.beginPath(); g.ellipse(CX, CY - 28, 14, 5, 0, 0, Math.PI * 2); g.stroke();
+    }
+    if (L.headphones) {
+      g.strokeStyle = '#1a1a1e'; g.lineWidth = 3; g.beginPath(); g.ellipse(CX, CY - 10, RX + 2, RY - 6, 0, Math.PI, Math.PI * 2); g.stroke();
+      g.fillStyle = '#1a1a1e'; g.fillRect(CX - RX - 4, CY - 8, 6, 12); g.fillRect(CX + RX - 2, CY - 8, 6, 12);
+    }
+
     if (a === 4) {                                            // forehead vein
-      g.fillStyle = '#8e1010';
-      g.fillRect(15, 9, 3, 1); g.fillRect(16, 10, 1, 2); g.fillRect(14, 10, 1, 2);
+      g.strokeStyle = '#8e1010'; g.lineWidth = 1.4;
+      g.beginPath(); g.moveTo(CX - 8, CY - 16); g.lineTo(CX - 6, CY - 12); g.lineTo(CX - 9, CY - 9); g.stroke();
     }
   });
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
@@ -1467,6 +1604,12 @@ function loadCustomSprite(key: string, onLoad: (t: THREE.Texture) => void, onMis
     undefined,
     () => { spriteTexCache.set(key, 'miss'); onMiss?.(); }
   );
+}
+
+// dev-only: expose the face renderer + looks so a contact sheet can be built
+// from the console for visual QA (never shipped in prod builds).
+if (import.meta.env.DEV) {
+  (window as any).__faces = { make: makeDriverSprite, looks: DRIVER_LOOKS };
 }
 
 // deterministic tiny PRNG (no Math.random in render setup -> stable look)

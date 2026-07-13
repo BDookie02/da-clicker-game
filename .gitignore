@@ -3,6 +3,8 @@ dist/
 *.local
 .DS_Store
 .higgsfield-token.json
+.gemini-keys.json
+.facegen/
 discipline-dist.zip
 .codex/
 devlog/gallery_*.png
