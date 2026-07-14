@@ -1,3 +1,5 @@
+import { music } from './audio';
+
 // ---------------------------------------------------------------------------
 // Rewarded ads. One interface, two providers:
 //  - AdMobAdProvider: real rewarded video via @capacitor-community/admob on
@@ -104,13 +106,26 @@ export class PlaceholderAdProvider implements AdProvider {
 
 /** Picks AdMob on device (once the plugin is present), placeholder elsewhere. */
 export async function initAds(): Promise<AdProvider> {
+  let provider: AdProvider;
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.()) {
     try {
       const specifier = '@capacitor-community/admob';
       const mod = await import(/* @vite-ignore */ specifier);
-      return new AdMobAdProvider(mod, cap.getPlatform() === 'ios');
+      provider = new AdMobAdProvider(mod, cap.getPlatform() === 'ios');
+      return withMusicPause(provider);
     } catch { /* plugin missing — fall through */ }
   }
-  return new PlaceholderAdProvider();
+  provider = new PlaceholderAdProvider();
+  return withMusicPause(provider);
+}
+
+export function withMusicPause(provider: AdProvider): AdProvider {
+  return {
+    async show(lengthSec: number) {
+      music.pauseForAd();
+      try { return await provider.show(lengthSec); }
+      finally { music.resumeAfterAd(); }
+    },
+  };
 }

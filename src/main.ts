@@ -1,7 +1,7 @@
 import { Game, fmt } from './state';
 import { GameScene } from './scene';
 import { UI } from './ui';
-import { sfx } from './audio';
+import { music, sfx } from './audio';
 import { API_URL, getDistrict } from './config';
 import { getWorldList, initLeaderboards, submitScoreRemote, type LeaderboardProvider } from './leaderboard';
 import { LocalUsernameService, RemoteUsernameService } from './username';
@@ -83,6 +83,8 @@ let transitioning = false;
 
 game.on((e) => {
   if (e.type === 'tap') {
+    // Input-driven update means speed changes never wait for tapping to pause.
+    if (!transitioning) music.updateBattle(game.s.opponentIndex, game.progress01);
     scene.tapPulse();
   } else if (e.type === 'milestone') {
     scene.setShakeAmp(game.shakeAmp);
@@ -92,6 +94,8 @@ game.on((e) => {
     navigator.vibrate?.(30 + e.tier * 25);
   } else if (e.type === 'defeated') {
     transitioning = true;
+    music.stopForDefeat();
+    sfx.yelp();
     void leaderboards?.submit(game.s.totalTaps);
     syncScore();
     const beatenName = e.name;
@@ -112,6 +116,7 @@ game.on((e) => {
           ui.toast(`NEW DISTRICT: ${getDistrict(game.s.opponentIndex).name}`, 'gold');
         }
         ui.toast(`RED LIGHT ${game.s.opponentIndex + 1}: ${game.opponent.name}`, '');
+        music.updateBattle(game.s.opponentIndex, game.progress01);
         transitioning = false;
       });
     }, 1600);
@@ -119,6 +124,7 @@ game.on((e) => {
     scene.setOpponent(game.opponent);
     scene.setShakeAmp(game.shakeAmp);
     scene.setDriverAnger(0);
+    music.updateBattle(game.s.opponentIndex, game.progress01);
     applyCosmetics();
     ui.flashFade();
     ui.toast(`NEW ROUTE. Permanent x${Math.pow(2, e.count)} respect.`, 'gold');
@@ -142,7 +148,9 @@ title.addEventListener('pointerdown', (ev) => {
   ev.stopPropagation();
   title.classList.add('gone');
   setTimeout(() => title.remove(), 450);
+  sfx.preloadYelp();
   sfx.green();
+  music.engage(game.s.opponentIndex, game.progress01);
 }, { once: true });
 
 // Tap anywhere on the scene (not on UI) to tap
@@ -152,6 +160,7 @@ const onTap = (ev: Event) => {
   if (t.closest('.panel, .menu-row, .ad-overlay, button')) return; // UI handles it
   if (ui.isPanelOpen) { ui.close(); return; } // tapping outside any menu closes it
   if (transitioning) return;
+  sfx.preloadYelp();
   game.tap();
   sfx.tap();
   ev.preventDefault();
@@ -174,6 +183,7 @@ function hideGarageExit() { garageExitBtn?.remove(); garageExitBtn = null; }
 
 // garage controls: swipe to orbit / look, pinch to zoom, tap to sit in/out
 ui.onGarage = (open) => {
+  music.setGarage(open);
   ui.quickFade(() => {
     document.body.classList.toggle('in-garage', open);
     if (open) { scene.enterGarage(); applyCosmetics(); showGarageExit(); }
@@ -253,6 +263,12 @@ window.addEventListener('wheel', (ev) => {
 canvas.addEventListener('pointerdown', onTap);
 document.getElementById('app')!.addEventListener('pointerdown', onTap);
 
+// All open panels/overlays duck music to 50%. Rewarded ads additionally pause it.
+const menuVolumeObserver = new MutationObserver(() => {
+  music.setMenuOpen(!!document.querySelector('.panel, .ad-overlay'));
+});
+menuVolumeObserver.observe(document.body, { childList: true, subtree: true });
+
 // main loop
 let last = performance.now();
 let uiAccum = 0;
@@ -262,7 +278,12 @@ function frame(now: number) {
   game.tick(dt);
   scene.render(dt);
   uiAccum += dt;
-  if (uiAccum > 0.2) { uiAccum = 0; ui.refresh(); }
+  if (uiAccum > 0.2) {
+    uiAccum = 0;
+    ui.refresh();
+    // The next song begins only once driveToNext reaches the new red light.
+    if (!transitioning) music.updateBattle(game.s.opponentIndex, game.progress01);
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
