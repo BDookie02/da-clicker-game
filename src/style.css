@@ -82,6 +82,11 @@ html, body {
   text-overflow: ellipsis;
 }
 .quick-buy:active { transform: translateX(-50%) translateY(2px); border-bottom-width: 2px; }
+
+/* Keep the quick-buy in the lower playfield on phones, above the bottom nav. */
+@media (orientation: portrait) {
+  .quick-buy { bottom: 31vh; }
+}
 body.in-garage .quick-buy { display: none; }
 
 .boost-pill {

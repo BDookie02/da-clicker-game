@@ -7,7 +7,7 @@ import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
 
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
-import { PlaceholderAdProvider, type AdProvider } from './ads';
+import { PlaceholderAdProvider, withMusicPause, type AdProvider } from './ads';
 import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
@@ -19,7 +19,7 @@ function el(tag: string, cls?: string, html?: string): HTMLElement {
 
 export class UI {
   root: HTMLElement;
-  ads: AdProvider = new PlaceholderAdProvider();
+  ads: AdProvider = withMusicPause(new PlaceholderAdProvider());
   purchases: PurchaseProvider = new PlaceholderPurchases();
   private panel: HTMLElement | null = null;
   private bars: Record<string, HTMLElement> = {};

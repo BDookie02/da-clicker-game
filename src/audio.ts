@@ -72,3 +72,116 @@ class Sfx {
 }
 
 export const sfx = new Sfx();
+
+// ---------------------------------------------------------------------------
+// Music director. Each red light maps to one of ten songs, wrapping after
+// track 10. Battle progress moves through the supplied 77/111/144 BPM renders.
+// The garage deliberately uses a random 77 BPM render instead.
+// ---------------------------------------------------------------------------
+
+const MUSIC_TRACKS = [
+  'Phonky_Frog', 'bing_bing_bong', 'Big_Boy', 'Aww_yeayuh', 'Mean_Muggin',
+  'Jorkins', 'Galactic_Coomb', 'TDrift_Splurgin', 'Aura', 'Discipline_god',
+] as const;
+const MUSIC_BPMS = [77, 111, 144] as const;
+type MusicBpm = typeof MUSIC_BPMS[number];
+
+class MusicDirector {
+  private audio: HTMLAudioElement | null = null;
+  private engaged = false;
+  private muted = sfx.muted;
+  private ducked = false;
+  private inGarage = false;
+  private adPauseDepth = 0;
+  private opponentIndex = 0;
+  private progress = 0;
+  private trackIndex = -1;
+  private bpm: MusicBpm = 77;
+  private switchId = 0;
+  private readonly baseVolume = 0.55;
+
+  engage(opponentIndex: number, progress: number) {
+    this.engaged = true;
+    this.opponentIndex = opponentIndex;
+    this.progress = progress;
+    this.startBattle(true);
+  }
+
+  updateBattle(opponentIndex: number, progress: number) {
+    this.opponentIndex = opponentIndex;
+    this.progress = progress;
+    if (!this.engaged || this.inGarage) return;
+    const nextTrack = this.battleTrack(opponentIndex);
+    const nextBpm = this.bpmForProgress(progress);
+    if (nextTrack !== this.trackIndex) this.startBattle(true);
+    else if (nextBpm !== this.bpm) this.switchTo(nextTrack, nextBpm, false);
+  }
+
+  setGarage(open: boolean) {
+    if (this.inGarage === open) return;
+    this.inGarage = open;
+    if (!this.engaged) return;
+    if (open) this.switchTo(Math.floor(Math.random() * MUSIC_TRACKS.length), 77, true);
+    else this.startBattle(true); // resume gameplay from the song's beginning
+  }
+
+  setMenuOpen(open: boolean) { this.ducked = open; this.applyVolume(); }
+  pauseForAd() { this.adPauseDepth += 1; this.audio?.pause(); }
+  resumeAfterAd() {
+    this.adPauseDepth = Math.max(0, this.adPauseDepth - 1);
+    if (this.adPauseDepth === 0) this.play();
+  }
+  setMuted(muted: boolean) {
+    this.muted = muted;
+    this.applyVolume();
+    if (!muted) this.play();
+  }
+
+  private startBattle(fromBeginning: boolean) {
+    this.switchTo(this.battleTrack(this.opponentIndex), this.bpmForProgress(this.progress), fromBeginning);
+  }
+  private battleTrack(index: number) {
+    return ((index % MUSIC_TRACKS.length) + MUSIC_TRACKS.length) % MUSIC_TRACKS.length;
+  }
+  private bpmForProgress(progress: number): MusicBpm {
+    if (progress >= 2 / 3) return 144;
+    if (progress >= 1 / 3) return 111;
+    return 77;
+  }
+  private url(trackIndex: number, bpm: MusicBpm) {
+    const folder = String(trackIndex + 1).padStart(2, '0');
+    return `/music/track-${folder}/${MUSIC_TRACKS[trackIndex]}__${bpm}bpm.mp3`;
+  }
+  private switchTo(trackIndex: number, bpm: MusicBpm, fromBeginning: boolean) {
+    const previous = this.audio;
+    const previousBpm = this.bpm;
+    const previousTime = previous?.currentTime ?? 0;
+    const id = ++this.switchId;
+    const next = new Audio(this.url(trackIndex, bpm));
+    next.loop = true;
+    next.preload = 'auto';
+    next.volume = this.targetVolume();
+    const begin = () => {
+      if (id !== this.switchId) return;
+      if (!fromBeginning && Number.isFinite(next.duration) && next.duration > 0) {
+        next.currentTime = (previousTime * previousBpm / bpm) % next.duration;
+      }
+      previous?.pause();
+      this.audio = next;
+      this.trackIndex = trackIndex;
+      this.bpm = bpm;
+      this.play();
+    };
+    if (next.readyState >= HTMLMediaElement.HAVE_METADATA) begin();
+    else next.addEventListener('loadedmetadata', begin, { once: true });
+    next.load();
+  }
+  private targetVolume() { return this.muted ? 0 : this.baseVolume * (this.ducked ? 0.5 : 1); }
+  private applyVolume() { if (this.audio) this.audio.volume = this.targetVolume(); }
+  private play() {
+    if (!this.engaged || this.adPauseDepth > 0 || !this.audio) return;
+    void this.audio.play().catch(() => { /* waits for the next user gesture */ });
+  }
+}
+
+export const music = new MusicDirector();
