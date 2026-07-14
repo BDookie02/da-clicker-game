@@ -83,6 +83,8 @@ let transitioning = false;
 
 game.on((e) => {
   if (e.type === 'tap') {
+    // Input-driven update means speed changes never wait for tapping to pause.
+    if (!transitioning) music.updateBattle(game.s.opponentIndex, game.progress01);
     scene.tapPulse();
   } else if (e.type === 'milestone') {
     scene.setShakeAmp(game.shakeAmp);
@@ -92,6 +94,8 @@ game.on((e) => {
     navigator.vibrate?.(30 + e.tier * 25);
   } else if (e.type === 'defeated') {
     transitioning = true;
+    music.stopForDefeat();
+    sfx.yelp();
     void leaderboards?.submit(game.s.totalTaps);
     syncScore();
     const beatenName = e.name;
@@ -144,6 +148,7 @@ title.addEventListener('pointerdown', (ev) => {
   ev.stopPropagation();
   title.classList.add('gone');
   setTimeout(() => title.remove(), 450);
+  sfx.preloadYelp();
   sfx.green();
   music.engage(game.s.opponentIndex, game.progress01);
 }, { once: true });
@@ -155,6 +160,7 @@ const onTap = (ev: Event) => {
   if (t.closest('.panel, .menu-row, .ad-overlay, button')) return; // UI handles it
   if (ui.isPanelOpen) { ui.close(); return; } // tapping outside any menu closes it
   if (transitioning) return;
+  sfx.preloadYelp();
   game.tap();
   sfx.tap();
   ev.preventDefault();
@@ -275,7 +281,8 @@ function frame(now: number) {
   if (uiAccum > 0.2) {
     uiAccum = 0;
     ui.refresh();
-    music.updateBattle(game.s.opponentIndex, game.progress01);
+    // The next song begins only once driveToNext reaches the new red light.
+    if (!transitioning) music.updateBattle(game.s.opponentIndex, game.progress01);
   }
   requestAnimationFrame(frame);
 }

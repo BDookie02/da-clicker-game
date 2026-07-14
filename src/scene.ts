@@ -589,6 +589,18 @@ export class GameScene {
       add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, -0.6, tailY, -long / 2 + 0.02);
       add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, 0.6, tailY, -long / 2 + 0.02);
     };
+    // The cabin is deliberately open so the driver reads through the glass, but
+    // the hood, trunk/tailgate, and bumpers are real exterior panels. Keep
+    // them when a streamed fleet mesh replaces the procedural shell too.
+    const exterior = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number) => {
+      const mesh = add(geo, m, x, y, z);
+      mesh.userData.keep = true;
+      return mesh;
+    };
+    const bumpers = (frontY: number, rearY: number) => {
+      exterior(new THREE.BoxGeometry(2.04, 0.22, 0.18), trim, 0, frontY, long / 2 - 0.06);
+      exterior(new THREE.BoxGeometry(2.04, 0.22, 0.18), trim, 0, rearY, -long / 2 + 0.06);
+    };
     // a real cabin interior: two seats, a dashboard, and a steering wheel in
     // front of the driver — all sized to the window so they read through glass
     const interior = () => {
@@ -635,6 +647,7 @@ export class GameScene {
       for (const [x, z] of [[-1, 1.2], [1, 1.2], [-1, -1.2], [1, -1.2]] as const)
         add(new THREE.BoxGeometry(0.5, 0.7, 0.7), tire, x * 1.0, 0.35, z);
       lights(0.9, 0.9);
+      bumpers(0.46, 0.46);
       return g;
     }
 
@@ -650,6 +663,7 @@ export class GameScene {
       add(new THREE.BoxGeometry(2.5, 0.3, long * 0.98), trim, 0, 0.32, 0);
       wheels(0.42, long * 0.34, 0.42);
       lights(0.7, 0.7);
+      bumpers(0.5, 0.5);
       return g;
     }
 
@@ -705,6 +719,21 @@ export class GameScene {
     P(gls, 1.78, glass);
     P([[roofSpan[0], gls[1][1]], [roofSpan[0], gls[1][1] + 0.1], [roofSpan[1], gls[1][1] + 0.1], [roofSpan[1], gls[1][1]]], 1.84, body); // roof (kept)
     add(new THREE.BoxGeometry(2.02, 0.14, long * 0.96), trim, 0, 0.3, 0);
+
+    // Close the body ahead of and behind the greenhouse. These panels give
+    // every silhouette a hood and trunk (or hatch/tailgate) without covering
+    // the seats and driver in the middle of the car.
+    const rearTop = low[1];
+    const rearGlass = gls[0];
+    const rearLen = Math.max(0.12, rearGlass[0] - rearTop[0]);
+    exterior(new THREE.BoxGeometry(1.74, 0.12, rearLen), body, 0,
+      (rearTop[1] + rearGlass[1]) / 2 + 0.01, (rearTop[0] + rearGlass[0]) / 2);
+    const frontGlass = gls[gls.length - 1];
+    const frontTop = low[low.length - 2];
+    const hoodLen = Math.max(0.12, frontTop[0] - frontGlass[0]);
+    exterior(new THREE.BoxGeometry(1.74, 0.12, hoodLen), body, 0,
+      (frontGlass[1] + frontTop[1]) / 2 + 0.01, (frontGlass[0] + frontTop[0]) / 2);
+    bumpers(s === 'wedge' ? 0.42 : 0.5, s === 'wedge' ? 0.42 : 0.5);
     wheels(s === 'wedge' ? 0.32 : 0.36);
     lights(s === 'wedge' ? 0.42 : 0.78, s === 'wedge' ? 0.5 : 0.78);
 
@@ -859,7 +888,7 @@ export class GameScene {
     dash.position.set(0, 1.02, 0.66);
     this.garageCar.add(dash);
     const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.04, 6, 12), this.mat(0x26262e));
-    wheel.position.set(-0.42, 1.02, 0.48);
+    wheel.position.set(0.42, 1.02, 0.48);
     wheel.rotation.x = -1.2;
     this.garageCar.add(wheel);
     this.garageCar.position.copy(GO);
@@ -1113,7 +1142,7 @@ export class GameScene {
         // driver's seat with free look: swipe to look around the cabin
         this.garageCam.fov = 62 / this.fpZoom;
         this.garageCam.updateProjectionMatrix();
-        const eye = new THREE.Vector3(GO.x - 0.42, GO.y + 1.3, GO.z - 0.12);
+        const eye = new THREE.Vector3(GO.x + 0.42, GO.y + 1.3, GO.z - 0.12);
         this.garageCam.position.copy(eye);
         this.garageCam.lookAt(
           eye.x + Math.sin(this.fpYaw) * Math.cos(this.fpPitch),

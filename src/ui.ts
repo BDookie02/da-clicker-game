@@ -257,6 +257,7 @@ export class UI {
 
   private toggle(tab: string) {
     if (this.openTab === tab) return this.close();
+    const wasGarage = this.openTab === 'garage';
     this.openTab = tab;
     // garage opens with the sheet COLLAPSED — you see your car first,
     // cosmetics list is one tap away
@@ -265,7 +266,9 @@ export class UI {
     this.panel = el('div', tab === 'garage' ? 'panel panel-garage collapsed' : 'panel');
     this.root.appendChild(this.panel);
     this.refreshPanel();
-    this.onGarage?.(tab === 'garage');
+    const isGarage = tab === 'garage';
+    // Only the actual garage transition gets a scene fade/audio swap.
+    if (wasGarage !== isGarage) this.onGarage?.(isGarage);
     sfx.click();
   }
 
@@ -311,12 +314,13 @@ export class UI {
   }
 
   close() {
+    const wasGarage = this.openTab === 'garage';
     this.openTab = null;
     this.prestigeArmed = false;
     this.remoteBoard = null; // refetch live board next open
     this.panel?.remove();
     this.panel = null;
-    this.onGarage?.(false);
+    if (wasGarage) this.onGarage?.(false);
   }
 
   get isPanelOpen() { return this.openTab !== null; }
