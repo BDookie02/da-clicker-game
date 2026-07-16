@@ -232,16 +232,16 @@ export interface BoosterDef {
   id: string;
   name: string;
   desc: string;
-  adSeconds: number;     // placeholder ad length (maps to rewarded-ad tiers)
+  fallbackSeconds: number; // web placeholder only; AdMob controls native ad length
   mult: number;          // tap + idle multiplier
   durationSec: number;
 }
 
-// Ad boosters — unlimited watches. Longer ad = fatter multiplier.
+// AdMob controls rewarded-video length, so every completed ad grants the same
+// predictable reward. Multiple duration tiers would be misleading and would
+// let players select the largest reward for an identical network-served ad.
 export const BOOSTERS: BoosterDef[] = [
-  { id: 'quick', name: 'Quick Clip',    desc: 'Watch a 5s ad → 2x everything for 90s.',   adSeconds: 5,  mult: 2,  durationSec: 90 },
-  { id: 'mid',   name: 'Full Ad',       desc: 'Watch a 15s ad → 5x everything for 120s.', adSeconds: 15, mult: 5,  durationSec: 120 },
-  { id: 'mega',  name: 'Director\'s Cut', desc: 'Watch a 30s ad → 10x everything for 90s.', adSeconds: 30, mult: 10, durationSec: 90 },
+  { id: 'rewarded', name: 'Focus Boost', desc: 'Complete a rewarded ad → 5x everything for 120s.', fallbackSeconds: 15, mult: 5, durationSec: 120 },
 ];
 
 // THE LAB — permanent upgrades bought with Mentality; survive New Route.

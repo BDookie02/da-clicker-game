@@ -424,7 +424,7 @@ export class UI {
     } else if (this.openTab === 'boosters') {
       rows.push(`<div class="panel-note">Watch an ad, get a booster. No daily limit — the more the merrier. Ads watched: ${g.s.adsWatched}</div>`);
       for (const b of BOOSTERS) {
-        rows.push(row(b.id, `📺 ${b.name}`, b.desc, `WATCH ${b.adSeconds}s`, true, 'booster'));
+        rows.push(row(b.id, `📺 ${b.name}`, b.desc, 'WATCH AD', true, 'booster'));
       }
     }
 
@@ -488,7 +488,7 @@ export class UI {
     } else if (kind === 'booster') {
       const b = BOOSTERS.find(x => x.id === id) as BoosterDef;
       this.close(); // starting an ad closes any open menu — no stacked overlays
-      const watched = await this.ads.show(b.adSeconds);
+      const watched = await this.ads.show(b.fallbackSeconds);
       if (watched) {
         g.grantBooster(b);
         sfx.boost();

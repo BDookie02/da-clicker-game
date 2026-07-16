@@ -14,8 +14,8 @@ import { AdMob, RewardAdPluginEvents } from '@capacitor-community/admob';
 // ---------------------------------------------------------------------------
 
 export interface AdProvider {
-  /** Shows a rewarded ad. Resolves true only on a verified completed watch. */
-  show(lengthSec: number): Promise<boolean>;
+  /** Shows a rewarded ad. fallbackSeconds is used only by the web placeholder. */
+  show(fallbackSeconds: number): Promise<boolean>;
 }
 
 export const AD_CONFIG = {
