@@ -10,6 +10,8 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // Override for release with -PADMOB_ANDROID_APP_ID=ca-app-pub-...~...
+        manifestPlaceholders.admobAppId = project.findProperty("ADMOB_ANDROID_APP_ID") ?: "ca-app-pub-3940256099942544~3347511713"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61

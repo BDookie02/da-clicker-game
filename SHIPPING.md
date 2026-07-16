@@ -36,6 +36,20 @@ machine setup that requires a human.
   platforms (81 assets via @capacitor/assets from the pixel traffic light).
 - [x] iOS ATT usage string + SKAdNetwork entry in Info.plist.
 
+## Automated AdMob release configuration
+
+The checked-in defaults always use Google's public test IDs. Production builds
+need no source edits:
+
+- Set `VITE_ADMOB_TESTING=false`.
+- Set `VITE_ADMOB_ANDROID_REWARDED_ID` and `VITE_ADMOB_IOS_REWARDED_ID` to
+  the rewarded-unit IDs created in AdMob.
+- Build Android with `-PADMOB_ANDROID_APP_ID=ca-app-pub-...~...` to inject the
+  AdMob app ID into the manifest. Without that property, Android safely keeps
+  Google's public test app ID.
+- Before archiving iOS, replace the public test `GADApplicationIdentifier` in
+  `ios/App/App/Info.plist` with the production iOS AdMob app ID.
+
 ## Remaining — literally just accounts (your part)
 1. **Cloudflare (free, ~3 min)** — deploy the backend:
    `npm i -g wrangler && wrangler login`

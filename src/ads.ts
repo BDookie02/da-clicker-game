@@ -1,4 +1,5 @@
 import { music } from './audio';
+import { AdMob, RewardAdPluginEvents } from '@capacitor-community/admob';
 
 // ---------------------------------------------------------------------------
 // Rewarded ads. One interface, two providers:
@@ -18,18 +19,18 @@ export interface AdProvider {
 }
 
 export const AD_CONFIG = {
-  TESTING: true, // set false for production ads
+  TESTING: import.meta.env.VITE_ADMOB_TESTING !== 'false',
   // Google's documented test rewarded-video unit IDs (safe to ship in dev):
   rewardedAndroid: 'ca-app-pub-3940256099942544/5224354917',
   rewardedIos: 'ca-app-pub-3940256099942544/1712485313',
   // production unit IDs go here after AdMob account setup:
-  prodRewardedAndroid: 'PASTE_ANDROID_REWARDED_UNIT_ID',
-  prodRewardedIos: 'PASTE_IOS_REWARDED_UNIT_ID',
+  prodRewardedAndroid: import.meta.env.VITE_ADMOB_ANDROID_REWARDED_ID ?? '',
+  prodRewardedIos: import.meta.env.VITE_ADMOB_IOS_REWARDED_ID ?? '',
 };
 
 class AdMobAdProvider implements AdProvider {
   private ready = false;
-  constructor(private admob: any, private isIOS: boolean) {}
+  constructor(private isIOS: boolean) {}
 
   private unitId(): string {
     if (AD_CONFIG.TESTING) return this.isIOS ? AD_CONFIG.rewardedIos : AD_CONFIG.rewardedAndroid;
@@ -38,15 +39,15 @@ class AdMobAdProvider implements AdProvider {
 
   private async init() {
     if (this.ready) return;
-    await this.admob.AdMob.initialize({ initializeForTesting: AD_CONFIG.TESTING });
+    await AdMob.initialize({ initializeForTesting: AD_CONFIG.TESTING });
     this.ready = true;
   }
 
   async show(): Promise<boolean> {
     try {
       await this.init();
-      const { AdMob, RewardAdPluginEvents } = this.admob;
-      await AdMob.prepareRewardVideoAd({ adId: this.unitId() });
+      const adId = this.unitId();
+      if (!AD_CONFIG.TESTING && !adId) throw new Error('Missing production AdMob rewarded unit ID');
       return await new Promise<boolean>((resolve) => {
         let rewarded = false;
         const subs: { remove(): void }[] = [];
@@ -54,10 +55,14 @@ class AdMobAdProvider implements AdProvider {
           subs.forEach(s => s.remove());
           resolve(ok);
         };
-        AdMob.addListener(RewardAdPluginEvents.Rewarded, () => { rewarded = true; }).then((s: any) => subs.push(s));
-        AdMob.addListener(RewardAdPluginEvents.Dismissed, () => done(rewarded)).then((s: any) => subs.push(s));
-        AdMob.addListener(RewardAdPluginEvents.FailedToShow, () => done(false)).then((s: any) => subs.push(s));
-        void AdMob.showRewardVideoAd();
+        Promise.all([
+          AdMob.addListener(RewardAdPluginEvents.Rewarded, () => { rewarded = true; }),
+          AdMob.addListener(RewardAdPluginEvents.Dismissed, () => done(rewarded)),
+          AdMob.addListener(RewardAdPluginEvents.FailedToShow, () => done(false)),
+        ]).then((listeners) => {
+          subs.push(...listeners);
+          return AdMob.prepareRewardVideoAd({ adId });
+        }).then(() => AdMob.showRewardVideoAd()).catch(() => done(false));
       });
     } catch {
       return false; // no fill / offline — player just retries
@@ -109,12 +114,8 @@ export async function initAds(): Promise<AdProvider> {
   let provider: AdProvider;
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.()) {
-    try {
-      const specifier = '@capacitor-community/admob';
-      const mod = await import(/* @vite-ignore */ specifier);
-      provider = new AdMobAdProvider(mod, cap.getPlatform() === 'ios');
-      return withMusicPause(provider);
-    } catch { /* plugin missing — fall through */ }
+    provider = new AdMobAdProvider(cap.getPlatform() === 'ios');
+    return withMusicPause(provider);
   }
   provider = new PlaceholderAdProvider();
   return withMusicPause(provider);
