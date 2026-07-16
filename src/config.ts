@@ -237,11 +237,12 @@ export interface BoosterDef {
   durationSec: number;
 }
 
-// AdMob controls rewarded-video length, so every completed ad grants the same
-// predictable reward. Multiple duration tiers would be misleading and would
-// let players select the largest reward for an identical network-served ad.
+// AdMob chooses the video length. After a verified completion, the game selects
+// the matching reward tier from the measured watch time.
 export const BOOSTERS: BoosterDef[] = [
-  { id: 'rewarded', name: 'Focus Boost', desc: 'Complete a rewarded ad → 5x everything for 120s.', fallbackSeconds: 15, mult: 5, durationSec: 120 },
+  { id: 'quick', name: 'Quick Clip', desc: 'Up to 9s ad → 2x everything for 90s.', fallbackSeconds: 5, mult: 2, durationSec: 90 },
+  { id: 'mid', name: 'Full Ad', desc: '10–24s ad → 5x everything for 120s.', fallbackSeconds: 15, mult: 5, durationSec: 120 },
+  { id: 'mega', name: 'Director\'s Cut', desc: '25s+ ad → 10x everything for 90s.', fallbackSeconds: 30, mult: 10, durationSec: 90 },
 ];
 
 // THE LAB — permanent upgrades bought with Mentality; survive New Route.

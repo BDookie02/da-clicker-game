@@ -15,7 +15,12 @@ import { AdMob, RewardAdPluginEvents } from '@capacitor-community/admob';
 
 export interface AdProvider {
   /** Shows a rewarded ad. fallbackSeconds is used only by the web placeholder. */
-  show(fallbackSeconds: number): Promise<boolean>;
+  show(fallbackSeconds: number): Promise<AdResult>;
+}
+
+export interface AdResult {
+  rewarded: boolean;
+  watchedSeconds: number;
 }
 
 export const AD_CONFIG = {
@@ -43,38 +48,47 @@ class AdMobAdProvider implements AdProvider {
     this.ready = true;
   }
 
-  async show(): Promise<boolean> {
+  async show(): Promise<AdResult> {
     try {
       await this.init();
       const adId = this.unitId();
       if (!AD_CONFIG.TESTING && !adId) throw new Error('Missing production AdMob rewarded unit ID');
-      return await new Promise<boolean>((resolve) => {
+      return await new Promise<AdResult>((resolve) => {
         let rewarded = false;
+        let shownAt = 0;
+        let rewardedAt = 0;
         let settled = false;
         const subs: { remove(): void }[] = [];
         const done = (ok: boolean) => {
           if (settled) return;
           settled = true;
           subs.forEach(s => s.remove());
-          resolve(ok);
+          const end = rewardedAt || performance.now();
+          resolve({ rewarded: ok, watchedSeconds: shownAt ? Math.max(0, (end - shownAt) / 1000) : 0 });
         };
         Promise.all([
-          AdMob.addListener(RewardAdPluginEvents.Rewarded, () => { rewarded = true; }),
+          AdMob.addListener(RewardAdPluginEvents.Rewarded, () => {
+            rewarded = true;
+            rewardedAt = performance.now();
+          }),
           AdMob.addListener(RewardAdPluginEvents.Dismissed, () => done(rewarded)),
           AdMob.addListener(RewardAdPluginEvents.FailedToShow, () => done(false)),
         ]).then((listeners) => {
           subs.push(...listeners);
           return AdMob.prepareRewardVideoAd({ adId });
-        }).then(() => AdMob.showRewardVideoAd()).catch(() => done(false));
+        }).then(() => {
+          shownAt = performance.now();
+          return AdMob.showRewardVideoAd();
+        }).catch(() => done(false));
       });
     } catch {
-      return false; // no fill / offline — player just retries
+      return { rewarded: false, watchedSeconds: 0 }; // no fill / offline — player just retries
     }
   }
 }
 
 export class PlaceholderAdProvider implements AdProvider {
-  show(lengthSec: number): Promise<boolean> {
+  show(lengthSec: number): Promise<AdResult> {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
       overlay.className = 'ad-overlay';
@@ -105,7 +119,7 @@ export class PlaceholderAdProvider implements AdProvider {
           clearInterval(iv);
           btn.disabled = true;
           btn.innerHTML = 'REWARD CLAIMED ✓';
-          setTimeout(() => { overlay.remove(); resolve(true); }, 600);
+          setTimeout(() => { overlay.remove(); resolve({ rewarded: true, watchedSeconds: watched }); }, 600);
         }
       }, 250);
     });

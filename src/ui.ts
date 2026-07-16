@@ -201,8 +201,8 @@ export class UI {
     const close = () => ov.remove();
     ov.querySelector('.x')!.addEventListener('click', close);
     ov.querySelector('.m-ad')!.addEventListener('click', async () => {
-      const watched = await this.ads.show(15);
-      if (watched) {
+      const ad = await this.ads.show(15);
+      if (ad.rewarded) {
         this.game.s.mentality += AD_M_REWARD;
         this.game.save();
         sfx.buy();
@@ -295,8 +295,8 @@ export class UI {
     });
     overlay.querySelector('.off-double')!.addEventListener('click', async () => {
       overlay.remove();
-      const watched = await this.ads.show(15);
-      if (watched) {
+      const ad = await this.ads.show(15);
+      if (ad.rewarded) {
         this.game.s.respect += gain; // second copy of the earnings
         sfx.buy();
         this.toast(`DOUBLED: +${fmt(gain)} bonus Respect`, 'gold');
@@ -422,9 +422,9 @@ export class UI {
         rows.push(row('signin', 'Account', 'Sign in to submit your taps worldwide', 'SIGN IN', true, 'lb'));
       }
     } else if (this.openTab === 'boosters') {
-      rows.push(`<div class="panel-note">Complete the ad to earn the boost. Closing early or going offline gives no reward. Ads watched: ${g.s.adsWatched}</div>`);
+      rows.push(`<div class="panel-note">AdMob chooses the ad length. Finish it to receive the matching reward below; closing early or going offline gives no reward. Ads watched: ${g.s.adsWatched}</div>`);
       for (const b of BOOSTERS) {
-        rows.push(row(b.id, `📺 ${b.name}`, b.desc, 'WATCH AD', true, 'booster'));
+        rows.push(row(b.id, `📺 ${b.name}`, b.desc, b.id === 'mid' ? 'WATCH AD' : 'AUTO', b.id === 'mid', b.id === 'mid' ? 'booster' : 'tier'));
       }
     }
 
@@ -486,12 +486,15 @@ export class UI {
       this.close();
       await this.promptUsername(false);
     } else if (kind === 'booster') {
-      const b = BOOSTERS.find(x => x.id === id) as BoosterDef;
       this.close(); // starting an ad closes any open menu — no stacked overlays
-      const watched = await this.ads.show(b.fallbackSeconds);
-      if (watched) {
+      const ad = await this.ads.show(15);
+      if (ad.rewarded) {
+        const b = ad.watchedSeconds < 10 ? BOOSTERS[0]
+          : ad.watchedSeconds < 25 ? BOOSTERS[1]
+            : BOOSTERS[2];
         g.grantBooster(b);
         sfx.boost();
+        this.toast(`${Math.round(ad.watchedSeconds)}s ad complete — ${b.name} awarded!`, 'gold');
       } else this.toast('Ad closed early or unavailable — no boost awarded.');
     }
     this.refresh();
