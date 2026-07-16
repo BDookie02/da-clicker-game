@@ -50,8 +50,11 @@ class AdMobAdProvider implements AdProvider {
       if (!AD_CONFIG.TESTING && !adId) throw new Error('Missing production AdMob rewarded unit ID');
       return await new Promise<boolean>((resolve) => {
         let rewarded = false;
+        let settled = false;
         const subs: { remove(): void }[] = [];
         const done = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
           subs.forEach(s => s.remove());
           resolve(ok);
         };

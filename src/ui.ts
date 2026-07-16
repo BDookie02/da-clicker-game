@@ -189,7 +189,7 @@ export class UI {
     ov.innerHTML = `
       <div class="ad-box mshop">
         <div class="panel-head">GET MORE M<button class="x">✕</button></div>
-        <div class="panel-note">M is premium currency for cosmetics & The Lab. Buy it, or watch an ad for a little.</div>
+        <div class="panel-note">M is premium currency for cosmetics & The Lab. Complete the ad to earn M; closing early or going offline gives no reward.</div>
         <div class="row mshop-ad">
           <div class="row-txt"><div class="row-name">📺 Watch ad → +${AD_M_REWARD} M</div>
             <div class="row-desc">Free. As much M as the ad is worth.</div></div>
@@ -208,7 +208,7 @@ export class UI {
         sfx.buy();
         this.toast(`+${AD_M_REWARD} M`, 'gold');
         this.refresh();
-      }
+      } else this.toast('Ad closed early or unavailable — no M awarded.');
     });
     ov.querySelectorAll('.row button[data-pack]').forEach((b) => {
       b.addEventListener('click', async () => {
@@ -285,7 +285,7 @@ export class UI {
         </div>
         <div class="name-actions">
           <button class="off-collect">COLLECT</button>
-          <button class="off-double">📺 COLLECT ×2</button>
+          <button class="off-double" title="Complete the ad. Closing early gives no bonus.">📺 COLLECT ×2</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -300,7 +300,7 @@ export class UI {
         this.game.s.respect += gain; // second copy of the earnings
         sfx.buy();
         this.toast(`DOUBLED: +${fmt(gain)} bonus Respect`, 'gold');
-      }
+      } else this.toast('Ad closed early or unavailable — no bonus awarded.');
       this.refresh();
     });
   }
@@ -422,7 +422,7 @@ export class UI {
         rows.push(row('signin', 'Account', 'Sign in to submit your taps worldwide', 'SIGN IN', true, 'lb'));
       }
     } else if (this.openTab === 'boosters') {
-      rows.push(`<div class="panel-note">Watch an ad, get a booster. No daily limit — the more the merrier. Ads watched: ${g.s.adsWatched}</div>`);
+      rows.push(`<div class="panel-note">Complete the ad to earn the boost. Closing early or going offline gives no reward. Ads watched: ${g.s.adsWatched}</div>`);
       for (const b of BOOSTERS) {
         rows.push(row(b.id, `📺 ${b.name}`, b.desc, 'WATCH AD', true, 'booster'));
       }
@@ -492,7 +492,7 @@ export class UI {
       if (watched) {
         g.grantBooster(b);
         sfx.boost();
-      }
+      } else this.toast('Ad closed early or unavailable — no boost awarded.');
     }
     this.refresh();
   }
