@@ -30,7 +30,10 @@ function devlogSaver(): Plugin {
 // base './' so the built app works inside a Capacitor webview or any static host
 export default defineConfig({
   base: './',
-  build: { target: 'es2022' },
+  // Android 7 ships with a Chrome 51-era system WebView. Capacitor devices
+  // normally update WebView through Google Play, but compiling to this floor
+  // prevents a blank screen on fresh/offline API 24 devices too.
+  build: { target: 'chrome51' },
   server: { host: true },
   plugins: [devlogSaver()],
 });
