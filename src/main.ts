@@ -197,7 +197,15 @@ let gPinchDist = 0;
 const isUI = (t: EventTarget | null) =>
   !!(t as HTMLElement)?.closest?.('.panel, .menu-row, button, .ad-overlay, .garage-exit-fixed');
 
+// Normal tap mode also supports drag-to-look. The initial press still counts as
+// a tap; movement turns the driver's head without switching modes.
+const tapPointers = new Map<number, { x: number; y: number }>();
+
 window.addEventListener('pointerdown', (ev) => {
+  if (!scene.inGarage && !isUI(ev.target)) {
+    tapPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    return;
+  }
   if (!scene.inGarage || isUI(ev.target)) return;
   gPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
   if (gPointers.size === 1) gMoved = false;
@@ -207,6 +215,13 @@ window.addEventListener('pointerdown', (ev) => {
   }
 });
 window.addEventListener('pointermove', (ev) => {
+  const tapPointer = tapPointers.get(ev.pointerId);
+  if (!scene.inGarage && tapPointer) {
+    const dx = ev.clientX - tapPointer.x, dy = ev.clientY - tapPointer.y;
+    tapPointer.x = ev.clientX; tapPointer.y = ev.clientY;
+    scene.tapLook(dx, dy);
+    return;
+  }
   const p = gPointers.get(ev.pointerId);
   if (!scene.inGarage || !p) return;
   const dx = ev.clientX - p.x, dy = ev.clientY - p.y;
@@ -224,6 +239,7 @@ window.addEventListener('pointermove', (ev) => {
   }
 });
 const endPointer = (ev: PointerEvent) => {
+  tapPointers.delete(ev.pointerId);
   if (!gPointers.has(ev.pointerId)) return;
   const wasSingle = gPointers.size === 1;
   gPointers.delete(ev.pointerId);

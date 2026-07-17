@@ -125,8 +125,24 @@ export class GameScene {
   private time = 0;
   private cockpit!: THREE.Group;
   private gaze: 'opponent' | 'road' = 'opponent';
+  private freeLook = false;
+  private lookYaw = 0;
+  private lookPitch = 0;
   // must be a Camera: Camera.lookAt aims -z (view direction), Object3D aims +z
   private gazeHelper = new THREE.PerspectiveCamera();
+
+  /** Drag-look while normal tapping remains enabled. */
+  tapLook(dx: number, dy: number) {
+    if (!this.freeLook) {
+      const dir = new THREE.Vector3();
+      this.camera.getWorldDirection(dir);
+      this.lookYaw = Math.atan2(dir.x, -dir.z);
+      this.lookPitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+      this.freeLook = true;
+    }
+    this.lookYaw -= dx * 0.006;
+    this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - dy * 0.004, -0.75, 0.75);
+  }
 
   constructor(canvas: HTMLCanvasElement) {
     // preserveDrawingBuffer lets us grab devlog screenshots off the canvas
@@ -1063,7 +1079,8 @@ export class GameScene {
     if (ornament) {
       const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.08, 0),
         new THREE.MeshBasicMaterial({ color: new THREE.Color(ornament) }));
-      m.position.set(-0.38, 1.06, 0.52); // on the dash, driver's side
+      // Dash top is y=1.10; keep the ornament's lowest point just above it.
+      m.position.set(-0.38, 1.19, 0.52); // on the dash, driver's side
       this.garageCar.add(m);
       this.garageOrn = m;
     }
@@ -1181,9 +1198,15 @@ export class GameScene {
     // head turn: smoothly swing between the opponent's window and the road.
     // Eye contact aims at the DRIVER'S actual head height (buses, cube cars
     // and low wedges all differ), not a fixed line.
-    const gazeTarget = this.gaze === 'opponent'
-      ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05, this.opponentAnchor.position.z - this.spritePos.z)
-      : new THREE.Vector3(this.camera.position.x, 1.15, this.camera.position.z - 30);
+    const gazeTarget = this.freeLook
+      ? new THREE.Vector3(
+        this.camera.position.x + Math.sin(this.lookYaw) * Math.cos(this.lookPitch),
+        this.camera.position.y + Math.sin(this.lookPitch),
+        this.camera.position.z - Math.cos(this.lookYaw) * Math.cos(this.lookPitch),
+      )
+      : this.gaze === 'opponent'
+        ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05, this.opponentAnchor.position.z - this.spritePos.z)
+        : new THREE.Vector3(this.camera.position.x, 1.15, this.camera.position.z - 30);
     this.gazeHelper.position.copy(this.camera.position);
     this.gazeHelper.lookAt(gazeTarget);
     this.camera.quaternion.slerp(this.gazeHelper.quaternion, Math.min(1, dt * 3.2));

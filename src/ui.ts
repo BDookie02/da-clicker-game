@@ -7,7 +7,7 @@ import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
 
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
-import { PlaceholderAdProvider, withMusicPause, type AdProvider } from './ads';
+import { PlaceholderAdProvider, withMusicPause, type AdProvider, type AdResult } from './ads';
 import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
@@ -28,6 +28,8 @@ export class UI {
   private prestigeArmed = false;
   private remoteBoard: LbEntry[] | null = null;
   private garageSheetOpen = true; // cosmetics list visible over the 3D garage
+  private adInProgress = false;
+  private lastAdStartedAt = 0;
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
@@ -90,6 +92,24 @@ export class UI {
       ev.stopPropagation();
       muteBtn.textContent = sfx.toggleMute() ? '🔇' : '🔊';
     });
+  }
+
+  /** One rewarded request at a time, with a five-second start cooldown. */
+  private async showRewardedAd(fallbackSeconds: number): Promise<AdResult | null> {
+    const now = Date.now();
+    const waitMs = 5000 - (now - this.lastAdStartedAt);
+    if (this.adInProgress) {
+      this.toast('An ad is already opening.');
+      return null;
+    }
+    if (waitMs > 0) {
+      this.toast(`Please wait ${Math.ceil(waitMs / 1000)}s before opening another ad.`);
+      return null;
+    }
+    this.adInProgress = true;
+    this.lastAdStartedAt = now;
+    try { return await this.ads.show(fallbackSeconds); }
+    finally { this.adInProgress = false; }
   }
 
   // ---- HUD refresh ----------------------------------------------------------
@@ -201,7 +221,8 @@ export class UI {
     const close = () => ov.remove();
     ov.querySelector('.x')!.addEventListener('click', close);
     ov.querySelector('.m-ad')!.addEventListener('click', async () => {
-      const ad = await this.ads.show(15);
+      const ad = await this.showRewardedAd(15);
+      if (!ad) return;
       if (ad.rewarded) {
         this.game.s.mentality += AD_M_REWARD;
         this.game.save();
@@ -295,7 +316,8 @@ export class UI {
     });
     overlay.querySelector('.off-double')!.addEventListener('click', async () => {
       overlay.remove();
-      const ad = await this.ads.show(15);
+      const ad = await this.showRewardedAd(15);
+      if (!ad) return;
       if (ad.rewarded) {
         this.game.s.respect += gain; // second copy of the earnings
         sfx.buy();
@@ -487,7 +509,8 @@ export class UI {
       await this.promptUsername(false);
     } else if (kind === 'booster') {
       this.close(); // starting an ad closes any open menu — no stacked overlays
-      const ad = await this.ads.show(15);
+      const ad = await this.showRewardedAd(15);
+      if (!ad) return;
       if (ad.rewarded) {
         const b = ad.watchedSeconds < 10 ? BOOSTERS[0]
           : ad.watchedSeconds < 25 ? BOOSTERS[1]
