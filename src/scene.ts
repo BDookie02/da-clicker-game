@@ -631,23 +631,18 @@ export class GameScene {
     this.spriteAnger = a;
     const slot = this.spriteSlot;
 
-    // apply custom art to a sprite: per-tier <slot>_a<tier>.png if present,
-    // else single <slot>.png with a per-tier red tint. Sets spriteHasCustom
-    // so future tier changes reuse this sprite instead of flashing procedural.
+    // All shipped drivers use one real sprite per character. Apply the anger
+    // tint in-material instead of probing nonexistent _a0.._a4 files on every
+    // tier change (those 404s were especially noisy in the Android WebView).
     const applyCustom = (sprite: THREE.Sprite) => {
-      loadCustomSprite(`${slot}_a${a}`, (tex) => {
-        if (this.spriteSlot !== slot || this.spriteAnger !== a || sprite !== this.sprite) return;
-        const m = sprite.material as THREE.SpriteMaterial;
-        m.map = tex; m.color.setHex(0xffffff); m.needsUpdate = true;
-        this.spriteHasCustom = true;
-      }, () => loadCustomSprite(slot, (tex) => {
+      loadCustomSprite(slot, (tex) => {
         if (this.spriteSlot !== slot || sprite !== this.sprite) return;
         const m = sprite.material as THREE.SpriteMaterial;
         m.map = tex;
         m.color.setHex([0xffffff, 0xffd8cc, 0xffb4a0, 0xff8a70, 0xff5a44][a]);
         m.needsUpdate = true;
         this.spriteHasCustom = true;
-      }));
+      });
     };
 
     // custom face already showing → just update it in place (no flash)
@@ -1062,7 +1057,7 @@ export class GameScene {
       lowrider: [1.02, 0.84, 1], limo: [1, 0.96, 1.52],
     };
     const sc = S[style];
-    return sc ? { url: 'models/car_sedan_white.glb', scale: sc } : null;
+    return sc ? { url: 'models/car_sedan_meshy.glb', scale: sc } : null;
   }
 
   private carMeshMaster(url: string): Promise<THREE.Group | null> {

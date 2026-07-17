@@ -72,46 +72,19 @@ export async function initLeaderboards(): Promise<LeaderboardProvider> {
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.()) {
     try {
-      // resolved at runtime only once the native plugin is installed
-      // (variable specifier keeps tsc/vite from resolving it at build time)
-      const specifier = '@openforge/capacitor-game-connect';
-      const mod = await import(/* @vite-ignore */ specifier);
-      return new GameConnectLeaderboard(mod.GameConnect, cap.getPlatform() === 'ios');
+      // Keep this as a real Vite import so the JavaScript bridge is included
+      // in the packaged WebView bundle. An ignored bare import cannot be
+      // resolved by an Android WebView and silently disabled Play Games.
+      const mod = await import('@openforge/capacitor-game-connect');
+      return new GameConnectLeaderboard(mod.CapacitorGameConnect, cap.getPlatform() === 'ios');
     } catch { /* plugin not installed yet — fall through to local */ }
   }
   return new LocalLeaderboard();
 }
 
-// ---- worldwide list (placeholder population) -------------------------------
-// 49 seeded rivals whose scores are fixed "skill curves" — as your taps grow
-// you genuinely overtake them one by one, so the list feels alive. Swapped
-// for real platform/global data at publish; the UI render path is identical.
+// ---- worldwide list ---------------------------------------------------------
 
 export interface LbEntry { rank: number; name: string; taps: number; you: boolean; }
-
-const RIVAL_NAMES = [
-  'TapGod_99', 'xX_Mentality_Xx', 'RedLightRonnie', 'WristWarrior', 'GoopDodger',
-  'SigmaCommuter', 'NapkinCollector', 'IdleHands77', 'CrosswalkKing', 'GreenLightGwen',
-  'StoplightStan', 'ClutchCadence', 'TurnSignalTina', 'BlinkerBoi', 'HornHonker3000',
-  'LaneChanger', 'YellowLightYolo', 'PedalPusher', 'DashCamDan', 'RushHourRick',
-  'GridlockGary', 'MericaMotors', 'VibeCheckVal', 'NoBlinkNate', 'FocusFiend',
-  'DisciplineDee', 'MonkModeMike', 'GrindsetGreg', 'LockedInLou', 'EyeContactEd',
-  'StaringSteve', 'UnbotheredUma', 'PatientPete', 'CalmCarl', 'ZenZeke',
-  'TapTitan', 'ClickerChamp', 'FingerFlash', 'ThumbThunder', 'RapidRita',
-  'SteadyEddie', 'MellowMel', 'ChillChad', 'CoolHandCleo', 'SmoothSammy',
-  'TrafficTsar', 'IntersectionIvy', 'BoulevardBex', 'AvenueAce',
-];
-
-function rivalCurve(i: number): { base: number; mult: number } {
-  // deterministic per-rival skill: log-spread so the board spans casuals->gods
-  let a = ((i + 1) * 2654435761) >>> 0;
-  a ^= a >>> 13; a = Math.imul(a, 1274126177) >>> 0; a ^= a >>> 16;
-  const r = a / 4294967296;
-  return {
-    base: Math.floor(50 + r * 4000),                       // head start
-    mult: Math.pow(10, (i % 7) * 0.55 + r * 0.5) * 0.02,   // growth vs you
-  };
-}
 
 /** Submit the player's raw tap total to the real backend (fire-and-forget). */
 export function submitScoreRemote(apiUrl: string, name: string, taps: number) {
@@ -125,14 +98,13 @@ export function submitScoreRemote(apiUrl: string, name: string, taps: number) {
 /** Fetch the real worldwide board: top 10 + the caller's neighborhood. */
 export async function fetchBoardRemote(apiUrl: string, name: string): Promise<LbEntry[] | null> {
   try {
-    const res = await fetch(`${apiUrl}/board?name=${encodeURIComponent(name)}`);
+    const token = localStorage.getItem('discipline-account-token-v1');
+    const res = await fetch(`${apiUrl}/v1/board`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
     if (!res.ok) return null;
     const data = await res.json();
-    const rows: { name: string; taps: number }[] = data.top ?? [];
-    const entries: LbEntry[] = rows.map((r, i) => ({
-      rank: i + 1, name: r.name, taps: r.taps,
-      you: !!name && r.name.toLowerCase() === name.toLowerCase(),
-    }));
+    const rows: LbEntry[] = data.top ?? [];
+    const entries: LbEntry[] = rows.map((r, i) => ({ ...r, rank: r.rank ?? i + 1,
+      you: r.you || (!!name && r.name.toLowerCase() === name.toLowerCase()) }));
     if (data.me && !entries.some(e => e.you)) {
       entries.push({ rank: data.me.rank, name: data.me.name, taps: data.me.taps, you: true });
     }
@@ -142,11 +114,7 @@ export async function fetchBoardRemote(apiUrl: string, name: string): Promise<Lb
 
 /** Ranked worldwide list with the player's row inserted and highlighted. */
 export function getWorldList(playerTaps: number, playerName = 'YOU'): LbEntry[] {
-  const rows = RIVAL_NAMES.map((name, i) => {
-    const { base, mult } = rivalCurve(i);
-    return { name, taps: Math.floor(base + playerTaps * mult), you: false };
-  });
-  rows.push({ name: playerName, taps: Math.floor(playerTaps), you: true });
-  rows.sort((a, b) => b.taps - a.taps);
-  return rows.map((r, i) => ({ ...r, rank: i + 1 }));
+  // Never fabricate competitors. Until the authenticated backend responds,
+  // show only the local player as preview data.
+  return [{ rank: 1, name: playerName, taps: Math.floor(playerTaps), you: true }];
 }

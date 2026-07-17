@@ -39,14 +39,20 @@ export const M_PACKS: MPack[] = [
 export const AD_M_REWARD = 5;
 export interface PurchaseProvider {
   readonly platform: string;
-  /** Charge for a pack. Resolves true only on a completed purchase. */
-  buy(pack: MPack): Promise<boolean>;
+  /** Opens the store. Currency is granted only after backend verification. */
+  buy(pack: MPack): Promise<PurchaseReceipt | null>;
+}
+export interface PurchaseReceipt {
+  platform: 'web' | 'android' | 'ios';
+  productId: string;
+  transactionId?: string;
+  purchaseToken?: string;
 }
 
 /** Web/dev provider: a confirm dialog stands in for the store sheet. */
 export class PlaceholderPurchases implements PurchaseProvider {
   readonly platform = 'web';
-  buy(pack: MPack): Promise<boolean> {
+  buy(pack: MPack): Promise<PurchaseReceipt | null> {
     return new Promise((resolve) => {
       const ov = document.createElement('div');
       ov.className = 'ad-overlay';
@@ -64,8 +70,8 @@ export class PlaceholderPurchases implements PurchaseProvider {
           </div>
         </div>`;
       document.body.appendChild(ov);
-      ov.querySelector('.buy-cancel')!.addEventListener('click', () => { ov.remove(); resolve(false); });
-      ov.querySelector('.buy-ok')!.addEventListener('click', () => { ov.remove(); resolve(true); });
+      ov.querySelector('.buy-cancel')!.addEventListener('click', () => { ov.remove(); resolve(null); });
+      ov.querySelector('.buy-ok')!.addEventListener('click', () => { ov.remove(); resolve({ platform: 'web', productId: pack.id }); });
     });
   }
 }
@@ -73,10 +79,10 @@ export class PlaceholderPurchases implements PurchaseProvider {
 class NativePurchaseProvider implements PurchaseProvider {
   readonly platform = 'native';
 
-  async buy(pack: MPack): Promise<boolean> {
+  async buy(pack: MPack): Promise<PurchaseReceipt | null> {
     try {
       const { isBillingSupported } = await NativePurchases.isBillingSupported();
-      if (!isBillingSupported) return false;
+      if (!isBillingSupported) return null;
       // Query first so Google Play—not a hardcoded label—is authoritative for
       // product availability and pricing in the purchase sheet.
       await NativePurchases.getProduct({
@@ -86,12 +92,20 @@ class NativePurchaseProvider implements PurchaseProvider {
       const transaction = await NativePurchases.purchaseProduct({
         productIdentifier: pack.id,
         productType: PURCHASE_TYPE.INAPP,
-        isConsumable: true,
-        autoAcknowledgePurchases: true,
+        // The backend verifies and consumes only after recording the purchase.
+        // Leaving it pending here prevents an unverified client-side grant.
+        isConsumable: false,
+        autoAcknowledgePurchases: false,
       });
-      return transaction.productIdentifier === pack.id;
+      if (transaction.productIdentifier !== pack.id) return null;
+      return {
+        platform: ((window as any).Capacitor?.getPlatform?.() === 'ios' ? 'ios' : 'android'),
+        productId: pack.id,
+        transactionId: transaction.transactionId,
+        purchaseToken: transaction.purchaseToken,
+      };
     } catch {
-      return false;
+      return null;
     }
   }
 

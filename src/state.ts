@@ -32,6 +32,7 @@ export interface SaveData {
   lastSeen: number;                    // epoch ms, for offline earnings
   adsWatched: number;
   infiniteCurrency: boolean;
+  appliedPurchases: string[];          // crash-safe receipt grants
 }
 
 const fresh = (): SaveData => ({
@@ -54,6 +55,7 @@ const fresh = (): SaveData => ({
   lastSeen: Date.now(),
   adsWatched: 0,
   infiniteCurrency: false,
+  appliedPurchases: [],
 });
 
 export type GameEvent =
@@ -316,6 +318,7 @@ export class Game {
         // clear that test balance once. From v1 onward only the M shop can add M.
         if (!parsed.economyVersion) parsed.mentality = 0;
         const loaded = { ...fresh(), ...parsed, economyVersion: 1 } as SaveData;
+        loaded.appliedPurchases = Array.isArray(parsed.appliedPurchases) ? parsed.appliedPurchases : [];
         loaded.dashboardSlots = Array.isArray(parsed.dashboardSlots)
           ? [...parsed.dashboardSlots.slice(0, 6), null, null, null, null, null, null].slice(0, 6)
           : [parsed.equippedCosmetics?.ornament ?? parsed.equippedCosmetics?.dash ?? null, null, null, null, null, null];

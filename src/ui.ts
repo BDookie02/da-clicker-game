@@ -4,6 +4,7 @@ import { music, sfx } from './audio';
 import { fetchBoardRemote, getWorldList, type LbEntry, type LeaderboardProvider } from './leaderboard';
 import { API_URL } from './config';
 import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
+import type { AccountService } from './account';
 
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
@@ -21,6 +22,7 @@ export class UI {
   root: HTMLElement;
   ads: AdProvider = withMusicPause(new PlaceholderAdProvider());
   purchases: PurchaseProvider = new PlaceholderPurchases();
+  account: AccountService | null = null;
   private panel: HTMLElement | null = null;
   private bars: Record<string, HTMLElement> = {};
   private fade: HTMLElement;
@@ -168,6 +170,50 @@ export class UI {
     setTimeout(() => { this.fade.classList.remove('on'); cb?.(); }, 2400);
   }
 
+  /** One Discipline login restores the same save on Android, iOS, and web. */
+  promptAccount(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.account) { resolve(); return; }
+      const overlay = el('div', 'ad-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box name-box account-box">
+          <div class="ad-label">DISCIPLINE ACCOUNT</div>
+          <div class="name-copy">One login keeps your username, progress, inventory, and verified purchases across Android and iOS.</div>
+          <input class="name-input account-name" maxlength="14" autocomplete="username" placeholder="USERNAME" spellcheck="false" />
+          <input class="name-input account-pass" type="password" maxlength="128" autocomplete="current-password" placeholder="PASSWORD · 10+ CHARACTERS" />
+          <div class="name-status"></div>
+          <div class="name-actions"><button class="account-login">LOG IN</button><button class="account-create">CREATE ACCOUNT</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const name = overlay.querySelector('.account-name') as HTMLInputElement;
+      const pass = overlay.querySelector('.account-pass') as HTMLInputElement;
+      const status = overlay.querySelector('.name-status') as HTMLElement;
+      const submit = async (create: boolean) => {
+        if (!USERNAME_RE.test(name.value.trim())) { status.textContent = 'Username: 3-14 letters, numbers, or _'; return; }
+        if (pass.value.length < 10) { status.textContent = 'Password must be at least 10 characters.'; return; }
+        status.textContent = create ? 'Creating account…' : 'Signing in…';
+        try {
+          if (create) await this.account!.register(name.value.trim(), pass.value);
+          else await this.account!.login(name.value.trim(), pass.value);
+          this.game.s.username = this.account!.username;
+          const source = await this.account!.sync(this.game.s);
+          overlay.remove();
+          if (source === 'cloud') location.reload();
+          else { this.game.save(); this.toast(`Signed in as ${this.account!.username}`, 'gold'); this.refresh(); resolve(); }
+        } catch (e) {
+          const code = e instanceof Error ? e.message : '';
+          status.textContent = code === 'username_taken' ? 'That username is already claimed. Log in or choose another.'
+            : code === 'invalid_login' ? 'Username or password is incorrect.'
+              : 'Account service unavailable. Check your connection and retry.';
+        }
+      };
+      overlay.querySelector('.account-login')!.addEventListener('click', () => void submit(false));
+      overlay.querySelector('.account-create')!.addEventListener('click', () => void submit(true));
+      pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') void submit(false); });
+      name.focus();
+    });
+  }
+
   // ---- panels -----------------------------------------------------------------
   /** First-launch claim (free) or paid rename (100K Respect). Resolves once
    *  a unique name is secured; first-launch cannot be dismissed. */
@@ -251,13 +297,31 @@ export class UI {
     ov.querySelectorAll('.row button[data-pack]').forEach((b) => {
       b.addEventListener('click', async () => {
         const pack = M_PACKS.find(p => p.id === (b as HTMLElement).dataset.pack)!;
-        const ok = await this.purchases.buy(pack);
-        if (ok) {
-          this.game.s.mentality += pack.amount;
-          this.game.save();
-          sfx.buy();
-          this.toast(`Purchased ${fmt(pack.amount)} M!`, 'gold');
-          this.refresh();
+        if (this.purchases.platform === 'native' && !this.account?.signedIn) {
+          this.toast('Log in to your Discipline account before purchasing.');
+          close(); await this.promptAccount(); return;
+        }
+        const receipt = await this.purchases.buy(pack);
+        if (receipt) {
+          try {
+            const grant = receipt.platform === 'web'
+              ? { amount: pack.amount, transactionId: `web-${Date.now()}` }
+              : await this.account!.verifyPurchase(receipt);
+            const { amount, transactionId } = grant;
+            if (this.game.s.appliedPurchases.includes(transactionId)) {
+              this.toast('Purchase was already added to this account.'); return;
+            }
+            if (amount <= 0) { this.toast('Purchase was already added to this account.'); return; }
+            this.game.s.mentality += amount;
+            this.game.s.appliedPurchases.push(transactionId);
+            this.game.save();
+            await this.account?.save(this.game.s);
+            sfx.buy();
+            this.toast(`Purchased ${fmt(amount)} M!`, 'gold');
+            this.refresh();
+          } catch {
+            this.toast('Payment completed but verification is pending. No duplicate charge—retry after reconnecting.');
+          }
         }
       });
     });
@@ -440,9 +504,8 @@ export class UI {
       const native = !!this.lb && this.lb.platform !== 'web';
       rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS (raw taps only, boosters don't count)${native
         ? ` · syncing via ${this.lb!.platform === 'gamecenter' ? 'Game Center' : 'Google Play Games'}`
-        : ' · placeholder rivals until store launch (Game Center / Play Games)'}</div>`);
-      // real backend when configured (async: seeded list shows immediately,
-      // live worldwide data patches in when the fetch lands)
+        : API_URL ? ' · real Discipline accounts only' : ' · account server not connected'}</div>`);
+      // Live worldwide data patches in when the authenticated fetch lands.
       if (API_URL && g.s.username && this.openTab === 'ranks' && !this.remoteBoard) {
         void fetchBoardRemote(API_URL, g.s.username).then((b) => {
           if (b?.length) { this.remoteBoard = b; if (this.openTab === 'ranks') this.refreshPanel(); }
@@ -462,7 +525,7 @@ export class UI {
           <span class="lb-score">${fmt(e.taps)}</span>
         </div>`);
       }
-      rows.push(row('rename', `Username: ${g.s.username ?? '—'}`,
+      if (!API_URL) rows.push(row('rename', `Username: ${g.s.username ?? '—'}`,
         `Change costs ${fmt(RENAME_COST)} Respect (one-of-a-kind, can't be stolen)`,
         'CHANGE', g.s.respect >= RENAME_COST, 'name'));
       if (native) {
@@ -493,6 +556,8 @@ export class UI {
           <div class="panel-note">Owner codes are verified by one-way cryptographic hash.</div>
           <div class="cheat-entry"><input class="cheat-code" type="password" autocomplete="off" spellcheck="false" placeholder="ENTER OWNER CODE"><button class="cheat-submit">UNLOCK</button></div>
         </details>`);
+      if (this.account?.signedIn) rows.push(row('logout', `Account: ${this.account.username}`,
+        'Progress is synced across devices.', 'LOG OUT', true, 'account'));
     }
 
     this.panel.innerHTML = rows.join('');
@@ -604,6 +669,10 @@ export class UI {
     } else if (kind === 'name') {
       this.close();
       await this.promptUsername(false);
+    } else if (kind === 'account' && id === 'logout') {
+      this.account?.logout();
+      this.close();
+      await this.promptAccount();
     } else if (kind === 'booster') {
       this.close(); // starting an ad closes any open menu — no stacked overlays
       const ad = await this.showRewardedAd(15);

@@ -435,7 +435,9 @@ body.in-garage .boost-pill { display: none; }
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.92);
-  z-index: 60;
+  /* Blocking flows (account, purchases, rewarded ads) must always sit above
+     the title card so their controls remain readable and tappable. */
+  z-index: 80;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -474,6 +476,7 @@ body.in-garage .boost-pill { display: none; }
   outline: none;
 }
 .name-input:focus { border-color: #e6c84a; }
+.account-box .name-input { margin-top: 8px; text-transform: none; }
 .name-status { font-size: 10px; color: #e66a2a; min-height: 16px; margin: 6px 0; }
 .name-actions { display: flex; gap: 6px; }
 .name-actions button { flex: 1; padding: 10px 6px; font-size: 11px; }

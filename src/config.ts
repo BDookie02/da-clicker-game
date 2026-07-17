@@ -267,4 +267,4 @@ export const SAVE_KEY = 'discipline-clicker-save-v1';
 // Backend (usernames + worldwide taps board). Empty string = local placeholder
 // providers. After deploying server/worker.js (see file header), set this to
 // the worker URL, e.g. 'https://discipline-api.<account>.workers.dev'
-export const API_URL = '';
+export const API_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');

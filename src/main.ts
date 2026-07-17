@@ -3,10 +3,11 @@ import { GameScene } from './scene';
 import { UI } from './ui';
 import { music, sfx } from './audio';
 import { API_URL, getDistrict } from './config';
-import { getWorldList, initLeaderboards, submitScoreRemote, type LeaderboardProvider } from './leaderboard';
-import { LocalUsernameService, RemoteUsernameService } from './username';
+import { initLeaderboards, type LeaderboardProvider } from './leaderboard';
+import { LocalUsernameService } from './username';
 import { initAds } from './ads';
 import { initPurchases } from './purchases';
+import { AccountService } from './account';
 
 const game = new Game();
 // debug/testing handles (harmless in prod; used by automated checks)
@@ -84,14 +85,35 @@ initLeaderboards().then((lb) => {
 });
 initAds().then((ads) => { ui.ads = ads; }); // AdMob on device, placeholder on web
 
-// Unique usernames: real API when configured, local registry otherwise
-ui.names = API_URL
-  ? new RemoteUsernameService(API_URL, () => game.s.username)
-  : new LocalUsernameService(getWorldList(0).filter(e => !e.you).map(e => e.name));
-if (!game.s.username) void ui.promptUsername(true); // first open: claim your name
+// Discipline accounts—not Play Games/Game Center—own identity and cloud data.
+// The local name provider exists only for offline web development.
+let account: AccountService | null = null;
+if (API_URL) {
+  account = new AccountService(API_URL);
+  ui.account = account;
+  void (async () => {
+    const identity = await account!.verify().catch(() => null);
+    if (!identity) { await ui.promptAccount(); return; }
+    game.s.username = identity.username;
+    const source = await account!.sync(game.s).catch(() => null);
+    if (source === 'cloud') location.reload();
+    else {
+      const recovered = await account!.recoverPendingPurchase();
+      if (recovered && !game.s.appliedPurchases.includes(recovered.transactionId)) {
+        game.s.mentality += recovered.amount;
+        game.s.appliedPurchases.push(recovered.transactionId);
+        ui.toast(`Recovered purchase: +${fmt(recovered.amount)} M`, 'gold');
+      }
+      game.save(); void account!.save(game.s);
+    }
+  })();
+} else {
+  ui.names = new LocalUsernameService([]);
+  if (!game.s.username) void ui.promptUsername(true);
+}
 
 const syncScore = () => {
-  if (API_URL && game.s.username) submitScoreRemote(API_URL, game.s.username, game.s.totalTaps);
+  if (account?.signedIn) void account.save(game.s);
 };
 syncScore();
 
@@ -336,6 +358,6 @@ requestAnimationFrame(frame);
 ui.refresh();
 
 // autosave
-setInterval(() => game.save(), 5000);
-window.addEventListener('beforeunload', () => game.save());
-document.addEventListener('visibilitychange', () => { if (document.hidden) game.save(); });
+setInterval(() => { game.save(); syncScore(); }, 5000);
+window.addEventListener('beforeunload', () => { game.save(); syncScore(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { game.save(); syncScore(); } });
