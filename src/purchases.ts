@@ -1,4 +1,5 @@
 // ---------------------------------------------------------------------------
+import { NativePurchases, PURCHASE_TYPE } from '@capgo/native-purchases';
 // Premium currency (M = Mentality) store.
 //  - R (Respect) is earned by playing; M is premium: bought with real money
 //    OR earned by watching a rewarded ad (you get roughly the ad's worth).
@@ -75,16 +76,48 @@ export class PlaceholderPurchases implements PurchaseProvider {
   }
 }
 
+class NativePurchaseProvider implements PurchaseProvider {
+  readonly platform = 'native';
+
+  async buy(pack: MPack): Promise<boolean> {
+    try {
+      const { isBillingSupported } = await NativePurchases.isBillingSupported();
+      if (!isBillingSupported) return false;
+      // Query first so Google Play—not a hardcoded label—is authoritative for
+      // product availability and pricing in the purchase sheet.
+      await NativePurchases.getProduct({
+        productIdentifier: pack.id,
+        productType: PURCHASE_TYPE.INAPP,
+      });
+      const transaction = await NativePurchases.purchaseProduct({
+        productIdentifier: pack.id,
+        productType: PURCHASE_TYPE.INAPP,
+        isConsumable: pack.id !== AD_FREE_PRODUCT.id,
+        autoAcknowledgePurchases: true,
+      });
+      return transaction.productIdentifier === pack.id;
+    } catch {
+      return false;
+    }
+  }
+
+  async restoreAdFree() {
+    try {
+      const { purchases } = await NativePurchases.getPurchases({ productType: PURCHASE_TYPE.INAPP });
+      if (purchases.some(p => p.productIdentifier === AD_FREE_PRODUCT.id && p.isActive !== false)) {
+        localStorage.setItem('discipline-ad-free', '1');
+      }
+    } catch { /* Play Store unavailable or product not configured yet */ }
+  }
+}
+
 /** Native IAP (Capacitor). Wired at store-launch; falls back to placeholder. */
 export async function initPurchases(): Promise<PurchaseProvider> {
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.()) {
-    try {
-      const specifier = '@capacitor-community/in-app-purchases';
-      await import(/* @vite-ignore */ specifier);
-      // real product wiring happens at launch; placeholder keeps the game
-      // functional until product IDs are registered in the stores
-    } catch { /* plugin not installed yet */ }
+    const provider = new NativePurchaseProvider();
+    void provider.restoreAdFree();
+    return provider;
   }
   return new PlaceholderPurchases();
 }
