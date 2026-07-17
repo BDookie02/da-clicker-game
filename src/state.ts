@@ -31,6 +31,7 @@ export interface SaveData {
   boostEndsAt: number;                 // epoch ms
   lastSeen: number;                    // epoch ms, for offline earnings
   adsWatched: number;
+  infiniteCurrency: boolean;
 }
 
 const fresh = (): SaveData => ({
@@ -52,6 +53,7 @@ const fresh = (): SaveData => ({
   boostEndsAt: 0,
   lastSeen: Date.now(),
   adsWatched: 0,
+  infiniteCurrency: false,
 });
 
 export type GameEvent =
@@ -178,6 +180,10 @@ export class Game {
 
   /** idle tick — call with elapsed seconds */
   tick(dt: number) {
+    if (this.s.infiniteCurrency) {
+      this.s.respect = Number.MAX_SAFE_INTEGER;
+      this.s.mentality = Number.MAX_SAFE_INTEGER;
+    }
     const gain = this.respectPerSec * dt;
     if (gain > 0) {
       this.s.respect += gain;
@@ -249,6 +255,13 @@ export class Game {
       if (open >= 0) this.s.dashboardSlots[open] = id;
     } else this.s.equippedCosmetics[c.slot] = id;
     return true;
+  }
+
+  enableInfiniteCurrency() {
+    this.s.infiniteCurrency = true;
+    this.s.respect = Number.MAX_SAFE_INTEGER;
+    this.s.mentality = Number.MAX_SAFE_INTEGER;
+    this.save();
   }
 
   toggleCosmetic(id: string): boolean {
@@ -338,6 +351,7 @@ export class Game {
 export const BOOSTER_DEFS = BOOSTERS;
 
 export function fmt(n: number): string {
+  if (n >= Number.MAX_SAFE_INTEGER) return '∞';
   if (n < 1000) return Math.floor(n).toString();
   const units = ['K', 'M', 'B', 'T', 'Qa', 'Qi'];
   let u = -1;

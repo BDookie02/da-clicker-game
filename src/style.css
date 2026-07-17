@@ -125,6 +125,11 @@ html, body {
   color: #ffd890;
   background: #24140d;
 }
+.cheat-vault { margin-top: 14px; border: 1px solid #303044; background: #0d0d16; }
+.cheat-vault summary { padding: 10px; color: #68687f; font-size: 10px; letter-spacing: 1px; cursor: pointer; }
+.cheat-entry { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 0 9px 10px; }
+.cheat-entry input { min-width: 0; padding: 9px; border: 1px solid #3a3a55; background: #08080e; color: #ffd890; font: inherit; }
+.cheat-entry button { padding: 8px; }
 
 .quick-buy {
   position: absolute;

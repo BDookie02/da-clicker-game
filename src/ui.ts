@@ -151,7 +151,9 @@ export class UI {
       pill.textContent = `🔥 x${g.s.boostMult} — ${Math.ceil((g.s.boostEndsAt - Date.now()) / 1000)}s`;
     } else pill.hidden = true;
 
-    if (this.openTab) this.refreshPanel();
+    // Settings contains live sliders and a password field. Rebuilding it every
+    // frame resets native controls, closes <details>, and erases typed codes.
+    if (this.openTab && this.openTab !== 'settings') this.refreshPanel();
   }
 
   toast(msg: string, cls = '') {
@@ -486,7 +488,11 @@ export class UI {
         <div class="setting"><label>Look sensitivity <span class="sense-val">${sensitivity.toFixed(1)}×</span></label><input class="sense-setting" type="range" min="0.5" max="2" step="0.1" value="${sensitivity}"></div>
         <label class="setting-check"><input class="vibration-setting" type="checkbox" ${vibration ? 'checked' : ''}> Vibration</label>
         <label class="setting-check"><input class="motion-setting" type="checkbox" ${reduced ? 'checked' : ''}> Reduced motion</label>
-        <button class="reset-view">RESET VIEW TO OPPONENT</button>`);
+        <button class="reset-view">RESET VIEW TO OPPONENT</button>
+        <details class="cheat-vault"><summary>ENCRYPTED ACCESS</summary>
+          <div class="panel-note">Owner codes are verified by one-way cryptographic hash.</div>
+          <div class="cheat-entry"><input class="cheat-code" type="password" autocomplete="off" spellcheck="false" placeholder="ENTER OWNER CODE"><button class="cheat-submit">UNLOCK</button></div>
+        </details>`);
     }
 
     this.panel.innerHTML = rows.join('');
@@ -540,6 +546,22 @@ export class UI {
     vibration.addEventListener('change', () => localStorage.setItem('discipline-vibration', vibration.checked ? '1' : '0'));
     this.panel.querySelector('.reset-view')!.addEventListener('click', (ev) => {
       ev.stopImmediatePropagation(); this.onResetView?.(); this.toast('View reset.');
+    });
+    this.panel.querySelector('.cheat-submit')!.addEventListener('click', async (ev) => {
+      ev.stopImmediatePropagation();
+      const input = this.panel!.querySelector('.cheat-code') as HTMLInputElement;
+      const normalized = input.value.trim().toUpperCase();
+      const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
+      const digest = [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
+      if (digest === 'bf0d3de7c4baafabe6d6143f61db643125b855c8a38b959c210509c6ac734674') {
+        this.game.enableInfiniteCurrency();
+        input.value = '';
+        this.toast('OWNER MODE: infinite M and R enabled.', 'gold');
+        this.refresh();
+      } else {
+        input.value = '';
+        this.toast('Invalid owner code.');
+      }
     });
   }
 

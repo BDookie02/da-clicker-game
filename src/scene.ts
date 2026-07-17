@@ -371,6 +371,22 @@ export class GameScene {
   }
 
   // ---- player cockpit --------------------------------------------------------
+  private makeSteeringWheel(radius = 0.09) {
+    const steering = new THREE.Group();
+    const steeringMat = this.mat(0x26262e);
+    steering.add(new THREE.Mesh(new THREE.TorusGeometry(radius, 0.03, 8, 16), steeringMat));
+    for (const angle of [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3]) {
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(radius * 0.86, 0.022, 0.022), steeringMat);
+      spoke.position.x = radius * 0.43;
+      spoke.rotation.z = angle;
+      steering.add(spoke);
+    }
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.045, 8), steeringMat);
+    hub.rotation.x = Math.PI / 2;
+    steering.add(hub);
+    return steering;
+  }
+
   private buildCockpit() {
     const g = new THREE.Group();
     // hood
@@ -393,20 +409,9 @@ export class GameScene {
     // completely above and behind the dash: the old wheel was centered inside
     // the dashboard and tilted almost flat, which turned it into huge clipped
     // slabs in the low-resolution first-person render.
-    const steering = new THREE.Group();
+    const steering = this.makeSteeringWheel();
     const steeringMat = this.mat(0x26262e);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.035, 8, 16), steeringMat);
-    steering.add(rim);
-    for (const angle of [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3]) {
-      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.026, 0.026), steeringMat);
-      spoke.position.x = 0.11;
-      spoke.rotation.z = angle;
-      steering.add(spoke);
-    }
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.055, 8), steeringMat);
-    hub.rotation.x = Math.PI / 2;
-    steering.add(hub);
-    steering.position.set(-0.45, 1.13, -0.40);
+    steering.position.set(-0.45, 1.10, -0.68);
     steering.rotation.x = -0.28;
     g.add(steering);
 
@@ -737,14 +742,7 @@ export class GameScene {
       add(new THREE.BoxGeometry(1.66, 0.16, 0.26), dashM, 0, wy - 0.16, cab.z + 0.52); // dashboard
       // steering wheel: a proper ring the driver faces (tilted back toward
       // him), with spokes, mounted in front of the driver against the dash.
-      const wheel = new THREE.Group();
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.03, 8, 16), dashM);
-      wheel.add(rim);
-      for (const rz of [0, Math.PI / 2, Math.PI]) {
-        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.025, 0.025), dashM);
-        spoke.rotation.z = rz;
-        wheel.add(spoke);
-      }
+      const wheel = this.makeSteeringWheel();
       wheel.position.set(0.45, wy - 0.1, cab.z + 0.28);
       // recline the wheel back and up so its face points toward the driver
       // (who sits above/behind it), like a real steering column — the camera,
@@ -1005,16 +1003,9 @@ export class GameScene {
       mentalityReward: 0, spriteSlot: '',
     });
     // interior kit so first-person has a real driver's seat view
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.16, 0.34), this.mat(0x1c1c22));
-    dash.position.set(0, 1.02, 0.66);
-    this.garageCar.add(dash);
-    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.04, 6, 12), this.mat(0x26262e));
-    wheel.position.set(0.42, 1.02, 0.48);
-    wheel.rotation.x = -1.2;
-    this.garageCar.add(wheel);
     // Sedan roof spans z=-.66..46 at y=1.46. Keep the mirror just behind that
     // front edge, with its scaled stem meeting the roof and no exterior overlap.
-    this.addRearViewMirror(this.garageCar, 0.42, 1.40, 0.36, -1, 0.32);
+    this.addRearViewMirror(this.garageCar, 0.42, 1.37, 0.36, -1, 0.44);
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
     // NOTE: the procedural car is the customizable one — cosmetics (paint,
@@ -1306,7 +1297,9 @@ export class GameScene {
         // driver's seat with free look: swipe to look around the cabin
         this.garageCam.fov = (62 * this.fovScale) / this.fpZoom;
         this.garageCam.updateProjectionMatrix();
-        const eye = new THREE.Vector3(GO.x + 0.42, GO.y + 1.3, GO.z - 0.12);
+        // Wheel center is z=.38 in the sedan. z=-.30 puts the driver's eye
+        // exactly .68 units behind it, matching Tap FPV's wheel distance.
+        const eye = new THREE.Vector3(GO.x + 0.42, GO.y + 1.3, GO.z - 0.30);
         this.garageCam.position.copy(eye);
         this.garageCam.lookAt(
           eye.x + Math.sin(this.fpYaw) * Math.cos(this.fpPitch),
