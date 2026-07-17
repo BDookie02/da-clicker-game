@@ -56,6 +56,16 @@ const applyCosmetics = () => {
 const ui = new UI(game, applyCosmetics);
 ui.onViewSettings = (fov, sensitivity, reducedMotion) => scene.setViewSettings(fov, sensitivity, reducedMotion);
 ui.onResetView = () => scene.resetTapLook();
+
+// Native Android Back/Escape is routed here instead of backgrounding the app.
+// Close the active in-game layer first; at the root, save and remain visible.
+window.addEventListener('disciplineAndroidBack', () => {
+  if (ui.isPanelOpen) ui.close();
+  else {
+    game.save();
+    ui.toast('Progress saved. Use Android Home to leave the game.');
+  }
+});
 scene.setViewSettings(
   Number(localStorage.getItem('discipline-fov') ?? '100'),
   Number(localStorage.getItem('discipline-look-sensitivity') ?? '1'),
