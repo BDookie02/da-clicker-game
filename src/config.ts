@@ -3,7 +3,7 @@
 // Economy mirrors the classic idle-clicker loop: tap currency (Respect),
 // premium currency (Mentality), tap-power upgrades, idle generators (Crew),
 // staged opponents (the "planets"), cosmetic unlockables, and ad boosters.
-// All art is placeholder — 2D character sprites get mounted later (Higgsfield).
+// Character sprites are mounted by slot when art is available.
 // ---------------------------------------------------------------------------
 
 export interface OpponentDef {

@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { OpponentDef } from './config';
 
 // ---------------------------------------------------------------------------
@@ -602,7 +601,7 @@ export class GameScene {
     this.opponentGroup.add(car, this.goopGroup);
     this.opponentGroup.position.set(0, 0, 0);
     // Empty billboard mount at the driver's window — 2D character art goes here
-    // later (Higgsfield pipeline), keyed by def.spriteSlot.
+    // later by the character-art pipeline, keyed by def.spriteSlot.
     // Driver's seat (car local +x = far lane side, like the meme: he's in his
     // seat, head turned, staring at you through the glass). The 2D character
     // billboard mounts here and always faces the player camera.
@@ -868,8 +867,6 @@ export class GameScene {
       halo.userData.keep = true; // survives fleet-mesh swap
       g.add(halo);
     }
-    // upgrade to a Higgsfield mesh when/if the asset exists (silent fallback)
-    this.attachFleetMesh(g, def);
     return g;
   }
 
@@ -1004,95 +1001,7 @@ export class GameScene {
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
     // NOTE: the procedural car is the customizable one — cosmetics (paint,
-    // decal, ornament, goop) apply to it. No Higgsfield mesh overlay here.
-  }
-
-  /** Load a GLB, normalize it to ~4-unit length sitting on the floor, apply
-   *  the PSX vertex-snap + flat shading, and hand back the prepared group. */
-  private loadCarMesh(url: string, onReady: (m: THREE.Group) => void, tint?: number, onFail?: () => void) {
-    new GLTFLoader().load(url, (gltf) => {
-      const root = gltf.scene;
-      const box = new THREE.Box3().setFromObject(root);
-      const size = new THREE.Vector3(); box.getSize(size);
-      const center = new THREE.Vector3(); box.getCenter(center);
-      const targetLen = 4.2;
-      const scale = targetLen / Math.max(size.x, size.z);
-      const g = new THREE.Group();
-      root.position.sub(center);            // center at origin
-      root.scale.setScalar(scale);
-      root.position.multiplyScalar(scale);
-      root.position.y += (size.y * scale) / 2; // sit on the floor
-      // orient: image_to_3d faces +Z toward camera; our cars face -Z (forward)
-      root.rotation.y = Math.PI;
-      // largest mesh = the body; tint it toward the car's paint color
-      let biggest: THREE.Mesh | null = null; let bMax = 0;
-      root.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        const mb = new THREE.Box3().setFromObject(m); const ms = new THREE.Vector3(); mb.getSize(ms);
-        const vol = ms.x * ms.y * ms.z; if (vol > bMax) { bMax = vol; biggest = m; }
-        const mat = m.material as THREE.MeshStandardMaterial;
-        if (mat) { mat.flatShading = true; psxify(mat, this.psxRes); mat.needsUpdate = true; }
-      });
-      if (tint !== undefined && biggest) {
-        const bm = (biggest as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        bm.color.setHex(tint);
-        if (bm.map) bm.map = null; // drop pale baked texture so the tint reads
-      }
-      g.add(root);
-      onReady(g);
-    }, undefined, () => { onFail?.(); /* load failed — procedural car stays */ });
-  }
-
-  // ---- Higgsfield fleet meshes ------------------------------------------------
-  // ONE neutral-white PS1 mesh covers the whole sedan family: the white baked
-  // texture multiplies with each opponent's paint color, and scale variants
-  // produce hatch/compact/lowrider/limo silhouettes.
-  private static carMeshCache = new Map<string, Promise<THREE.Group | null>>();
-
-  private static meshFor(style: OpponentDef['carStyle']): { url: string; scale: [number, number, number] } | null {
-    const S: Partial<Record<OpponentDef['carStyle'], [number, number, number]>> = {
-      sedan: [1, 1, 1], taxi: [1, 1, 1], divine: [1, 1, 1],
-      hatch: [1, 1.04, 0.9], compact: [0.94, 0.97, 0.88],
-      lowrider: [1.02, 0.84, 1], limo: [1, 0.96, 1.52],
-    };
-    const sc = S[style];
-    return sc ? { url: 'models/car_sedan_meshy.glb', scale: sc } : null;
-  }
-
-  private carMeshMaster(url: string): Promise<THREE.Group | null> {
-    let p = GameScene.carMeshCache.get(url);
-    if (!p) {
-      p = new Promise<THREE.Group | null>((res) =>
-        this.loadCarMesh(url, (m) => res(m), undefined, () => res(null)));
-      GameScene.carMeshCache.set(url, p);
-    }
-    return p;
-  }
-
-  /** swap a procedural car for a tinted Higgsfield mesh when it's available */
-  private attachFleetMesh(g: THREE.Group, def: OpponentDef) {
-    const src = GameScene.meshFor(def.carStyle);
-    if (!src) return; // style keeps its procedural body (cube stays the joke)
-    void this.carMeshMaster(src.url).then((master) => {
-      if (!master || !g.parent) return;
-      const inst = master.clone(true);
-      inst.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        const mat = (m.material as THREE.MeshStandardMaterial).clone();
-        mat.flatShading = true;
-        mat.color.setHex(def.carColor); // white texture x paint = opponent color
-        psxify(mat, this.psxRes);       // clone drops onBeforeCompile — reapply
-        mat.needsUpdate = true;
-        m.material = mat;
-      });
-      inst.scale.set(src.scale[0], src.scale[1], src.scale[2]);
-      for (const c of [...g.children]) {
-        if (!c.userData.keep) c.visible = false; // hide procedural body
-      }
-      g.add(inst);
-    });
+    // decal, ornament, goop) apply to it. It remains the only car mesh.
   }
 
   enterGarage() {
@@ -1771,7 +1680,7 @@ function profileMesh(pts: [number, number][], width: number, mat: THREE.Material
 }
 
 // Custom sprite loader: checks public/sprites/<slot>.png once per session and
-// caches the result. Final art (Higgsfield or hand-made) drops into that
+// caches the result. Final hand-made art drops into that
 // folder and the game uses it with zero code changes; misses fall back to the
 // procedural pixel characters.
 const spriteTexCache = new Map<string, THREE.Texture | null | 'miss'>();
