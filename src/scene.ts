@@ -414,7 +414,8 @@ export class GameScene {
     column.position.set(-0.45, 1.02, -0.55);
     column.rotation.x = Math.PI / 2 - 0.28;
     g.add(column);
-    this.addRearViewMirror(g, 0, 1.55, -1.22);
+    // Centered at the top of the windshield, above the driver's sight line.
+    this.addRearViewMirror(g, 0, 1.63, -1.08);
     g.name = 'cockpit';
     // fixed to the CAR, not the head — the dash stays put when you look left
     g.position.set(2, 0, 0);
@@ -470,11 +471,14 @@ export class GameScene {
 
   private addRearViewMirror(parent: THREE.Group, x: number, y: number, z: number) {
     const mirror = new THREE.Group();
-    const shell = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.22, 0.08), this.mat(0x17171c));
-    const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.14),
-      new THREE.MeshBasicMaterial({ color: 0x8aa0aa, side: THREE.DoubleSide }));
-    glass.position.z = 0.046;
-    mirror.add(shell, glass);
+    const stem = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.16, 0.055), this.mat(0x202026));
+    stem.position.y = 0.12;
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.16, 0.055), this.mat(0x101014));
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.455, 0.105),
+      new THREE.MeshBasicMaterial({ color: 0xa9c0c8, side: THREE.DoubleSide }));
+    glass.position.z = 0.029;
+    mirror.rotation.x = -0.08;
+    mirror.add(stem, shell, glass);
     mirror.position.set(x, y, z);
     parent.add(mirror);
   }
@@ -896,6 +900,7 @@ export class GameScene {
   private garageDecal: THREE.Mesh | null = null;
   private garageOrn: THREE.Group | null = null;
   private garageDangler: THREE.Group | null = null;
+  private garageRoofSign: THREE.Group | null = null;
   private garageGoopTop: THREE.MeshLambertMaterial | null = null;
   private static readonly GO = new THREE.Vector3(0, -200, 0);
 
@@ -1006,7 +1011,8 @@ export class GameScene {
     wheel.position.set(0.42, 1.02, 0.48);
     wheel.rotation.x = -1.2;
     this.garageCar.add(wheel);
-    this.addRearViewMirror(this.garageCar, 0, 1.55, 0.78);
+    // The drive-view cockpit owns the interior mirror. Do not attach another
+    // one to the exterior garage model: from outside it reads as a roof light.
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
     // NOTE: the procedural car is the customizable one — cosmetics (paint,
@@ -1154,7 +1160,7 @@ export class GameScene {
     }
   }
 
-  setGarageCosmetics(decal?: string, dashboardItems: (string | null)[] = [], goop?: string, dangler?: string) {
+  setGarageCosmetics(decal?: string, dashboardItems: (string | null)[] = [], goop?: string, dangler?: string, roof?: string) {
     if (!this.garageBuilt || !this.garageCar) return;
     if (this.garageDecal) { this.garageCar.remove(this.garageDecal); this.garageDecal = null; }
     if (decal) {
@@ -1193,6 +1199,22 @@ export class GameScene {
       this.garageDangler = this.makeDangler(dangler);
       this.garageDangler.position.set(0, 1.5, 0.73);
       this.garageCar.add(this.garageDangler);
+    }
+    if (this.garageRoofSign) { this.garageCar.remove(this.garageRoofSign); this.garageRoofSign = null; }
+    if (roof === 'taxi') {
+      const sign = new THREE.Group();
+      const base = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.08, 0.28), this.mat(0x17171c));
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.22, 0.20),
+        new THREE.MeshBasicMaterial({ color: 0xffc928 }));
+      lamp.position.y = 0.14;
+      // Dark center stripe makes the yellow roof piece read as a cab sign,
+      // even in the intentionally low-resolution renderer.
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.09, 0.012), this.mat(0x202026));
+      stripe.position.set(0, 0.14, 0.106);
+      sign.add(base, lamp, stripe);
+      sign.position.set(0, 1.49, 0.08);
+      this.garageCar.add(sign);
+      this.garageRoofSign = sign;
     }
   }
 

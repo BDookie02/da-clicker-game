@@ -50,7 +50,7 @@ const applyCosmetics = () => {
   scene.setDashboardItems(game.dashboardItems());
   scene.setDangler(game.equipped('dangler'));
   scene.setGarageCosmetics(game.equipped('decal'),
-    game.dashboardItems(), game.equipped('goop'), game.equipped('dangler'));
+    game.dashboardItems(), game.equipped('goop'), game.equipped('dangler'), game.equipped('roof'));
 };
 
 const ui = new UI(game, applyCosmetics);

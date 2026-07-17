@@ -197,7 +197,7 @@ export interface CosmeticDef {
   name: string;
   desc: string;
   cost: number;          // Mentality
-  slot: 'ornament' | 'decal' | 'goop' | 'sky' | 'horn' | 'dash' | 'dangler';
+  slot: 'ornament' | 'decal' | 'goop' | 'sky' | 'horn' | 'dash' | 'dangler' | 'roof';
   value: string;         // renderer hint (color hex, style key, etc.)
 }
 
@@ -232,6 +232,7 @@ export const COSMETICS: CosmeticDef[] = [
   { id: 'dangle_fire', name: 'Fire Ball', desc: 'A tiny flaming orb with unreasonable confidence.', cost: 175, slot: 'dangler', value: 'fire' },
   { id: 'dangle_censored', name: 'Censored D&B', desc: 'The forbidden novelty dangler, safely pixel-censored.', cost: 225, slot: 'dangler', value: 'censored' },
   { id: 'dangle_goop', name: 'Goop Dangler', desc: 'Drips forever. Never reaches the floor.', cost: 250, slot: 'dangler', value: 'goop' },
+  { id: 'roof_taxi', name: 'Taxi Roof Sign', desc: 'A glowing cab sign for questionable side hustles.', cost: 175, slot: 'roof', value: 'taxi' },
 ];
 
 export interface BoosterDef {
