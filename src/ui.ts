@@ -412,9 +412,18 @@ export class UI {
         // premium currency store — buy M or watch an ad for it
         rows.push(row('getm', `💎 Get More M — you have ${fmt(g.s.mentality)}`,
           'Buy premium M, or watch an ad for a little.', 'STORE', true, 'getm'));
+        rows.push(`<div class="dash-grid-label">DASHBOARD · 6 FIXED MOUNTS</div>
+          <div class="dash-slot-grid">${g.s.dashboardSlots.map((id, i) => {
+            const item = id ? COSMETICS.find(c => c.id === id) : null;
+            return `<div class="dash-slot${item ? ' occupied' : ''}" title="${item?.name ?? `Empty slot ${i + 1}`}">
+              <span>${i + 1}</span><b>${item ? item.name.slice(0, 3).toUpperCase() : '—'}</b>
+            </div>`;
+          }).join('')}</div>`);
         for (const c of COSMETICS) {
           const owned = g.s.ownedCosmetics.includes(c.id);
-          const equipped = g.s.equippedCosmetics[c.slot] === c.id;
+          const equipped = c.slot === 'ornament' || c.slot === 'dash'
+            ? g.s.dashboardSlots.includes(c.id)
+            : g.s.equippedCosmetics[c.slot] === c.id;
           rows.push(row(c.id, `${c.name}${equipped ? ' ✓' : ''}`, c.desc,
             owned ? (equipped ? 'UNEQUIP' : 'EQUIP') : `${c.cost} M`,
             true, 'cosmetic')); // always clickable → buy or "need more M" prompt
@@ -553,7 +562,9 @@ export class UI {
     else if (kind === 'getm') { this.showMShop(); return; }
     else if (kind === 'cosmetic') {
       const c = COSMETICS.find(x => x.id === id);
-      if (g.s.ownedCosmetics.includes(id)) g.toggleCosmetic(id);
+      if (g.s.ownedCosmetics.includes(id)) {
+        if (!g.toggleCosmetic(id)) { this.toast('Dashboard full — unequip an item first.'); return; }
+      }
       else if (!g.buyCosmetic(id)) {
         if (c && g.s.mentality < c.cost) this.needMoreM(c.cost - g.s.mentality);
         return;

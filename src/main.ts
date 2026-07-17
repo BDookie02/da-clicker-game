@@ -47,10 +47,10 @@ const applyCosmetics = () => {
   // equipped sky cosmetic overrides the current district's time-of-day
   scene.setSky(game.equipped('sky') ?? getDistrict(game.s.opponentIndex).sky);
   scene.setDecal(game.equipped('decal'));
-  scene.setOrnament(game.equipped('ornament') ?? game.equipped('dash'));
+  scene.setDashboardItems(game.dashboardItems());
   scene.setDangler(game.equipped('dangler'));
   scene.setGarageCosmetics(game.equipped('decal'),
-    game.equipped('ornament') ?? game.equipped('dash'), game.equipped('goop'), game.equipped('dangler'));
+    game.dashboardItems(), game.equipped('goop'), game.equipped('dangler'));
 };
 
 const ui = new UI(game, applyCosmetics);

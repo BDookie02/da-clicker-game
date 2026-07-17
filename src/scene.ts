@@ -111,7 +111,7 @@ export class GameScene {
   private spritePos = new THREE.Vector3();
   private lampMats: THREE.MeshBasicMaterial[] = [];
   private dashDecal: THREE.Mesh | null = null;
-  private ornament: THREE.Mesh | null = null;
+  private ornament: THREE.Group | null = null;
   private dangler: THREE.Group | null = null;
   private hemi: THREE.HemisphereLight;
   private sun!: THREE.DirectionalLight;
@@ -389,11 +389,31 @@ export class GameScene {
       pillar.rotation.x = -0.35;
       g.add(pillar);
     }
-    // wheel in front of the driver's (left) seat
-    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.045, 6, 12), this.mat(0x26262e));
-    wheel.position.set(-0.45, 0.95, -0.62);
-    wheel.rotation.x = -1.15;
-    g.add(wheel);
+    // Steering assembly in front of the driver's (left) seat. Keep the rim
+    // completely above and behind the dash: the old wheel was centered inside
+    // the dashboard and tilted almost flat, which turned it into huge clipped
+    // slabs in the low-resolution first-person render.
+    const steering = new THREE.Group();
+    const steeringMat = this.mat(0x26262e);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.035, 8, 16), steeringMat);
+    steering.add(rim);
+    for (const angle of [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3]) {
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.026, 0.026), steeringMat);
+      spoke.position.x = 0.11;
+      spoke.rotation.z = angle;
+      steering.add(spoke);
+    }
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.055, 8), steeringMat);
+    hub.rotation.x = Math.PI / 2;
+    steering.add(hub);
+    steering.position.set(-0.45, 1.13, -0.40);
+    steering.rotation.x = -0.28;
+    g.add(steering);
+
+    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.34, 8), steeringMat);
+    column.position.set(-0.45, 1.02, -0.55);
+    column.rotation.x = Math.PI / 2 - 0.28;
+    g.add(column);
     this.addRearViewMirror(g, 0, 1.55, -1.22);
     g.name = 'cockpit';
     // fixed to the CAR, not the head — the dash stays put when you look left
@@ -424,16 +444,28 @@ export class GameScene {
     this.dashDecal = m;
   }
 
-  setOrnament(colorHex?: string) {
-    if (this.ornament) { this.cockpit.remove(this.ornament); this.ornament = null; }
-    if (!colorHex) return;
-    const m = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.06, 0),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(colorHex) })
+  private makeDashboardItem(value: string, radius: number) {
+    const colors: Record<string, number> = { gd: 0xe85a42 };
+    const color = value.startsWith('#') ? new THREE.Color(value) : new THREE.Color(colors[value] ?? 0xe8c84a);
+    return new THREE.Mesh(
+      new THREE.IcosahedronGeometry(radius, 0),
+      new THREE.MeshBasicMaterial({ color }),
     );
-    m.position.set(-0.5, 1.0, -0.72); // on the dash, car-space
-    this.cockpit.add(m);
-    this.ornament = m;
+  }
+
+  setDashboardItems(values: (string | null)[]) {
+    if (this.ornament) { this.cockpit.remove(this.ornament); this.ornament = null; }
+    const rail = new THREE.Group();
+    const xs = [-0.85, -0.51, -0.17, 0.17, 0.51, 0.85];
+    values.slice(0, 6).forEach((value, i) => {
+      if (!value) return;
+      const item = this.makeDashboardItem(value, 0.055);
+      // Dashboard top is y=.97. Every mount keeps the full item above it.
+      item.position.set(xs[i], 1.035, -0.70);
+      rail.add(item);
+    });
+    this.cockpit.add(rail);
+    this.ornament = rail;
   }
 
   private addRearViewMirror(parent: THREE.Group, x: number, y: number, z: number) {
@@ -862,7 +894,7 @@ export class GameScene {
   private garageLaptop: THREE.Object3D | null = null; // tap it to open the shop
   onGarageShop?: () => void;  // fired when the garage laptop is tapped
   private garageDecal: THREE.Mesh | null = null;
-  private garageOrn: THREE.Mesh | null = null;
+  private garageOrn: THREE.Group | null = null;
   private garageDangler: THREE.Group | null = null;
   private garageGoopTop: THREE.MeshLambertMaterial | null = null;
   private static readonly GO = new THREE.Vector3(0, -200, 0);
@@ -1122,7 +1154,7 @@ export class GameScene {
     }
   }
 
-  setGarageCosmetics(decal?: string, ornament?: string, goop?: string, dangler?: string) {
+  setGarageCosmetics(decal?: string, dashboardItems: (string | null)[] = [], goop?: string, dangler?: string) {
     if (!this.garageBuilt || !this.garageCar) return;
     if (this.garageDecal) { this.garageCar.remove(this.garageDecal); this.garageDecal = null; }
     if (decal) {
@@ -1144,14 +1176,17 @@ export class GameScene {
       this.garageDecal = m;
     }
     if (this.garageOrn) { this.garageCar.remove(this.garageOrn); this.garageOrn = null; }
-    if (ornament) {
-      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.08, 0),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(ornament) }));
-      // Dash top is y=1.10; keep the ornament's lowest point just above it.
-      m.position.set(-0.38, 1.19, 0.52); // on the dash, driver's side
-      this.garageCar.add(m);
-      this.garageOrn = m;
-    }
+    const rail = new THREE.Group();
+    const xs = [-0.68, -0.41, -0.14, 0.14, 0.41, 0.68];
+    dashboardItems.slice(0, 6).forEach((value, i) => {
+      if (!value) return;
+      const item = this.makeDashboardItem(value, 0.065);
+      // Garage dash top is y=1.10; fixed mounts prevent intersection.
+      item.position.set(xs[i], 1.175, 0.52);
+      rail.add(item);
+    });
+    this.garageCar.add(rail);
+    this.garageOrn = rail;
     if (this.garageGoopTop) this.garageGoopTop.color.set(goop ?? '#f2f0e8');
     if (this.garageDangler) { this.garageCar.remove(this.garageDangler); this.garageDangler = null; }
     if (dangler) {

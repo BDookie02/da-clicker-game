@@ -97,6 +97,35 @@ html, body {
 }
 @keyframes ad-loading-spin { to { transform: rotate(360deg); } }
 
+.dash-grid-label {
+  margin: 10px 0 5px;
+  color: #a0a0c8;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.dash-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.dash-slot {
+  min-width: 0;
+  padding: 5px 1px;
+  border: 1px solid #3a3a55;
+  background: #10101a;
+  color: #68687f;
+  text-align: center;
+  font-size: 8px;
+}
+.dash-slot span { display: block; font-size: 7px; }
+.dash-slot b { display: block; overflow: hidden; color: inherit; }
+.dash-slot.occupied {
+  border-color: #e66a2a;
+  color: #ffd890;
+  background: #24140d;
+}
+
 .quick-buy {
   position: absolute;
   bottom: 74px;

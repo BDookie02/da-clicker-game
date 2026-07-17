@@ -26,6 +26,7 @@ export interface SaveData {
   ownedCosmetics: string[];
   labOwned: string[];                  // permanent LAB upgrades (survive prestige)
   equippedCosmetics: Partial<Record<string, string>>; // slot -> cosmetic id
+  dashboardSlots: (string | null)[]; // six fixed mounts across the dash
   boostMult: number;
   boostEndsAt: number;                 // epoch ms
   lastSeen: number;                    // epoch ms, for offline earnings
@@ -46,6 +47,7 @@ const fresh = (): SaveData => ({
   ownedCosmetics: [],
   labOwned: [],
   equippedCosmetics: {},
+  dashboardSlots: [null, null, null, null, null, null],
   boostMult: 1,
   boostEndsAt: 0,
   lastSeen: Date.now(),
@@ -242,15 +244,31 @@ export class Game {
     if (this.s.ownedCosmetics.includes(id) || this.s.mentality < c.cost) return false;
     this.s.mentality -= c.cost;
     this.s.ownedCosmetics.push(id);
-    this.s.equippedCosmetics[c.slot] = id;
+    if (c.slot === 'ornament' || c.slot === 'dash') {
+      const open = this.s.dashboardSlots.findIndex(x => !x);
+      if (open >= 0) this.s.dashboardSlots[open] = id;
+    } else this.s.equippedCosmetics[c.slot] = id;
     return true;
   }
 
-  toggleCosmetic(id: string) {
+  toggleCosmetic(id: string): boolean {
     const c = COSMETICS.find(x => x.id === id)!;
-    if (!this.s.ownedCosmetics.includes(id)) return;
+    if (!this.s.ownedCosmetics.includes(id)) return false;
+    if (c.slot === 'ornament' || c.slot === 'dash') {
+      const equipped = this.s.dashboardSlots.indexOf(id);
+      if (equipped >= 0) { this.s.dashboardSlots[equipped] = null; return true; }
+      const open = this.s.dashboardSlots.findIndex(x => !x);
+      if (open < 0) return false;
+      this.s.dashboardSlots[open] = id;
+      return true;
+    }
     this.s.equippedCosmetics[c.slot] =
       this.s.equippedCosmetics[c.slot] === id ? undefined : id;
+    return true;
+  }
+
+  dashboardItems() {
+    return this.s.dashboardSlots.map(id => id ? COSMETICS.find(c => c.id === id)?.value ?? null : null);
   }
 
   equipped(slot: string): string | undefined {
@@ -284,7 +302,11 @@ export class Game {
         // M. The game was still unreleased and purchases were inactive, so
         // clear that test balance once. From v1 onward only the M shop can add M.
         if (!parsed.economyVersion) parsed.mentality = 0;
-        return { ...fresh(), ...parsed, economyVersion: 1 };
+        const loaded = { ...fresh(), ...parsed, economyVersion: 1 } as SaveData;
+        loaded.dashboardSlots = Array.isArray(parsed.dashboardSlots)
+          ? [...parsed.dashboardSlots.slice(0, 6), null, null, null, null, null, null].slice(0, 6)
+          : [parsed.equippedCosmetics?.ornament ?? parsed.equippedCosmetics?.dash ?? null, null, null, null, null, null];
+        return loaded;
       }
     } catch { /* corrupted save -> start fresh */ }
     return fresh();
