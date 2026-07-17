@@ -109,8 +109,22 @@ export class UI {
     }
     this.adInProgress = true;
     this.lastAdStartedAt = now;
+    const loading = { current: null as HTMLElement | null };
+    const loadingTimer = window.setTimeout(() => {
+      loading.current = el('div', 'ad-loading', `
+        <div class="ad-loading-box" role="status" aria-live="polite">
+          <div class="ad-loading-spinner" aria-hidden="true"></div>
+          <div>LOADING AD…</div>
+          <small>Waiting for the ad network</small>
+        </div>`);
+      document.body.appendChild(loading.current);
+    }, 450);
     try { return await this.ads.show(fallbackSeconds); }
-    finally { this.adInProgress = false; }
+    finally {
+      window.clearTimeout(loadingTimer);
+      loading.current?.remove();
+      this.adInProgress = false;
+    }
   }
 
   // ---- HUD refresh ----------------------------------------------------------
