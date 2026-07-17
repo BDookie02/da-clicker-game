@@ -112,6 +112,7 @@ export class GameScene {
   private dashDecal: THREE.Mesh | null = null;
   private ornament: THREE.Group | null = null;
   private dangler: THREE.Group | null = null;
+  private cockpitMirror: THREE.Group | null = null;
   private hemi: THREE.HemisphereLight;
   private sun!: THREE.DirectionalLight;
   private skyMesh: THREE.Mesh;
@@ -419,7 +420,7 @@ export class GameScene {
     column.rotation.x = Math.PI / 2 - 0.28;
     g.add(column);
     // Centered at the top of the windshield, above the driver's sight line.
-    this.addRearViewMirror(g, 0, 1.63, -1.08);
+    this.cockpitMirror = this.addRearViewMirror(g, 0, 1.63, -1.08);
     g.name = 'cockpit';
     // fixed to the CAR, not the head — the dash stays put when you look left
     g.position.set(2, 0, 0);
@@ -449,13 +450,42 @@ export class GameScene {
     this.dashDecal = m;
   }
 
-  private makeDashboardItem(value: string, radius: number) {
-    const colors: Record<string, number> = { gd: 0xe85a42 };
-    const color = value.startsWith('#') ? new THREE.Color(value) : new THREE.Color(colors[value] ?? 0xe8c84a);
-    return new THREE.Mesh(
-      new THREE.IcosahedronGeometry(radius, 0),
-      new THREE.MeshBasicMaterial({ color }),
-    );
+  /** Each item is built upward from y=0 so its mount always rests on the dash. */
+  private makeDashboardItem(value: string, size: number) {
+    const g = new THREE.Group();
+    const add = (geometry: THREE.BufferGeometry, color: number, x: number, y: number, z = 0) => {
+      const m = new THREE.Mesh(geometry, this.mat(color));
+      m.position.set(x, y, z); g.add(m); return m;
+    };
+    const s = size / 0.06;
+    if (value === 'gd') {
+      // Two actual fuzzy dice, with dark pips and angry brows rather than a dot.
+      for (const x of [-0.055 * s, 0.055 * s]) {
+        add(new THREE.BoxGeometry(.09 * s, .09 * s, .09 * s), 0xe85a42, x, .045 * s);
+        for (const [px, py] of [[-.021, -.021], [.021, .021]])
+          add(new THREE.SphereGeometry(.009 * s, 5, 4), 0x17171c, x + px * s, (.045 + py) * s, .047 * s);
+        const brow = add(new THREE.BoxGeometry(.045 * s, .009 * s, .008 * s), 0x17171c, x, .069 * s, .048 * s);
+        brow.rotation.z = x < 0 ? -.22 : .22;
+      }
+    } else if (value === '#e8e4d8') { // First Napkin Ornament
+      const napkin = add(new THREE.BoxGeometry(.13 * s, .014 * s, .11 * s), 0xe8e4d8, 0, .007 * s);
+      napkin.rotation.y = .22;
+    } else if (value === '#7a4a9e') { // Tiny Steel Cowboy bobblehead
+      add(new THREE.CylinderGeometry(.035 * s, .045 * s, .06 * s, 6), 0x68717e, 0, .03 * s);
+      add(new THREE.SphereGeometry(.042 * s, 7, 5), 0xc08a62, 0, .094 * s);
+      add(new THREE.CylinderGeometry(.07 * s, .07 * s, .018 * s, 8), 0x30323a, 0, .13 * s);
+      add(new THREE.CylinderGeometry(.04 * s, .07 * s, .035 * s, 8), 0x30323a, 0, .151 * s);
+    } else if (value === '#e8862a') { // Tiny Traffic Cone
+      add(new THREE.CylinderGeometry(.022 * s, .065 * s, .13 * s, 8), 0xe8862a, 0, .065 * s);
+      add(new THREE.CylinderGeometry(.075 * s, .075 * s, .012 * s, 8), 0x2b2b30, 0, .006 * s);
+      add(new THREE.CylinderGeometry(.041 * s, .051 * s, .018 * s, 8), 0xf2f0e8, 0, .075 * s);
+    } else { // Dashboard Monk
+      add(new THREE.CylinderGeometry(.05 * s, .065 * s, .035 * s, 8), 0x7c3f22, 0, .018 * s);
+      add(new THREE.CylinderGeometry(.035 * s, .05 * s, .055 * s, 8), 0xe8c84a, 0, .06 * s);
+      add(new THREE.SphereGeometry(.035 * s, 7, 5), 0xc98c58, 0, .112 * s);
+      add(new THREE.CylinderGeometry(.045 * s, .045 * s, .012 * s, 8), 0x7c3f22, 0, .147 * s);
+    }
+    return g;
   }
 
   setDashboardItems(values: (string | null)[]) {
@@ -465,8 +495,8 @@ export class GameScene {
     values.slice(0, 6).forEach((value, i) => {
       if (!value) return;
       const item = this.makeDashboardItem(value, 0.055);
-      // Dashboard top is y=.97. Every mount keeps the full item above it.
-      item.position.set(xs[i], 1.035, -0.70);
+      // Dashboard top is y=.97; items originate at their physical base.
+      item.position.set(xs[i], 0.972, -0.70);
       rail.add(item);
     });
     this.cockpit.add(rail);
@@ -486,6 +516,7 @@ export class GameScene {
     mirror.add(stem, shell, glass);
     mirror.position.set(x, y, z);
     parent.add(mirror);
+    return mirror;
   }
 
   private makeDangler(style: string): THREE.Group {
@@ -497,8 +528,10 @@ export class GameScene {
       m.position.set(x, y, z); g.add(m); return m;
     };
     if (style === 'dice') {
-      add(new THREE.BoxGeometry(0.16, 0.16, 0.16), 0xf2f0e8, -0.1, -0.5);
-      add(new THREE.BoxGeometry(0.16, 0.16, 0.16), 0xf2f0e8, 0.1, -0.55);
+      for (const x of [-0.1, 0.1]) {
+        add(new THREE.BoxGeometry(0.16, 0.16, 0.16), 0xf2f0e8, x, -0.5);
+        for (const [px, py] of [[-.04, -.04], [.04, .04]]) add(new THREE.SphereGeometry(.014, 5, 4), 0x17171c, x + px, -.5 + py, .085);
+      }
     } else if (style === 'beads') {
       const colors = [0xe84a4a, 0xe8c84a, 0x4ae08a, 0x4a8ae0, 0xb04ae0];
       for (let i = 0; i < 9; i++) add(new THREE.SphereGeometry(0.045, 6, 4), colors[i % colors.length], 0, -0.43 - i * 0.075);
@@ -522,11 +555,12 @@ export class GameScene {
   }
 
   setDangler(style?: string) {
-    if (this.dangler) { this.cockpit.remove(this.dangler); this.dangler = null; }
+    if (this.dangler) { this.dangler.parent?.remove(this.dangler); this.dangler = null; }
     if (!style) return;
     this.dangler = this.makeDangler(style);
-    this.dangler.position.set(0, 1.5, -1.17);
-    this.cockpit.add(this.dangler);
+    // Attach to the mirror itself: never floating in front of a passenger seat.
+    this.dangler.position.set(0, -0.09, 0.04);
+    (this.cockpitMirror ?? this.cockpit).add(this.dangler);
   }
 
   setSky(key?: string) {
@@ -891,6 +925,7 @@ export class GameScene {
   private garageDecal: THREE.Mesh | null = null;
   private garageOrn: THREE.Group | null = null;
   private garageDangler: THREE.Group | null = null;
+  private garageMirror: THREE.Group | null = null;
   private garageRoofSign: THREE.Group | null = null;
   private garageGoopTop: THREE.MeshLambertMaterial | null = null;
   private static readonly GO = new THREE.Vector3(0, -200, 0);
@@ -997,7 +1032,7 @@ export class GameScene {
     // interior kit so first-person has a real driver's seat view
     // Sedan roof spans z=-.66..46 at y=1.46. Keep the mirror just behind that
     // front edge, with its scaled stem meeting the roof and no exterior overlap.
-    this.addRearViewMirror(this.garageCar, 0.42, 1.37, 0.36, -1, 0.44);
+    this.garageMirror = this.addRearViewMirror(this.garageCar, 0.42, 1.37, 0.36, -1, 0.44);
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
     // NOTE: the procedural car is the customizable one — cosmetics (paint,
@@ -1084,18 +1119,20 @@ export class GameScene {
     dashboardItems.slice(0, 6).forEach((value, i) => {
       if (!value) return;
       const item = this.makeDashboardItem(value, 0.065);
-      // Garage dash top is y=1.10; fixed mounts prevent intersection.
-      item.position.set(xs[i], 1.175, 0.52);
+      // Same six physical mounts as first person; garage dash top is y=1.10.
+      item.position.set(xs[i], 1.102, 0.52);
       rail.add(item);
     });
     this.garageCar.add(rail);
     this.garageOrn = rail;
     if (this.garageGoopTop) this.garageGoopTop.color.set(goop ?? '#f2f0e8');
-    if (this.garageDangler) { this.garageCar.remove(this.garageDangler); this.garageDangler = null; }
+    if (this.garageDangler) { this.garageDangler.parent?.remove(this.garageDangler); this.garageDangler = null; }
     if (dangler) {
       this.garageDangler = this.makeDangler(dangler);
-      this.garageDangler.position.set(0, 1.5, 0.73);
-      this.garageCar.add(this.garageDangler);
+      // The garage preview uses the exact rear-view-mirror anchor too.
+      this.garageDangler.position.set(0, -0.09, 0.04);
+      this.garageDangler.scale.setScalar(2.27); // compensate for the .44 preview mirror scale
+      (this.garageMirror ?? this.garageCar).add(this.garageDangler);
     }
     if (this.garageRoofSign) { this.garageCar.remove(this.garageRoofSign); this.garageRoofSign = null; }
     if (roof === 'taxi') {
