@@ -469,7 +469,7 @@ export class GameScene {
     this.ornament = rail;
   }
 
-  private addRearViewMirror(parent: THREE.Group, x: number, y: number, z: number, facing = 1) {
+  private addRearViewMirror(parent: THREE.Group, x: number, y: number, z: number, facing = 1, scale = 1) {
     const mirror = new THREE.Group();
     const stem = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.16, 0.055), this.mat(0x202026));
     stem.position.y = 0.12;
@@ -478,6 +478,7 @@ export class GameScene {
       new THREE.MeshBasicMaterial({ color: 0xa9c0c8, side: THREE.DoubleSide }));
     glass.position.z = 0.029 * facing;
     mirror.rotation.x = -0.08;
+    mirror.scale.setScalar(scale);
     mirror.add(stem, shell, glass);
     mirror.position.set(x, y, z);
     parent.add(mirror);
@@ -1011,9 +1012,9 @@ export class GameScene {
     wheel.position.set(0.42, 1.02, 0.48);
     wheel.rotation.x = -1.2;
     this.garageCar.add(wheel);
-    // Hang the mirror from the windshield header, centered in front of the
-    // driver's seat and far enough forward to read at a realistic size.
-    this.addRearViewMirror(this.garageCar, 0.42, 1.42, 0.85, -1);
+    // Sedan roof spans z=-.66..46 at y=1.46. Keep the mirror just behind that
+    // front edge, with its scaled stem meeting the roof and no exterior overlap.
+    this.addRearViewMirror(this.garageCar, 0.42, 1.40, 0.36, -1, 0.32);
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
     // NOTE: the procedural car is the customizable one — cosmetics (paint,
