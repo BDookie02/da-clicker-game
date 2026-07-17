@@ -197,7 +197,7 @@ export interface CosmeticDef {
   name: string;
   desc: string;
   cost: number;          // Mentality
-  slot: 'ornament' | 'decal' | 'goop' | 'sky' | 'horn' | 'dash';
+  slot: 'ornament' | 'decal' | 'goop' | 'sky' | 'horn' | 'dash' | 'dangler';
   value: string;         // renderer hint (color hex, style key, etc.)
 }
 
@@ -226,6 +226,12 @@ export const COSMETICS: CosmeticDef[] = [
   { id: 'orn_cone',     name: 'Tiny Traffic Cone',     desc: 'A fallen soldier from the Kingpin wars.',      cost: 125,  slot: 'ornament', value: '#e8862a' },
   { id: 'orn_monk',     name: 'Dashboard Monk',        desc: 'Radiates focus onto your steering wheel.',     cost: 225,  slot: 'ornament', value: '#e8c84a' },
   { id: 'horn_air',     name: 'Freight Airhorn',       desc: 'Startles opponents mid-shake.',                cost: 175,  slot: 'horn',     value: 'airhorn' },
+  { id: 'dangle_dice', name: 'Fuzzy Dice', desc: 'Classic mirror dice. Maximum parking-lot aura.', cost: 90, slot: 'dangler', value: 'dice' },
+  { id: 'dangle_beads', name: 'Bead Necklace', desc: 'A long strand of colorful dashboard beads.', cost: 110, slot: 'dangler', value: 'beads' },
+  { id: 'dangle_yinyang', name: 'Yin-Yang Ball', desc: 'Perfectly balanced until the car starts moving.', cost: 140, slot: 'dangler', value: 'yinyang' },
+  { id: 'dangle_fire', name: 'Fire Ball', desc: 'A tiny flaming orb with unreasonable confidence.', cost: 175, slot: 'dangler', value: 'fire' },
+  { id: 'dangle_censored', name: 'Censored D&B', desc: 'The forbidden novelty dangler, safely pixel-censored.', cost: 225, slot: 'dangler', value: 'censored' },
+  { id: 'dangle_goop', name: 'Goop Dangler', desc: 'Drips forever. Never reaches the floor.', cost: 250, slot: 'dangler', value: 'goop' },
 ];
 
 export interface BoosterDef {

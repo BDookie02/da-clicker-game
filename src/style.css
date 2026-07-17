@@ -341,6 +341,16 @@ body.in-garage .boost-pill { display: none; }
   text-shadow: 4px 4px 0 #8e1f1f, 8px 8px 0 #000;
 }
 .title-sub { font-size: 12px; color: #8a8ab0; letter-spacing: 3px; }
+.setting {
+  display: grid; gap: 7px; padding: 11px 12px; margin: 7px 0;
+  background: #171722; border: 1px solid #39394f; color: #eeeeef;
+}
+.setting label { display: flex; justify-content: space-between; font-size: 12px; }
+.setting input[type="range"] { width: 100%; accent-color: #e6c84a; }
+.setting-check { display: block; padding: 10px 12px; margin: 7px 0; background: #171722; border: 1px solid #39394f; }
+.setting-check input { accent-color: #e6c84a; margin-right: 8px; }
+.reset-view { width: 100%; margin-top: 8px; }
+
 .title-tap {
   margin-top: 34px;
   font-size: 14px;

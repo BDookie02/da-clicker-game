@@ -1,6 +1,6 @@
 import { BOOSTERS, COSMETICS, CREW, LAB, UPGRADES, type BoosterDef } from './config';
 import { fmt, PRESTIGE_STEP, type Game } from './state';
-import { sfx } from './audio';
+import { music, sfx } from './audio';
 import { fetchBoardRemote, getWorldList, type LbEntry, type LeaderboardProvider } from './leaderboard';
 import { API_URL } from './config';
 import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
@@ -8,7 +8,7 @@ import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
 import { PlaceholderAdProvider, withMusicPause, type AdProvider, type AdResult } from './ads';
-import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
+import { AD_FREE_PRODUCT, AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -35,6 +35,8 @@ export class UI {
   names: UsernameService | null = null;
   /** fired with true when the garage tab opens, false when it closes */
   onGarage?: (open: boolean) => void;
+  onViewSettings?: (fov: number, sensitivity: number, reducedMotion: boolean) => void;
+  onResetView?: () => void;
 
   constructor(private game: Game, private onCosmeticsChanged: () => void) {
     this.root = document.getElementById('app')!;
@@ -62,6 +64,7 @@ export class UI {
         <button data-tab="garage">GARAGE</button>
         <button data-tab="ranks">🏆 RANKS</button>
         <button data-tab="boosters" class="hot">📺 BOOSTERS</button>
+        <button data-tab="settings">⚙ SETTINGS</button>
       </div>
       <div class="toasts" id="toasts"></div>
       <div class="fade" id="fade"></div>`;
@@ -215,6 +218,11 @@ export class UI {
             <div class="row-desc">Free. As much M as the ad is worth.</div></div>
           <button class="m-ad">WATCH</button>
         </div>
+        <div class="row adfree-row">
+          <div class="row-txt"><div class="row-name">🚫 Go Ad-Free</div>
+            <div class="row-desc">Removes non-rewarded ads permanently. Optional reward ads remain available.</div></div>
+          <button class="buy-adfree" ${localStorage.getItem('discipline-ad-free') === '1' ? 'disabled' : ''}>${localStorage.getItem('discipline-ad-free') === '1' ? 'OWNED' : '$4.99'}</button>
+        </div>
         ${packRows}
       </div>`;
     document.body.appendChild(ov);
@@ -230,6 +238,16 @@ export class UI {
         this.toast(`+${AD_M_REWARD} M`, 'gold');
         this.refresh();
       } else this.toast('Ad closed early or unavailable — no M awarded.');
+    });
+    ov.querySelector('.buy-adfree')!.addEventListener('click', async () => {
+      if (localStorage.getItem('discipline-ad-free') === '1') return;
+      if (await this.purchases.buy(AD_FREE_PRODUCT)) {
+        localStorage.setItem('discipline-ad-free', '1');
+        (ov.querySelector('.buy-adfree') as HTMLButtonElement).disabled = true;
+        ov.querySelector('.buy-adfree')!.textContent = 'OWNED';
+        sfx.buy();
+        this.toast('Ad-Free unlocked!', 'gold');
+      }
     });
     ov.querySelectorAll('.row button[data-pack]').forEach((b) => {
       b.addEventListener('click', async () => {
@@ -448,10 +466,26 @@ export class UI {
       for (const b of BOOSTERS) {
         rows.push(row(b.id, `📺 ${b.name}`, b.desc, b.id === 'mid' ? 'WATCH AD' : 'AUTO', b.id === 'mid', b.id === 'mid' ? 'booster' : 'tier'));
       }
+    } else if (this.openTab === 'settings') {
+      const musicVol = Math.round(Number(localStorage.getItem('discipline-music-volume') ?? '1') * 100);
+      const sfxVol = Math.round(Number(localStorage.getItem('discipline-sfx-volume') ?? '1') * 100);
+      const fov = Number(localStorage.getItem('discipline-fov') ?? '100');
+      const sensitivity = Number(localStorage.getItem('discipline-look-sensitivity') ?? '1');
+      const vibration = localStorage.getItem('discipline-vibration') !== '0';
+      const reduced = localStorage.getItem('discipline-reduced-motion') === '1';
+      rows.push(`<div class="panel-note">Audio and view settings save automatically on this device.</div>
+        <div class="setting"><label>Music <span class="music-val">${musicVol}%</span></label><input class="music-volume" type="range" min="0" max="100" value="${musicVol}"></div>
+        <div class="setting"><label>Sound effects <span class="sfx-val">${sfxVol}%</span></label><input class="sfx-volume" type="range" min="0" max="100" value="${sfxVol}"></div>
+        <div class="setting"><label>Field of view <span class="fov-val">${fov}%</span></label><input class="fov-setting" type="range" min="70" max="130" value="${fov}"></div>
+        <div class="setting"><label>Look sensitivity <span class="sense-val">${sensitivity.toFixed(1)}×</span></label><input class="sense-setting" type="range" min="0.5" max="2" step="0.1" value="${sensitivity}"></div>
+        <label class="setting-check"><input class="vibration-setting" type="checkbox" ${vibration ? 'checked' : ''}> Vibration</label>
+        <label class="setting-check"><input class="motion-setting" type="checkbox" ${reduced ? 'checked' : ''}> Reduced motion</label>
+        <button class="reset-view">RESET VIEW TO OPPONENT</button>`);
     }
 
     this.panel.innerHTML = rows.join('');
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
+    if (this.openTab === 'settings') this.bindSettings();
     // garage-specific controls
     this.panel.querySelector('.g-exit')?.addEventListener('click', () => this.close());
     this.panel.querySelector('.g-collapse')?.addEventListener('click', () => {
@@ -467,6 +501,39 @@ export class UI {
         const kind = (btn as HTMLElement).dataset.kind!;
         this.action(kind, id);
       });
+    });
+  }
+
+  private bindSettings() {
+    if (!this.panel) return;
+    const musicInput = this.panel.querySelector('.music-volume') as HTMLInputElement;
+    const sfxInput = this.panel.querySelector('.sfx-volume') as HTMLInputElement;
+    const fovInput = this.panel.querySelector('.fov-setting') as HTMLInputElement;
+    const senseInput = this.panel.querySelector('.sense-setting') as HTMLInputElement;
+    const vibration = this.panel.querySelector('.vibration-setting') as HTMLInputElement;
+    const motion = this.panel.querySelector('.motion-setting') as HTMLInputElement;
+    const applyView = () => {
+      localStorage.setItem('discipline-fov', fovInput.value);
+      localStorage.setItem('discipline-look-sensitivity', senseInput.value);
+      localStorage.setItem('discipline-reduced-motion', motion.checked ? '1' : '0');
+      this.onViewSettings?.(Number(fovInput.value), Number(senseInput.value), motion.checked);
+      (this.panel!.querySelector('.fov-val') as HTMLElement).textContent = `${fovInput.value}%`;
+      (this.panel!.querySelector('.sense-val') as HTMLElement).textContent = `${Number(senseInput.value).toFixed(1)}×`;
+    };
+    musicInput.addEventListener('input', () => {
+      music.setVolume(Number(musicInput.value) / 100);
+      (this.panel!.querySelector('.music-val') as HTMLElement).textContent = `${musicInput.value}%`;
+    });
+    sfxInput.addEventListener('input', () => {
+      sfx.setVolume(Number(sfxInput.value) / 100);
+      (this.panel!.querySelector('.sfx-val') as HTMLElement).textContent = `${sfxInput.value}%`;
+    });
+    fovInput.addEventListener('input', applyView);
+    senseInput.addEventListener('input', applyView);
+    motion.addEventListener('change', applyView);
+    vibration.addEventListener('change', () => localStorage.setItem('discipline-vibration', vibration.checked ? '1' : '0'));
+    this.panel.querySelector('.reset-view')!.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation(); this.onResetView?.(); this.toast('View reset.');
     });
   }
 

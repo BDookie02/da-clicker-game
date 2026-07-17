@@ -48,11 +48,22 @@ const applyCosmetics = () => {
   scene.setSky(game.equipped('sky') ?? getDistrict(game.s.opponentIndex).sky);
   scene.setDecal(game.equipped('decal'));
   scene.setOrnament(game.equipped('ornament') ?? game.equipped('dash'));
+  scene.setDangler(game.equipped('dangler'));
   scene.setGarageCosmetics(game.equipped('decal'),
-    game.equipped('ornament') ?? game.equipped('dash'), game.equipped('goop'));
+    game.equipped('ornament') ?? game.equipped('dash'), game.equipped('goop'), game.equipped('dangler'));
 };
 
 const ui = new UI(game, applyCosmetics);
+ui.onViewSettings = (fov, sensitivity, reducedMotion) => scene.setViewSettings(fov, sensitivity, reducedMotion);
+ui.onResetView = () => scene.resetTapLook();
+scene.setViewSettings(
+  Number(localStorage.getItem('discipline-fov') ?? '100'),
+  Number(localStorage.getItem('discipline-look-sensitivity') ?? '1'),
+  localStorage.getItem('discipline-reduced-motion') === '1',
+);
+const vibrate = (pattern: number | number[]) => {
+  if (localStorage.getItem('discipline-vibration') !== '0') navigator.vibrate?.(pattern);
+};
 
 // Worldwide leaderboards: Game Center / Play Games on device, local bests on web
 let leaderboards: LeaderboardProvider | null = null;
@@ -91,7 +102,7 @@ game.on((e) => {
     scene.setDriverAnger(e.tier); // face gets angrier and redder each tier
     ui.toast(e.label, 'warn');
     sfx.milestone();
-    navigator.vibrate?.(30 + e.tier * 25);
+    vibrate(30 + e.tier * 25);
   } else if (e.type === 'defeated') {
     transitioning = true;
     music.stopForDefeat();
@@ -103,7 +114,7 @@ game.on((e) => {
     scene.setShakeAmp(0);
     sfx.goop();
     sfx.horn(game.equipped('horn'));
-    navigator.vibrate?.([80, 40, 160]);
+    vibrate([80, 40, 160]);
     ui.toast(`${beatenName} is FINISHED. +${e.mentality} Mentality`, 'gold');
     setTimeout(() => {
       sfx.green();
@@ -154,12 +165,21 @@ title.addEventListener('pointerdown', (ev) => {
 }, { once: true });
 
 // Tap anywhere on the scene (not on UI) to tap
+let lastEyeContactWarning = 0;
 const onTap = (ev: Event) => {
   if (scene.inGarage) return; // garage has its own swipe/tap controls
   const t = ev.target as HTMLElement;
   if (t.closest('.panel, .menu-row, .ad-overlay, button')) return; // UI handles it
   if (ui.isPanelOpen) { ui.close(); return; } // tapping outside any menu closes it
   if (transitioning) return;
+  if (!scene.isMakingEyeContact()) {
+    const now = Date.now();
+    if (now - lastEyeContactWarning > 1200) {
+      ui.toast('MAKE EYE CONTACT TO TAP', 'warn');
+      lastEyeContactWarning = now;
+    }
+    return;
+  }
   sfx.preloadYelp();
   game.tap();
   sfx.tap();

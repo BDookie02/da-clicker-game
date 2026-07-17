@@ -112,6 +112,7 @@ export class GameScene {
   private lampMats: THREE.MeshBasicMaterial[] = [];
   private dashDecal: THREE.Mesh | null = null;
   private ornament: THREE.Mesh | null = null;
+  private dangler: THREE.Group | null = null;
   private hemi: THREE.HemisphereLight;
   private sun!: THREE.DirectionalLight;
   private skyMesh: THREE.Mesh;
@@ -128,6 +129,9 @@ export class GameScene {
   private freeLook = false;
   private lookYaw = 0;
   private lookPitch = 0;
+  private lookSensitivity = Number(localStorage.getItem('discipline-look-sensitivity') ?? '1');
+  private fovScale = Number(localStorage.getItem('discipline-fov') ?? '100') / 100;
+  private reducedMotion = localStorage.getItem('discipline-reduced-motion') === '1';
   // must be a Camera: Camera.lookAt aims -z (view direction), Object3D aims +z
   private gazeHelper = new THREE.PerspectiveCamera();
 
@@ -140,9 +144,18 @@ export class GameScene {
       this.lookPitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
       this.freeLook = true;
     }
-    this.lookYaw -= dx * 0.006;
-    this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - dy * 0.004, -0.75, 0.75);
+    this.lookYaw -= dx * 0.006 * this.lookSensitivity;
+    this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - dy * 0.004 * this.lookSensitivity, -0.75, 0.75);
   }
+
+  setViewSettings(fovPercent: number, lookSensitivity: number, reducedMotion: boolean) {
+    this.fovScale = THREE.MathUtils.clamp(fovPercent / 100, 0.7, 1.3);
+    this.lookSensitivity = THREE.MathUtils.clamp(lookSensitivity, 0.5, 2);
+    this.reducedMotion = reducedMotion;
+    this.reframe();
+  }
+
+  resetTapLook() { this.freeLook = false; }
 
   constructor(canvas: HTMLCanvasElement) {
     // preserveDrawingBuffer lets us grab devlog screenshots off the canvas
@@ -381,6 +394,7 @@ export class GameScene {
     wheel.position.set(-0.45, 0.95, -0.62);
     wheel.rotation.x = -1.15;
     g.add(wheel);
+    this.addRearViewMirror(g, 0, 1.55, -1.22);
     g.name = 'cockpit';
     // fixed to the CAR, not the head — the dash stays put when you look left
     g.position.set(2, 0, 0);
@@ -420,6 +434,58 @@ export class GameScene {
     m.position.set(-0.5, 1.0, -0.72); // on the dash, car-space
     this.cockpit.add(m);
     this.ornament = m;
+  }
+
+  private addRearViewMirror(parent: THREE.Group, x: number, y: number, z: number) {
+    const mirror = new THREE.Group();
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.22, 0.08), this.mat(0x17171c));
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.14),
+      new THREE.MeshBasicMaterial({ color: 0x8aa0aa, side: THREE.DoubleSide }));
+    glass.position.z = 0.046;
+    mirror.add(shell, glass);
+    mirror.position.set(x, y, z);
+    parent.add(mirror);
+  }
+
+  private makeDangler(style: string): THREE.Group {
+    const g = new THREE.Group();
+    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.42, 5), this.mat(0x202026));
+    cord.position.y = -0.21; g.add(cord);
+    const add = (geometry: THREE.BufferGeometry, color: number, x: number, y: number, z = 0) => {
+      const m = new THREE.Mesh(geometry, this.mat(color));
+      m.position.set(x, y, z); g.add(m); return m;
+    };
+    if (style === 'dice') {
+      add(new THREE.BoxGeometry(0.16, 0.16, 0.16), 0xf2f0e8, -0.1, -0.5);
+      add(new THREE.BoxGeometry(0.16, 0.16, 0.16), 0xf2f0e8, 0.1, -0.55);
+    } else if (style === 'beads') {
+      const colors = [0xe84a4a, 0xe8c84a, 0x4ae08a, 0x4a8ae0, 0xb04ae0];
+      for (let i = 0; i < 9; i++) add(new THREE.SphereGeometry(0.045, 6, 4), colors[i % colors.length], 0, -0.43 - i * 0.075);
+    } else if (style === 'yinyang') {
+      add(new THREE.SphereGeometry(0.14, 8, 6), 0xf2f0e8, 0, -0.55);
+      add(new THREE.SphereGeometry(0.07, 6, 4), 0x16161a, 0.06, -0.55, 0.12);
+    } else if (style === 'fire') {
+      add(new THREE.SphereGeometry(0.14, 8, 6), 0xff5a18, 0, -0.54);
+      const flame = add(new THREE.ConeGeometry(0.12, 0.28, 7), 0xffc21c, 0, -0.35);
+      flame.rotation.z = 0.15;
+    } else if (style === 'censored') {
+      // Abstract mosaic blocks keep the novelty joke visibly censored.
+      add(new THREE.BoxGeometry(0.3, 0.16, 0.12), 0x16161a, 0, -0.52);
+      add(new THREE.BoxGeometry(0.13, 0.13, 0.13), 0x2a2a32, -0.12, -0.63);
+      add(new THREE.BoxGeometry(0.13, 0.13, 0.13), 0x2a2a32, 0.12, -0.63);
+    } else {
+      add(new THREE.SphereGeometry(0.14, 7, 5), 0x75d13b, 0, -0.5);
+      add(new THREE.SphereGeometry(0.08, 6, 4), 0x4a9e28, 0.08, -0.67);
+    }
+    return g;
+  }
+
+  setDangler(style?: string) {
+    if (this.dangler) { this.cockpit.remove(this.dangler); this.dangler = null; }
+    if (!style) return;
+    this.dangler = this.makeDangler(style);
+    this.dangler.position.set(0, 1.5, -1.17);
+    this.cockpit.add(this.dangler);
   }
 
   setSky(key?: string) {
@@ -797,6 +863,7 @@ export class GameScene {
   onGarageShop?: () => void;  // fired when the garage laptop is tapped
   private garageDecal: THREE.Mesh | null = null;
   private garageOrn: THREE.Mesh | null = null;
+  private garageDangler: THREE.Group | null = null;
   private garageGoopTop: THREE.MeshLambertMaterial | null = null;
   private static readonly GO = new THREE.Vector3(0, -200, 0);
 
@@ -907,6 +974,7 @@ export class GameScene {
     wheel.position.set(0.42, 1.02, 0.48);
     wheel.rotation.x = -1.2;
     this.garageCar.add(wheel);
+    this.addRearViewMirror(this.garageCar, 0, 1.55, 0.78);
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
     // NOTE: the procedural car is the customizable one — cosmetics (paint,
@@ -1054,7 +1122,7 @@ export class GameScene {
     }
   }
 
-  setGarageCosmetics(decal?: string, ornament?: string, goop?: string) {
+  setGarageCosmetics(decal?: string, ornament?: string, goop?: string, dangler?: string) {
     if (!this.garageBuilt || !this.garageCar) return;
     if (this.garageDecal) { this.garageCar.remove(this.garageDecal); this.garageDecal = null; }
     if (decal) {
@@ -1085,6 +1153,26 @@ export class GameScene {
       this.garageOrn = m;
     }
     if (this.garageGoopTop) this.garageGoopTop.color.set(goop ?? '#f2f0e8');
+    if (this.garageDangler) { this.garageCar.remove(this.garageDangler); this.garageDangler = null; }
+    if (dangler) {
+      this.garageDangler = this.makeDangler(dangler);
+      this.garageDangler.position.set(0, 1.5, 0.73);
+      this.garageCar.add(this.garageDangler);
+    }
+  }
+
+  /** Taps count only while the player's view is aimed at the rival's face. */
+  isMakingEyeContact(): boolean {
+    if (this.garageMode || this.driving) return false;
+    const face = new THREE.Vector3(
+      this.opponentAnchor.position.x - 0.45,
+      this.spritePos.y + 0.05,
+      this.opponentAnchor.position.z - this.spritePos.z,
+    );
+    const toFace = face.sub(this.camera.position).normalize();
+    const view = new THREE.Vector3();
+    this.camera.getWorldDirection(view);
+    return view.dot(toFace) >= 0.9;
   }
 
   // ---- effects ------------------------------------------------------------------
@@ -1157,7 +1245,7 @@ export class GameScene {
       const GO = GameScene.GO;
       if (this.garageFP) {
         // driver's seat with free look: swipe to look around the cabin
-        this.garageCam.fov = 62 / this.fpZoom;
+        this.garageCam.fov = (62 * this.fovScale) / this.fpZoom;
         this.garageCam.updateProjectionMatrix();
         const eye = new THREE.Vector3(GO.x + 0.42, GO.y + 1.3, GO.z - 0.12);
         this.garageCam.position.copy(eye);
@@ -1167,7 +1255,8 @@ export class GameScene {
           eye.z + Math.cos(this.fpYaw) * Math.cos(this.fpPitch),
         );
       } else {
-        if (this.garageCam.fov !== 62) { this.garageCam.fov = 62; this.garageCam.updateProjectionMatrix(); }
+        const garageFov = 62 * this.fovScale;
+        if (this.garageCam.fov !== garageFov) { this.garageCam.fov = garageFov; this.garageCam.updateProjectionMatrix(); }
         const r = this.garageDist;
         this.garageCam.position.set(
           GO.x + Math.sin(this.garageYaw) * Math.cos(this.garagePitch) * r,
@@ -1184,7 +1273,7 @@ export class GameScene {
     }
 
     // opponent shake: tier amplitude + per-tap pulse kick
-    const a = this.shakeAmp * (1 + this.pulse * 2.5);
+    const a = this.reducedMotion ? 0 : this.shakeAmp * (1 + this.pulse * 2.5);
     const t = this.time;
     this.opponentGroup.position.x = Math.sin(t * 31) * a;
     this.opponentGroup.position.y = Math.abs(Math.sin(t * 47)) * a * 0.8;
@@ -1193,7 +1282,7 @@ export class GameScene {
     this.opponentGroup.rotation.x = Math.cos(t * 27) * a * 0.2;
 
     // subtle idle sway on the player cam (engine running)
-    this.camera.position.y = 1.25 + Math.sin(t * 2.1) * 0.008;
+    this.camera.position.y = 1.25 + (this.reducedMotion ? 0 : Math.sin(t * 2.1) * 0.008);
 
     // head turn: smoothly swing between the opponent's window and the road.
     // Eye contact aims at the DRIVER'S actual head height (buses, cube cars
@@ -1278,7 +1367,7 @@ export class GameScene {
     // gets a touch more height so a sliver of car reads under the face
     const aspect = this.camera.aspect;
     const h = (headWorld / targetFrac) * (aspect < 1 ? 1 + (1 - aspect) * 0.4 : 1);
-    this.camera.fov = 2 * Math.atan((h / 2) / Math.max(1, dist)) * (180 / Math.PI);
+    this.camera.fov = 2 * Math.atan((h / 2) / Math.max(1, dist)) * (180 / Math.PI) * this.fovScale;
     this.camera.updateProjectionMatrix();
   }
 

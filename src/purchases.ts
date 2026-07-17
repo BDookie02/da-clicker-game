@@ -36,6 +36,9 @@ export const M_PACKS: MPack[] = [
 // are a slow free trickle, not a substitute for buying. Tunable once real
 // mediation eCPM is known.
 export const AD_M_REWARD = 5;
+export const AD_FREE_PRODUCT: MPack = {
+  id: 'ad_free', price: '$4.99', usd: 4.99, amount: 0, tag: 'ONE TIME',
+};
 
 export interface PurchaseProvider {
   readonly platform: string;
@@ -56,7 +59,9 @@ export class PlaceholderPurchases implements PurchaseProvider {
           <div class="ad-screen">
             <div class="ad-art">💳</div>
             <div class="ad-copy">Real in-app purchase renders here.<br/>
-            Buy <b style="color:#e6c84a">${pack.amount} M</b> for <b>${pack.price}</b>?</div>
+            ${pack.id === 'ad_free'
+              ? `Remove non-rewarded ads permanently for <b>${pack.price}</b>?<br/>Optional reward ads remain available.`
+              : `Buy <b style="color:#e6c84a">${pack.amount} M</b> for <b>${pack.price}</b>?`}</div>
           </div>
           <div class="name-actions">
             <button class="buy-cancel">CANCEL</button>
