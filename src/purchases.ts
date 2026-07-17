@@ -37,10 +37,6 @@ export const M_PACKS: MPack[] = [
 // are a slow free trickle, not a substitute for buying. Tunable once real
 // mediation eCPM is known.
 export const AD_M_REWARD = 5;
-export const AD_FREE_PRODUCT: MPack = {
-  id: 'ad_free', price: '$4.99', usd: 4.99, amount: 0, tag: 'ONE TIME',
-};
-
 export interface PurchaseProvider {
   readonly platform: string;
   /** Charge for a pack. Resolves true only on a completed purchase. */
@@ -60,9 +56,7 @@ export class PlaceholderPurchases implements PurchaseProvider {
           <div class="ad-screen">
             <div class="ad-art">💳</div>
             <div class="ad-copy">Real in-app purchase renders here.<br/>
-            ${pack.id === 'ad_free'
-              ? `Remove non-rewarded ads permanently for <b>${pack.price}</b>?<br/>Optional reward ads remain available.`
-              : `Buy <b style="color:#e6c84a">${pack.amount} M</b> for <b>${pack.price}</b>?`}</div>
+            Buy <b style="color:#e6c84a">${pack.amount} M</b> for <b>${pack.price}</b>?</div>
           </div>
           <div class="name-actions">
             <button class="buy-cancel">CANCEL</button>
@@ -92,7 +86,7 @@ class NativePurchaseProvider implements PurchaseProvider {
       const transaction = await NativePurchases.purchaseProduct({
         productIdentifier: pack.id,
         productType: PURCHASE_TYPE.INAPP,
-        isConsumable: pack.id !== AD_FREE_PRODUCT.id,
+        isConsumable: true,
         autoAcknowledgePurchases: true,
       });
       return transaction.productIdentifier === pack.id;
@@ -101,23 +95,13 @@ class NativePurchaseProvider implements PurchaseProvider {
     }
   }
 
-  async restoreAdFree() {
-    try {
-      const { purchases } = await NativePurchases.getPurchases({ productType: PURCHASE_TYPE.INAPP });
-      if (purchases.some(p => p.productIdentifier === AD_FREE_PRODUCT.id && p.isActive !== false)) {
-        localStorage.setItem('discipline-ad-free', '1');
-      }
-    } catch { /* Play Store unavailable or product not configured yet */ }
-  }
 }
 
 /** Native IAP (Capacitor). Wired at store-launch; falls back to placeholder. */
 export async function initPurchases(): Promise<PurchaseProvider> {
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.()) {
-    const provider = new NativePurchaseProvider();
-    void provider.restoreAdFree();
-    return provider;
+    return new NativePurchaseProvider();
   }
   return new PlaceholderPurchases();
 }

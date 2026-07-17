@@ -13,6 +13,7 @@ function tieredCost(base: number, growth: number, lv: number): number {
 }
 
 export interface SaveData {
+  economyVersion: number;     // v1: M only comes from its shop (purchase/ad)
   username: string | null;
   prestiges: number;        // completed "New Routes"
   respect: number;
@@ -32,6 +33,7 @@ export interface SaveData {
 }
 
 const fresh = (): SaveData => ({
+  economyVersion: 1,
   username: null,
   prestiges: 0,
   respect: 0,
@@ -53,7 +55,7 @@ const fresh = (): SaveData => ({
 export type GameEvent =
   | { type: 'tap'; gain: number }
   | { type: 'milestone'; tier: number; label: string }
-  | { type: 'defeated'; mentality: number; name: string }
+  | { type: 'defeated'; name: string }
   | { type: 'boost'; mult: number; seconds: number }
   | { type: 'offline'; gain: number; seconds: number }
   | { type: 'prestige'; count: number };
@@ -112,7 +114,8 @@ export class Game {
       add += u.tapAdd * lv;
       if (u.tapMult) mult *= Math.pow(u.tapMult, lv);
     }
-    return Math.round(add * mult * this.activeMult * this.routeMult);
+    const labTapMult = this.hasLab('lab_mental') ? 1.25 : 1;
+    return Math.round(add * mult * labTapMult * this.activeMult * this.routeMult);
   }
 
   get respectPerSec(): number {
@@ -190,12 +193,10 @@ export class Game {
     }
     if (this.s.opponentProgress >= this.opponent.tapsRequired) {
       const beaten = this.opponent;
-      const reward = Math.round(beaten.mentalityReward * (this.hasLab('lab_mental') ? 1.3 : 1));
-      this.s.mentality += reward;
       this.s.opponentIndex += 1;
       this.s.opponentProgress = 0;
       this.lastTier = 0;
-      this.emit({ type: 'defeated', mentality: reward, name: beaten.name });
+      this.emit({ type: 'defeated', name: beaten.name });
     }
   }
 
@@ -277,7 +278,14 @@ export class Game {
   private load(): SaveData {
     try {
       const raw = localStorage.getItem(SAVE_KEY);
-      if (raw) return { ...fresh(), ...JSON.parse(raw) };
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Before economy v1, opponent victories accidentally awarded premium
+        // M. The game was still unreleased and purchases were inactive, so
+        // clear that test balance once. From v1 onward only the M shop can add M.
+        if (!parsed.economyVersion) parsed.mentality = 0;
+        return { ...fresh(), ...parsed, economyVersion: 1 };
+      }
     } catch { /* corrupted save -> start fresh */ }
     return fresh();
   }

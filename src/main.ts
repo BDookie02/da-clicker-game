@@ -115,7 +115,7 @@ game.on((e) => {
     sfx.goop();
     sfx.horn(game.equipped('horn'));
     vibrate([80, 40, 160]);
-    ui.toast(`${beatenName} is FINISHED. +${e.mentality} Mentality`, 'gold');
+    ui.toast(`${beatenName} is FINISHED.`, 'gold');
     setTimeout(() => {
       sfx.green();
       ui.toast('GREEN LIGHT. You are free to go.', 'green');

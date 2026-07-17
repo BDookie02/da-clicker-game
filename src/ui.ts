@@ -8,7 +8,7 @@ import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
 import { PlaceholderAdProvider, withMusicPause, type AdProvider, type AdResult } from './ads';
-import { AD_FREE_PRODUCT, AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
+import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -46,7 +46,7 @@ export class UI {
         <div class="stat"><span class="k">MENTALITY</span><span class="v gold" id="v-mentality">0</span></div>
         <div class="stat small"><span class="k">/TAP</span><span class="v" id="v-tap">1</span></div>
         <div class="stat small"><span class="k">/SEC</span><span class="v" id="v-rps">0</span></div>
-        <button class="stat mute" id="btn-mute" title="sound">🔊</button>
+        <button class="stat mute" id="btn-settings" title="settings">⚙</button>
       </div>
       <div class="boost-pill" id="boost-pill" hidden></div>
       <button class="quick-buy" id="quick-buy" hidden></button>
@@ -64,7 +64,6 @@ export class UI {
         <button data-tab="garage">GARAGE</button>
         <button data-tab="ranks">🏆 RANKS</button>
         <button data-tab="boosters" class="hot">📺 BOOSTERS</button>
-        <button data-tab="settings">⚙ SETTINGS</button>
       </div>
       <div class="toasts" id="toasts"></div>
       <div class="fade" id="fade"></div>`;
@@ -89,11 +88,10 @@ export class UI {
       }
     });
 
-    const muteBtn = document.getElementById('btn-mute')!;
-    muteBtn.textContent = sfx.muted ? '🔇' : '🔊';
-    muteBtn.addEventListener('click', (ev) => {
+    const settingsBtn = document.getElementById('btn-settings')!;
+    settingsBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      muteBtn.textContent = sfx.toggleMute() ? '🔇' : '🔊';
+      this.toggle('settings');
     });
   }
 
@@ -218,11 +216,6 @@ export class UI {
             <div class="row-desc">Free. As much M as the ad is worth.</div></div>
           <button class="m-ad">WATCH</button>
         </div>
-        <div class="row adfree-row">
-          <div class="row-txt"><div class="row-name">🚫 Go Ad-Free</div>
-            <div class="row-desc">Removes non-rewarded ads permanently. Optional reward ads remain available.</div></div>
-          <button class="buy-adfree" ${localStorage.getItem('discipline-ad-free') === '1' ? 'disabled' : ''}>${localStorage.getItem('discipline-ad-free') === '1' ? 'OWNED' : '$4.99'}</button>
-        </div>
         ${packRows}
       </div>`;
     document.body.appendChild(ov);
@@ -238,16 +231,6 @@ export class UI {
         this.toast(`+${AD_M_REWARD} M`, 'gold');
         this.refresh();
       } else this.toast('Ad closed early or unavailable — no M awarded.');
-    });
-    ov.querySelector('.buy-adfree')!.addEventListener('click', async () => {
-      if (localStorage.getItem('discipline-ad-free') === '1') return;
-      if (await this.purchases.buy(AD_FREE_PRODUCT)) {
-        localStorage.setItem('discipline-ad-free', '1');
-        (ov.querySelector('.buy-adfree') as HTMLButtonElement).disabled = true;
-        ov.querySelector('.buy-adfree')!.textContent = 'OWNED';
-        sfx.buy();
-        this.toast('Ad-Free unlocked!', 'gold');
-      }
     });
     ov.querySelectorAll('.row button[data-pack]').forEach((b) => {
       b.addEventListener('click', async () => {

@@ -14,7 +14,7 @@ export interface OpponentDef {
   carColor: number;       // body paint
   carAccent: number;      // trim/roof
   carStyle: 'sedan' | 'hatch' | 'cube' | 'van' | 'lowrider' | 'muscle' | 'metro' | 'limo' | 'compact' | 'divine' | 'pickup' | 'wedge' | 'taxi';
-  mentalityReward: number;
+  mentalityReward: number; // legacy balance data; victories no longer grant premium M
   spriteSlot: string;     // asset key for the future 2D character billboard
 }
 
@@ -258,7 +258,7 @@ export const LAB: LabDef[] = [
   { id: 'lab_grip',    name: 'Muscle Memory',    desc: 'PERMANENT +50 respect per tap, survives New Route.',      cost: 120 },
   { id: 'lab_offline', name: 'Dream Discipline', desc: 'Offline earnings rate 50% → 80%.',                        cost: 200 },
   { id: 'lab_boost',   name: 'Extended Cut',     desc: 'Ad boosters last 40% longer.',                            cost: 300 },
-  { id: 'lab_mental',  name: 'Aura Compounder',  desc: '+30% Mentality from every defeated opponent.',            cost: 450 },
+  { id: 'lab_mental',  name: 'Tap Compounder',   desc: '+25% Respect from every manual tap.',                     cost: 450 },
 ];
 
 export const SAVE_KEY = 'discipline-clicker-save-v1';
