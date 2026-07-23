@@ -32,13 +32,15 @@ const evaluate = async (expression) => {
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
 const viewports = [
+  { name: 'legacy-small', width: 280, height: 480 },
   { name: 'compact', width: 320, height: 568 },
   { name: 'standard', width: 360, height: 640 },
   { name: 'tall', width: 412, height: 915 },
+  { name: 'short-landscape', width: 480, height: 280 },
   { name: 'landscape', width: 640, height: 360 },
   { name: 'tablet', width: 768, height: 1024 },
 ];
-const visualViewports = new Set(['compact', 'tall', 'landscape']);
+const visualViewports = new Set(['legacy-small', 'compact', 'tall', 'short-landscape', 'landscape']);
 const allScreens = ['main', 'upgrades', 'crew', 'garage', 'ranks', 'boosters', 'settings', 'settings-account', 'account', 'username', 'mshop', 'offline', 'delete-account'];
 const screens = screenFilter ? allScreens.filter(screen => screenFilter.includes(screen)) : allScreens;
 const reports = [];
@@ -128,8 +130,22 @@ for (const viewport of viewports) {
           if(Math.min(x.right,y.right)-Math.max(x.left,y.left)>2&&Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top)>2) overlaps.push(label(a)+' <> '+label(b));
         }
         const occluded=interactive.filter(e=>!inScrollableClip(e)&&!topVisible(e)).map(label);
-        const clipped=[...document.querySelectorAll('button,input,.stat,.panel-head,.row-name,.row-desc,.panel-note,.setting label,.setting-check,.lb-row,.garage-bar,.name-copy,.ad-label,.ad-copy')].filter(visible).filter(e=>{
+        const clipped=[...document.querySelectorAll('button,input,.stat,.stat .k,.stat .v,.panel-head,.row-name,.row-desc,.panel-note,.setting label,.setting-check,.lb-row,.garage-bar,.name-copy,.ad-label,.ad-copy')].filter(visible).filter(e=>{
           const s=getComputedStyle(e); return (e.scrollWidth>e.clientWidth+2&&s.overflowX!=='auto'&&s.overflowX!=='scroll')||(e.scrollHeight>e.clientHeight+2&&s.overflowY!=='auto'&&s.overflowY!=='scroll');
+        }).map(label);
+        const buttonLabels=[...document.querySelectorAll('button')].filter(visible).filter(button=>{
+          const style=getComputedStyle(button);
+          const range=document.createRange(); range.selectNodeContents(button);
+          const rects=[...range.getClientRects()].filter(r=>r.width>0&&r.height>0);
+          const lineTops=new Set(rects.map(r=>Math.round(r.top*2)/2));
+          return style.whiteSpace!=='nowrap'||style.wordBreak==='break-all'||lineTops.size>1
+            ||button.scrollWidth>button.clientWidth+1||button.scrollHeight>button.clientHeight+1;
+        }).map(label);
+        const multiRowGroups=[...document.querySelectorAll('.menu-row,.name-actions,.text-size-choices,.garage-bar,.cheat-entry')].filter(visible).filter(group=>{
+          const buttons=[...group.querySelectorAll(':scope > button')].filter(visible);
+          if(buttons.length<2)return false;
+          const tops=buttons.map(button=>Math.round(button.getBoundingClientRect().top));
+          return Math.max(...tops)-Math.min(...tops)>2;
         }).map(label);
         const panel=document.querySelector('.panel');
         const panelBg=panel?getComputedStyle(panel).backgroundColor:'';
@@ -137,7 +153,7 @@ for (const viewport of viewports) {
         const panelAlpha=panelBg.startsWith('rgba')?Number(panelParts[panelParts.length-1].replace(')','')):1;
         const panelOpaque=!panel||panelAlpha>=.995;
         const garageState=expectedScreen!=='garage'||(document.body.classList.contains('in-garage')&&getComputedStyle(document.querySelector('.hud-top')).display==='none');
-        return { outside, overlaps, occluded, clipped, panelOpaque, garageState, viewport:[innerWidth,innerHeight], panel:panel?.getBoundingClientRect().toJSON?.()||null };
+        return { outside, overlaps, occluded, clipped, buttonLabels, multiRowGroups, panelOpaque, garageState, viewport:[innerWidth,innerHeight], panel:panel?.getBoundingClientRect().toJSON?.()||null };
       })()`);
       reports.push({ viewport: viewport.name, tier, screen, ...audit });
       if (visualViewports.has(viewport.name)) {
@@ -152,7 +168,7 @@ for (const viewport of viewports) {
 
 await call('Emulation.clearDeviceMetricsOverride');
 writeFileSync(join(out, 'audit.json'), JSON.stringify(reports, null, 2));
-const failures = reports.filter(r => r.outside.length || r.overlaps.length || r.occluded.length || r.clipped.length || !r.panelOpaque || !r.garageState);
+const failures = reports.filter(r => r.outside.length || r.overlaps.length || r.occluded.length || r.clipped.length || r.buttonLabels.length || r.multiRowGroups.length || !r.panelOpaque || !r.garageState);
 writeFileSync(join(out, 'failures.json'), JSON.stringify(failures, null, 2));
 
 for (const screen of screens) {

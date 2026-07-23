@@ -124,6 +124,7 @@ export class FirstLaunchTutorial {
 
   private render() {
     const step = this.steps[this.index];
+    document.body.classList.toggle('tutorial-target-settings', step.target === '#btn-settings');
     this.tapCount = 0;
     this.updateCopy(step.text);
     const stepEl = this.overlay!.querySelector('.tutorial-step')!;
@@ -166,8 +167,8 @@ export class FirstLaunchTutorial {
       const shortLandscape = innerWidth > innerHeight;
       const box = step.target === '#game-canvas'
         ? shortLandscape
-          ? { left: innerWidth * .38, top: innerHeight * .31, width: innerWidth * .24, height: innerHeight * .15 }
-          : { left: innerWidth * .32, top: innerHeight * .36, width: innerWidth * .36, height: innerHeight * .26 }
+          ? { left: innerWidth * .38, top: innerHeight * .22, width: innerWidth * .24, height: innerHeight * .15 }
+          : { left: innerWidth * .32, top: innerHeight * .27, width: innerWidth * .36, height: innerHeight * .20 }
         : { left: r.left - pad, top: r.top - pad, width: r.width + pad * 2, height: r.height + pad * 2 };
       Object.assign(this.focus!.style, {
         left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`,
@@ -229,7 +230,7 @@ export class FirstLaunchTutorial {
     document.removeEventListener('click', this.onClick, true);
     removeEventListener('resize', this.position);
     this.overlay?.remove();
-    document.body.classList.remove('tutorial-active');
+    document.body.classList.remove('tutorial-active', 'tutorial-target-settings');
     this.overlay = this.focus = this.bubble = null;
     this.hooks.closePanel();
     this.hooks.finish();

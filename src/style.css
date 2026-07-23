@@ -297,11 +297,17 @@ body.in-garage .quick-buy { display: none; }
 body.panel-open:not(.in-garage) .opp-bar,
 body.panel-open:not(.in-garage) .boost-pill,
 body.panel-open:not(.in-garage) .quick-buy { visibility: hidden; }
-.panel button, .garage-exit-fixed, .tutorial-skip, .tutorial-next,
-.ad-box button, .text-size-choices button {
+/* Button captions are atomic UI labels. Accessibility scaling may grow them,
+   but it must never split a word/phrase across lines or create a second row.
+   UI.fitBorderedLabels() reduces only the caption size when a fixed cell is
+   too narrow. */
+button {
   white-space: nowrap;
+  word-break: keep-all;
   overflow: hidden;
   overflow-wrap: normal;
+  hyphens: none;
+  text-wrap: nowrap;
 }
 .menu-row button:active, .panel button:active { transform: translateY(2px); border-bottom-width: 2px; }
 .menu-row button.hot { border-color: #e66a2a; color: #ffd890; }
@@ -311,9 +317,6 @@ body.panel-open:not(.in-garage) .quick-buy { visibility: hidden; }
   font-size: clamp(9px, 2.6vw, 12px);
   padding: 8px 1px;
   line-height: 1.05;
-  white-space: nowrap;
-  overflow-wrap: normal;
-  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -538,7 +541,7 @@ body.in-garage .boost-pill { display: none; }
   min-width: 0; padding: 9px 2px; border: 1px solid #4a4a70;
   background: #0d0d16; color: #b0b0d0; font-family: inherit; font-weight: bold;
 }
-.garage-head button { min-width: 0; white-space: nowrap; overflow-wrap: normal; overflow: hidden; }
+.garage-head button { min-width: 0; }
 .garage-head .g-collapse { justify-self: stretch; }
 .text-size-choices button.selected { border-color: #e66a2a; background: #35170c; color: #ffd890; }
 .setting-check { display: block; padding: 10px 12px; margin: 7px 0; background: #171722; border: 1px solid #39394f; }
@@ -556,7 +559,6 @@ body.in-garage .boost-pill { display: none; }
 .tutorial-focus {
   position: fixed; border: 3px solid #ffd24a; border-radius: 5px;
   box-shadow: 0 0 0 9999px rgba(3, 3, 9, .76), 0 0 18px #ffd24a;
-  transition: left .18s, top .18s, width .18s, height .18s;
 }
 .tutorial-arrow {
   position: absolute; left: 50%; top: -34px; transform: translateX(-50%);
@@ -575,6 +577,10 @@ body.in-garage .boost-pill { display: none; }
 .tutorial-active .opp-bar,
 .tutorial-active .boost-pill,
 .tutorial-active .quick-buy { visibility: hidden; }
+/* Eye reset is not part of the first-run path. Keep both utility controls out
+   of the callout's layout lane until SETTINGS is the required target. */
+.tutorial-active .hud-top .stat.eye,
+.tutorial-active:not(.tutorial-target-settings) .hud-top .stat.settings { visibility: hidden; }
 .reset-view,
 .ad-privacy {
   display: block;
@@ -687,6 +693,29 @@ body.in-garage .boost-pill { display: none; }
     max-height: none;
   }
   .opp-bar { top: var(--hud-bottom); }
+}
+
+/* Short Android landscape screens have very little vertical space between
+   the HUD and navigation. Compact only the tutorial chrome; its copy still
+   follows the selected accessibility tier, and the required action remains
+   fully visible without an internal scroll. */
+@media (orientation: landscape) and (max-height: 320px) {
+  .tutorial-skip { padding: 5px 8px; font-size: 9px; }
+  .tutorial-bubble { padding: 6px 8px; }
+  .tutorial-step { margin-bottom: 4px; }
+  .tutorial-copy { line-height: 1.25; }
+  .tutorial-next { margin-top: 5px; padding: 5px; }
+}
+
+/* On the narrowest portrait devices, keep SKIP beside the centered eye-contact
+   focus instead of letting the enlarged accessibility label cross into it. */
+@media (orientation: portrait) and (max-width: 320px) {
+  .tutorial-skip {
+    left: auto;
+    right: 8px;
+    width: 82px;
+    padding: 6px 3px;
+  }
 }
 
 @media (max-width: 260px) {

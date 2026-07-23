@@ -86,7 +86,7 @@ export class UI {
       for (const record of records) for (const node of record.addedNodes) {
         if (node instanceof HTMLElement) {
           this.scaleTextTree(node);
-          requestAnimationFrame(() => this.fitBorderedLabels(node));
+          this.scheduleTextFit(node);
         }
       }
     }).observe(document.body, { childList: true, subtree: true });
@@ -98,11 +98,11 @@ export class UI {
     }).observe(document.body, { attributes: true, attributeFilter: ['class', 'data-text-tier'] });
     addEventListener('resize', () => {
       this.updateLayoutMetrics();
-      this.fitBorderedLabels(document.body);
+      this.scheduleTextFit(document.body);
     });
     requestAnimationFrame(() => {
       this.updateLayoutMetrics();
-      this.fitBorderedLabels(document.body);
+      this.scheduleTextFit(document.body);
     });
 
     this.root.querySelectorAll('.menu-row button').forEach((b) => {
@@ -167,16 +167,23 @@ export class UI {
     this.scaledFontElements.clear();
     document.body.dataset.textTier = String(this.game.s.textSizeTier);
     this.scaleTextTree(document.body);
+    this.scheduleTextFit(document.body);
+    requestAnimationFrame(() => this.updateLayoutMetrics());
+  }
+
+  private scheduleTextFit(root: HTMLElement) {
     requestAnimationFrame(() => {
-      this.fitBorderedLabels(document.body);
-      this.updateLayoutMetrics();
+      this.fitBorderedLabels(root);
+      // Android WebView can settle fallback/emoji glyph metrics a frame late.
+      requestAnimationFrame(() => this.fitBorderedLabels(root));
     });
   }
 
-  /** Keep every button/title word intact. Cells stay fixed; type shrinks only
-   * when its complete unbroken label would cross the visible border. */
+  /** Keep every UI word intact. Buttons stay single-line; prose may wrap only
+   * between words. Type shrinks only when an unbroken word would cross its
+   * visible container. */
   private fitBorderedLabels(root: HTMLElement) {
-    const selector = 'button, .panel-title';
+    const selector = 'button, .panel-title, .stat .k, .stat .v, .row-name, .row-desc, .panel-note, .setting label, .setting-check, .name-copy, .ad-copy, .tutorial-copy';
     const targets = root.matches(selector)
       ? [root, ...root.querySelectorAll<HTMLElement>(selector)]
       : [...root.querySelectorAll<HTMLElement>(selector)];
@@ -188,20 +195,24 @@ export class UI {
       }
       if (element.clientWidth < 2 || element.clientHeight < 2
         || (element.scrollWidth <= element.clientWidth + 1 && element.scrollHeight <= element.clientHeight + 1)) continue;
-      let current = Number.parseFloat(getComputedStyle(element).fontSize);
-      if (!Number.isFinite(current) || current <= 0) continue;
+      const start = Number.parseFloat(getComputedStyle(element).fontSize);
+      if (!Number.isFinite(start) || start <= 0) continue;
       this.fittedFontSizes.set(element, element.style.fontSize);
-      // Emoji and fallback glyph metrics can settle a frame after first paint.
-      // Re-measure after each reduction instead of trusting a single ratio.
-      for (let attempt = 0; attempt < 4
-        && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1);
-        attempt += 1) {
-        const widthRatio = (element.clientWidth - 6) / Math.max(1, element.scrollWidth);
-        const heightRatio = (element.clientHeight - 4) / Math.max(1, element.scrollHeight);
-        const ratio = Math.max(0.1, Math.min(widthRatio, heightRatio) * 0.94);
-        current = Math.max(4, current * ratio);
-        element.style.fontSize = `${Math.floor(current * 100) / 100}px`;
+      // Binary-search the largest size that preserves one complete line. This
+      // is stable for emoji/fallback fonts and avoids the multi-pass rounding
+      // errors that previously left a last letter clipped on narrow phones.
+      const fits = () => element.scrollWidth <= element.clientWidth + 1
+        && element.scrollHeight <= element.clientHeight + 1;
+      let low = 4;
+      let high = start;
+      element.style.fontSize = `${low}px`;
+      if (!fits()) continue;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const mid = (low + high) / 2;
+        element.style.fontSize = `${mid}px`;
+        if (fits()) low = mid; else high = mid;
       }
+      element.style.fontSize = `${Math.floor(low * 100) / 100}px`;
     }
   }
 
@@ -784,6 +795,7 @@ export class UI {
     this.panel.innerHTML = collapsedGarage
       ? rows.join('')
       : `${rows[0]}<div class="panel-viewport"><div class="panel-scroll">${rows.slice(1).join('')}</div></div>`;
+    this.scheduleTextFit(this.panel);
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
     if (this.openTab === 'settings') this.bindSettings();
     // garage-specific controls

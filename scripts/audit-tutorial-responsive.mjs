@@ -20,7 +20,8 @@ const evalJs = async expression => {
   return reply.result.value;
 };
 const wait = ms => new Promise(r=>setTimeout(r,ms));
-const viewports=[['compact',320,568],['standard',360,640],['tall',412,915],['landscape',640,360],['tablet',768,1024]];
+const viewports=[['legacy-small',280,480],['compact',320,568],['standard',360,640],['tall',412,915],['short-landscape',480,280],['landscape',640,360],['tablet',768,1024]];
+const visualViewports=new Set(['legacy-small','compact','short-landscape','landscape']);
 const reports=[]; const captures=[];
 // The real tutorial starts after the title card has completed its exit. Keep
 // the audit in that same state so screenshots exercise the actual play UI.
@@ -38,14 +39,14 @@ for(const [name,width,height] of viewports){
         const intersects=(a,c)=>Math.min(a.right,c.right)-Math.max(a.left,c.left)>2&&Math.min(a.bottom,c.bottom)-Math.max(a.top,c.top)>2;
         const outside=e=>{const r=R(e);return r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight};
         const clipped=e=>e.scrollWidth>e.clientWidth+2||e.scrollHeight>e.clientHeight+2;
-        const selector=t.steps[${step}].target,target=selector&&selector!=='#game-canvas'?document.querySelector(selector):null,br=R(b),fr=target?R(target):R(f);
+        const selector=t.steps[${step}].target,target=selector&&selector!=='#game-canvas'?document.querySelector(selector):null,br=R(b),fr=R(f);
         const overlap=!f.hidden&&intersects(br,fr),sr=R(skip),skipTarget=!f.hidden&&intersects(sr,fr);
         const controls=[...document.querySelectorAll('.menu-row,.hud-top button')].filter(e=>{const r=R(e),s=getComputedStyle(e);return r.width>1&&r.height>1&&s.display!=='none'&&s.visibility!=='hidden'});
         const controlOverlap=controls.filter(e=>intersects(br,R(e))||intersects(sr,R(e))).map(e=>e.className||e.id||e.tagName);
         return {outside:[b,skip,...b.querySelectorAll('*')].filter(outside).map(e=>e.className||e.tagName),clipped:[b,skip,...b.querySelectorAll('*')].filter(clipped).map(e=>e.className||e.tagName),focusOverlap:overlap||skipTarget,controlOverlap,bubble:br.toJSON(),bubbleSize:{client:[b.clientWidth,b.clientHeight],scroll:[b.scrollWidth,b.scrollHeight]},focus:f.hidden?null:fr.toJSON()}
       })()`);
       reports.push({viewport:name,width,height,tier,step:step+1,...result});
-      if(tier===3&&(name==='compact'||name==='landscape')){
+      if(tier===3&&visualViewports.has(name)){
         await wait(30); const shot=await call('Page.captureScreenshot',{format:'png',fromSurface:true});
         const file=`${name}-xl-step-${step+1}.png`;writeFileSync(join(out,file),Buffer.from(shot.data,'base64'));captures.push({name,step,file});
       }
@@ -56,7 +57,7 @@ for(const [name,width,height] of viewports){
 await call('Emulation.clearDeviceMetricsOverride');
 const failures=reports.filter(r=>r.outside.length||r.clipped.length||r.focusOverlap||r.controlOverlap.length);
 writeFileSync(join(out,'audit.json'),JSON.stringify(reports,null,2));writeFileSync(join(out,'failures.json'),JSON.stringify(failures,null,2));
-for(const name of ['compact','landscape']){
+for(const name of visualViewports){
   const items=captures.filter(c=>c.name===name), tileW=220,tileH=340,labelH=24,cols=4,rows=Math.ceil(items.length/cols),layers=[];
   for(const [i,item] of items.entries()){
     const im=await sharp(join(out,item.file)).resize(tileW,tileH,{fit:'contain',background:'#080910'}).png().toBuffer();
