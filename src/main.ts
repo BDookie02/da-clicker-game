@@ -102,8 +102,14 @@ if (API_URL) {
   account = new AccountService(API_URL);
   ui.account = account;
   onboarding = (async () => {
-    const identity = await account!.verify().catch(() => null);
-    if (!identity) { await ui.promptAccount(); return; }
+    let identity = await account!.verify().catch(() => null);
+    if (!identity) {
+      await ui.promptAccount();
+      // A first-launch registration/login must enter the exact same sync and
+      // purchase-recovery path immediately, not wait for an app restart.
+      identity = await account!.verify().catch(() => null);
+      if (!identity) return;
+    }
     game.s.username = identity.username;
     const source = await account!.sync(game.s).catch(() => null);
     if (source === 'cloud') location.reload();

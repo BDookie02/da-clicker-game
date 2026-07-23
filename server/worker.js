@@ -25,6 +25,22 @@ const PRODUCTS = Object.freeze({
 const ADMOB_KEYS_URL = 'https://www.gstatic.com/admob/reward/verifier-keys.json';
 const ADMOB_REWARD_ITEM = 'completed_ad';
 const ADMOB_REWARD_AMOUNT = 1;
+const AD_M_REWARD = 5;
+const MAX_SAFE = Number.MAX_SAFE_INTEGER;
+const UPGRADE_LIMITS = Object.freeze({ focus: 1_000_000, grip: 1_000_000, wrist: 1_000_000, posture: 1_000_000, eyecont: 8, mindset: 1_000_000 });
+const CREW_IDS = Object.freeze(['hypeman', 'backseat', 'camera', 'editor', 'coach', 'monk']);
+const LAB_COSTS = Object.freeze({ lab_grip: 120, lab_offline: 200, lab_boost: 300, lab_mental: 450 });
+const COSMETICS = Object.freeze({
+  orn_napkin: [50, 'ornament'], decal_ment: [75, 'decal'], decal_disc: [75, 'decal'],
+  goop_gold: [200, 'goop'], goop_slime: [200, 'goop'], sky_sunset: [125, 'sky'], sky_vapor: [125, 'sky'],
+  horn_sad: [150, 'horn'], orn_cowboy: [175, 'ornament'], decal_aura: [125, 'decal'],
+  decal_engage: [125, 'decal'], goop_pink: [225, 'goop'], goop_blue: [225, 'goop'], goop_oil: [300, 'goop'],
+  sky_storm: [150, 'sky'], sky_noir: [150, 'sky'], sky_toxic: [150, 'sky'], sky_mint: [150, 'sky'],
+  orn_cone: [125, 'ornament'], orn_monk: [225, 'ornament'], horn_air: [175, 'horn'],
+  dangle_dice: [90, 'dangler'], dangle_beads: [110, 'dangler'], dangle_yinyang: [140, 'dangler'],
+  dangle_fire: [175, 'dangler'], dangle_censored: [225, 'dangler'], dangle_testing_coals: [200, 'dangler'],
+  dangle_goop: [250, 'dangler'], roof_taxi: [175, 'roof'],
+});
 let admobKeyCache = { expiresAt: 0, keys: new Map() };
 
 const bytesToHex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -163,7 +179,8 @@ async function authenticated(req, env) {
   const raw = req.headers.get('Authorization') || '';
   if (!raw.startsWith('Bearer ')) return null;
   const tokenHash = await sha256(raw.slice(7));
-  return env.DB.prepare(`SELECT a.id, a.username, a.lower_username
+  return env.DB.prepare(`SELECT a.id, a.username, a.lower_username,
+      CAST(strftime('%s',a.created_at) AS INTEGER) AS created_epoch
     FROM sessions s JOIN accounts a ON a.id=s.account_id
     WHERE s.token_hash=? AND s.expires_at>?`).bind(tokenHash, Math.floor(Date.now() / 1000)).first();
 }
@@ -171,6 +188,102 @@ const accountJson = (row) => ({ id: String(row.id), username: row.username });
 function validSave(value) {
   return value && typeof value === 'object' && !Array.isArray(value)
     && Number.isFinite(Number(value.totalTaps)) && Number(value.totalTaps) >= 0;
+}
+
+const integer = (value, min, max, fallback = 0) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(min, Math.min(max, Math.trunc(number))) : fallback;
+};
+const knownList = (value, allowed) => Array.isArray(value)
+  ? [...new Set(value.filter((id) => typeof id === 'string' && Object.hasOwn(allowed, id)))] : [];
+const levelMap = (value, limits) => {
+  const result = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  for (const [id, limit] of Object.entries(limits)) {
+    const level = integer(value[id], 0, limit);
+    if (level) result[id] = level;
+  }
+  return result;
+};
+
+/** The client owns ordinary offline clicker progress. Premium currency and
+ * durable entitlements come only from the server's verified ad/purchase
+ * ledger, and owned items can never disappear because a stale device saves. */
+export function sanitizeSave(value, authority, previous = null, username = null) {
+  if (!validSave(value)) throw new Error('invalid_save');
+  const priorOwned = knownList(previous?.ownedCosmetics, COSMETICS);
+  const requestedOwned = knownList(value.ownedCosmetics, COSMETICS);
+  const ownedCosmetics = [...new Set([...priorOwned, ...requestedOwned])];
+  const priorLabs = knownList(previous?.labOwned, LAB_COSTS);
+  const requestedLabs = knownList(value.labOwned, LAB_COSTS);
+  const labOwned = [...new Set([...priorLabs, ...requestedLabs])];
+  const premiumSpent = ownedCosmetics.reduce((sum, id) => sum + COSMETICS[id][0], 0)
+    + labOwned.reduce((sum, id) => sum + LAB_COSTS[id], 0);
+  const earnedMentality = integer(authority.earnedMentality, 0, MAX_SAFE);
+  if (premiumSpent > earnedMentality) throw new Error('unverified_premium_spend');
+
+  const dashboardSlots = [];
+  for (const id of Array.isArray(value.dashboardSlots) ? value.dashboardSlots.slice(0, 6) : []) {
+    const valid = typeof id === 'string' && ownedCosmetics.includes(id)
+      && ['ornament', 'dash'].includes(COSMETICS[id]?.[1]) && !dashboardSlots.includes(id);
+    dashboardSlots.push(valid ? id : null);
+  }
+  while (dashboardSlots.length < 6) dashboardSlots.push(null);
+  const equippedCosmetics = {};
+  if (value.equippedCosmetics && typeof value.equippedCosmetics === 'object' && !Array.isArray(value.equippedCosmetics)) {
+    for (const [slot, id] of Object.entries(value.equippedCosmetics)) {
+      if (typeof id === 'string' && ownedCosmetics.includes(id) && COSMETICS[id]?.[1] === slot)
+        equippedCosmetics[slot] = id;
+    }
+  }
+  const crewLimits = Object.fromEntries(CREW_IDS.map((id) => [id, 1_000_000]));
+  const now = Date.now();
+  return {
+    economyVersion: 1,
+    username,
+    prestiges: integer(value.prestiges, 0, 1_000_000),
+    respect: integer(value.respect, 0, MAX_SAFE),
+    mentality: earnedMentality - premiumSpent,
+    totalTaps: integer(authority.totalTaps, 0, 10_000_000_000_000),
+    opponentIndex: integer(value.opponentIndex, 0, 10_000),
+    opponentProgress: integer(value.opponentProgress, 0, MAX_SAFE),
+    upgradeLevels: levelMap(value.upgradeLevels, UPGRADE_LIMITS),
+    crewCounts: levelMap(value.crewCounts, crewLimits),
+    ownedCosmetics,
+    labOwned,
+    equippedCosmetics,
+    dashboardSlots,
+    boostMult: [1, 2, 5, 10].includes(Number(value.boostMult)) ? Number(value.boostMult) : 1,
+    boostEndsAt: integer(value.boostEndsAt, 0, now + 7 * 24 * 60 * 60 * 1000),
+    lastSeen: integer(value.lastSeen, 0, now + 5 * 60 * 1000, now),
+    adsWatched: integer(authority.adCount, 0, MAX_SAFE),
+    infiniteCurrency: false,
+    appliedPurchases: [...new Set(authority.purchaseIds || [])].slice(-500),
+    textSizeTier: integer(value.textSizeTier, 0, 3),
+    tutorialComplete: Boolean(value.tutorialComplete),
+  };
+}
+
+async function economyAuthority(env, accountId) {
+  const [purchases, ads, ids] = await Promise.all([
+    env.DB.prepare('SELECT COALESCE(SUM(mentality_amount),0) AS amount FROM purchases WHERE account_id=?').bind(accountId).first(),
+    env.DB.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(CASE WHEN kind='m' THEN 1 ELSE 0 END),0) AS m_count FROM ad_rewards WHERE account_id=?`).bind(accountId).first(),
+    env.DB.prepare('SELECT transaction_id FROM purchases WHERE account_id=? ORDER BY verified_at ASC').bind(accountId).all(),
+  ]);
+  return {
+    earnedMentality: integer(purchases?.amount, 0, MAX_SAFE) + integer(ads?.m_count, 0, MAX_SAFE) * AD_M_REWARD,
+    adCount: integer(ads?.count, 0, MAX_SAFE),
+    purchaseIds: (ids?.results || []).map((row) => String(row.transaction_id)),
+  };
+}
+
+export function verifiedTapTotal(requested, prior, anchorSeconds, nowSeconds) {
+  const priorTaps = integer(prior, 0, 10_000_000_000_000);
+  const requestedTaps = integer(requested, 0, 10_000_000_000_000);
+  const anchor = integer(anchorSeconds, 0, nowSeconds, nowSeconds);
+  const maximumTaps = priorTaps + 5 + Math.max(0, nowSeconds - anchor) * 25;
+  if (requestedTaps > maximumTaps) return null;
+  return Math.max(priorTaps, requestedTaps);
 }
 
 async function register(req, env) {
@@ -230,22 +343,42 @@ async function deleteAccount(env, account) {
 async function saveGame(req, env, account) {
   const { save, revision } = await req.json();
   if (!validSave(save)) return json({ ok: false, error: 'invalid_save' }, 400);
-  const encoded = JSON.stringify(save);
-  if (encoded.length > 256000) return json({ ok: false, error: 'save_too_large' }, 413);
-  const current = await env.DB.prepare('SELECT revision FROM cloud_saves WHERE account_id=?').bind(account.id).first();
+  if (JSON.stringify(save).length > 256000) return json({ ok: false, error: 'save_too_large' }, 413);
+  const [current, score, economy] = await Promise.all([
+    env.DB.prepare('SELECT revision,save_json FROM cloud_saves WHERE account_id=?').bind(account.id).first(),
+    env.DB.prepare(`SELECT taps,CAST(strftime('%s',updated_at) AS INTEGER) AS updated_epoch FROM scores WHERE account_id=?`).bind(account.id).first(),
+    economyAuthority(env, account.id),
+  ]);
   if (current && Number(revision) !== Number(current.revision))
     return json({ ok: false, error: 'save_conflict', revision: current.revision }, 409);
   const next = (current?.revision || 0) + 1;
-  const taps = Math.min(10_000_000_000_000, Math.floor(Number(save.totalTaps)));
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const anchor = integer(score?.updated_epoch || account.created_epoch, 0, nowSeconds, nowSeconds);
+  // Raw-tap rankings are intentionally independent from boosters and idle
+  // Respect. A generous 25 taps/second bound preserves legitimate multi-touch
+  // play while preventing a modified client from uploading an arbitrary score.
+  const taps = verifiedTapTotal(save.totalTaps, score?.taps, anchor, nowSeconds);
+  if (taps === null)
+    return json({ ok: false, error: 'unverified_tap_rate', acceptedTaps: integer(score?.taps, 0, 10_000_000_000_000) }, 422);
+  let previous = null;
+  try { previous = current?.save_json ? JSON.parse(current.save_json) : null; } catch { previous = null; }
+  let clean;
+  try { clean = sanitizeSave(save, { ...economy, totalTaps: taps }, previous, account.username); }
+  catch (error) {
+    const code = error?.message === 'unverified_premium_spend' ? 409 : 400;
+    return json({ ok: false, error: error?.message || 'invalid_save' }, code);
+  }
+  const encoded = JSON.stringify(clean);
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO cloud_saves(account_id,revision,save_json) VALUES(?,?,?)
       ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision,save_json=excluded.save_json,updated_at=datetime('now')`)
       .bind(account.id, next, encoded),
     env.DB.prepare(`INSERT INTO scores(account_id,taps) VALUES(?,?)
-      ON CONFLICT(account_id) DO UPDATE SET taps=MAX(taps,excluded.taps),updated_at=datetime('now')`)
+      ON CONFLICT(account_id) DO UPDATE SET taps=excluded.taps,updated_at=datetime('now')
+      WHERE excluded.taps>scores.taps`)
       .bind(account.id, taps),
   ]);
-  return json({ ok: true, revision: next });
+  return json({ ok: true, revision: next, mentality: clean.mentality, totalTaps: taps });
 }
 
 async function board(url, env, account) {
@@ -412,7 +545,14 @@ export default {
       if (req.method === 'PUT' && url.pathname === '/v1/account/username') return renameAccount(req, env, account);
       if (req.method === 'GET' && url.pathname === '/v1/save') {
         const row = await env.DB.prepare('SELECT revision,save_json,updated_at FROM cloud_saves WHERE account_id=?').bind(account.id).first();
-        return json({ revision: row?.revision || 0, save: row ? JSON.parse(row.save_json) : null, updatedAt: row?.updated_at || null });
+        if (!row) return json({ revision: 0, save: null, updatedAt: null });
+        const [economy, score] = await Promise.all([
+          economyAuthority(env, account.id),
+          env.DB.prepare('SELECT taps FROM scores WHERE account_id=?').bind(account.id).first(),
+        ]);
+        const stored = JSON.parse(row.save_json);
+        const save = sanitizeSave(stored, { ...economy, totalTaps: score?.taps || stored.totalTaps }, stored, account.username);
+        return json({ revision: row.revision || 0, save, updatedAt: row.updated_at || null });
       }
       if (req.method === 'PUT' && url.pathname === '/v1/save') return saveGame(req, env, account);
       if (req.method === 'GET' && url.pathname === '/v1/purchases') return purchases(req, env, account);

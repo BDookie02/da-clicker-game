@@ -126,7 +126,20 @@ export class AccountService {
         method: 'PUT', headers: this.headers(true), body: JSON.stringify({ save: clean, revision: this.revision }),
       });
       const data = await res.json().catch(() => ({}));
-      if (res.status === 409) this.revision = Number(data.revision) || this.revision;
+      if (res.status === 409 && data.error === 'save_conflict') {
+        // Never turn a detected conflict into a blind overwrite on the next
+        // five-second autosave. Pull the winning revision, persist it, then
+        // reload so every renderer/service observes one coherent game state.
+        const latestRes = await fetch(`${this.apiUrl}/v1/save`, { headers: this.headers() });
+        const latest = await latestRes.json().catch(() => ({}));
+        this.revision = Number(latest.revision) || Number(data.revision) || this.revision;
+        if (latestRes.ok && latest.save) {
+          latest.save.username = this.username;
+          localStorage.setItem(SAVE_KEY, JSON.stringify(latest.save));
+          setTimeout(() => location.reload(), 0);
+        }
+        return false;
+      }
       if (!res.ok) return false;
       this.revision = data.revision; return true;
     } finally { this.saving = false; }
