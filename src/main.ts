@@ -6,43 +6,46 @@ import { API_URL, getDistrict } from './config';
 import { initLeaderboards, type LeaderboardProvider } from './leaderboard';
 import { LocalUsernameService } from './username';
 import { initAds } from './ads';
-import { initPurchases } from './purchases';
+import { initPurchases, removePendingPurchase } from './purchases';
+import { FirstLaunchTutorial } from './tutorial';
 import { AccountService } from './account';
 
 const game = new Game();
-// debug/testing handles (harmless in prod; used by automated checks)
-(window as unknown as { __game: Game }).__game = game;
-
-// --- devlog capture helpers (dev server only; /__save writes to devlog/) ---
-async function saveBlob(name: string, blob: Blob) {
-  await fetch(`/__save?name=${encodeURIComponent(name)}`, { method: 'POST', body: blob });
+// Visual-audit and capture handles exist only in Vite's development build.
+// Keeping them out of the production bundle prevents a release WebView from
+// exposing mutable game/UI objects through window.__game/__ui/__scene.
+if (import.meta.env.DEV) {
+  (window as unknown as { __game: Game }).__game = game;
+  const saveBlob = async (name: string, blob: Blob) => {
+    await fetch(`/__save?name=${encodeURIComponent(name)}`, { method: 'POST', body: blob });
+  };
+  (window as any).__shot = (name: string) =>
+    new Promise<void>((res) => {
+      (document.getElementById('game-canvas') as HTMLCanvasElement).toBlob(async (b) => {
+        if (b) await saveBlob(name.endsWith('.png') ? name : `${name}.png`, b);
+        res();
+      }, 'image/png');
+    });
+  (window as any).__rec = (name: string, seconds: number) =>
+    new Promise<void>((res) => {
+      const stream = (document.getElementById('game-canvas') as HTMLCanvasElement).captureStream(30);
+      const rec = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      const chunks: Blob[] = [];
+      rec.ondataavailable = (e) => chunks.push(e.data);
+      rec.onstop = async () => {
+        await saveBlob(name.endsWith('.webm') ? name : `${name}.webm`, new Blob(chunks, { type: 'video/webm' }));
+        res();
+      };
+      rec.start();
+      setTimeout(() => rec.stop(), seconds * 1000);
+    });
 }
-(window as any).__shot = (name: string) =>
-  new Promise<void>((res) => {
-    (document.getElementById('game-canvas') as HTMLCanvasElement).toBlob(async (b) => {
-      if (b) await saveBlob(name.endsWith('.png') ? name : `${name}.png`, b);
-      res();
-    }, 'image/png');
-  });
-(window as any).__rec = (name: string, seconds: number) =>
-  new Promise<void>((res) => {
-    const stream = (document.getElementById('game-canvas') as HTMLCanvasElement).captureStream(30);
-    const rec = new MediaRecorder(stream, { mimeType: 'video/webm' });
-    const chunks: Blob[] = [];
-    rec.ondataavailable = (e) => chunks.push(e.data);
-    rec.onstop = async () => {
-      await saveBlob(name.endsWith('.webm') ? name : `${name}.webm`, new Blob(chunks, { type: 'video/webm' }));
-      res();
-    };
-    rec.start();
-    setTimeout(() => rec.stop(), seconds * 1000);
-  });
 
 const canvas = document.createElement('canvas');
 canvas.id = 'game-canvas';
-document.body.prepend(canvas);
+document.body.insertBefore(canvas, document.body.firstChild);
 const scene = new GameScene(canvas);
-(window as any).__scene = scene;
+if (import.meta.env.DEV) (window as any).__scene = scene;
 
 const applyCosmetics = () => {
   // equipped sky cosmetic overrides the current district's time-of-day
@@ -50,11 +53,18 @@ const applyCosmetics = () => {
   scene.setDecal(game.equipped('decal'));
   scene.setDashboardItems(game.dashboardItems());
   scene.setDangler(game.equipped('dangler'));
+  scene.setHornVisual(game.equipped('horn'));
   scene.setGarageCosmetics(game.equipped('decal'),
-    game.dashboardItems(), game.equipped('goop'), game.equipped('dangler'), game.equipped('roof'));
+    game.dashboardItems(), game.equipped('goop'), game.equipped('dangler'), game.equipped('roof'), game.equipped('horn'));
 };
 
 const ui = new UI(game, applyCosmetics);
+if (import.meta.env.DEV) (window as any).__ui = ui;
+const purchasesReady = initPurchases().then((provider) => {
+  ui.purchases = provider;
+  return provider;
+});
+ui.onEyeReset = () => scene.resetTapLook();
 ui.onViewSettings = (fov, sensitivity, reducedMotion) => scene.setViewSettings(fov, sensitivity, reducedMotion);
 ui.onResetView = () => scene.resetTapLook();
 
@@ -64,12 +74,11 @@ window.addEventListener('disciplineAndroidBack', () => {
   if (ui.isPanelOpen) ui.close();
   else {
     game.save();
-    ui.toast('Progress saved. Use Android Home to leave the game.');
   }
 });
 scene.setViewSettings(
   Number(localStorage.getItem('discipline-fov') ?? '100'),
-  Number(localStorage.getItem('discipline-look-sensitivity') ?? '1'),
+  Number(localStorage.getItem('discipline-look-sensitivity') ?? '1.5'),
   localStorage.getItem('discipline-reduced-motion') === '1',
 );
 const vibrate = (pattern: number | number[]) => {
@@ -88,28 +97,35 @@ initAds().then((ads) => { ui.ads = ads; }); // AdMob on device, placeholder on w
 // Discipline accounts—not Play Games/Game Center—own identity and cloud data.
 // The local name provider exists only for offline web development.
 let account: AccountService | null = null;
+let onboarding: Promise<void> = Promise.resolve();
 if (API_URL) {
   account = new AccountService(API_URL);
   ui.account = account;
-  void (async () => {
+  onboarding = (async () => {
     const identity = await account!.verify().catch(() => null);
     if (!identity) { await ui.promptAccount(); return; }
     game.s.username = identity.username;
     const source = await account!.sync(game.s).catch(() => null);
     if (source === 'cloud') location.reload();
     else {
-      const recovered = await account!.recoverPendingPurchase();
-      if (recovered && !game.s.appliedPurchases.includes(recovered.transactionId)) {
-        game.s.mentality += recovered.amount;
-        game.s.appliedPurchases.push(recovered.transactionId);
-        ui.toast(`Recovered purchase: +${fmt(recovered.amount)} M`, 'gold');
+      const purchases = await purchasesReady;
+      const recovered = await account!.recoverPendingPurchases();
+      for (const { receipt, grant } of recovered) {
+        if (!game.s.appliedPurchases.includes(grant.transactionId) && grant.amount > 0) {
+          game.s.mentality += grant.amount;
+          game.s.appliedPurchases.push(grant.transactionId);
+          ui.toast(`Recovered purchase: +${fmt(grant.amount)} M`, 'gold');
+        }
+        game.save();
+        if (await account!.save(game.s)) removePendingPurchase(receipt);
+        await purchases.finish(receipt).catch(() => undefined);
       }
       game.save(); void account!.save(game.s);
     }
   })();
 } else {
   ui.names = new LocalUsernameService([]);
-  if (!game.s.username) void ui.promptUsername(true);
+  if (!game.s.username) onboarding = ui.promptUsername(true);
 }
 
 const syncScore = () => {
@@ -129,12 +145,13 @@ game.on((e) => {
     // Input-driven update means speed changes never wait for tapping to pause.
     if (!transitioning) music.updateBattle(game.s.opponentIndex, game.progress01);
     scene.tapPulse();
+    vibrate(8);
   } else if (e.type === 'milestone') {
     scene.setShakeAmp(game.shakeAmp);
     scene.setDriverAnger(e.tier); // face gets angrier and redder each tier
     ui.toast(e.label, 'warn');
     sfx.milestone();
-    vibrate(30 + e.tier * 25);
+    vibrate(e.tier >= 3 ? [45, 25, 75] : 25 + e.tier * 15);
   } else if (e.type === 'defeated') {
     transitioning = true;
     music.stopForDefeat();
@@ -146,7 +163,7 @@ game.on((e) => {
     scene.setShakeAmp(0);
     sfx.goop();
     sfx.horn(game.equipped('horn'));
-    vibrate([80, 40, 160]);
+    vibrate([70, 35, 130, 45, 220]);
     ui.toast(`${beatenName} is FINISHED.`, 'gold');
     setTimeout(() => {
       sfx.green();
@@ -187,6 +204,11 @@ title.innerHTML = `
   <div class="title-sub">a red light story</div>
   <div class="title-tap">TAP TO ENGAGE</div>`;
 document.body.appendChild(title);
+const tutorial = new FirstLaunchTutorial({
+  closePanel: () => ui.close(),
+  finish: () => { game.s.tutorialComplete = true; game.save(); },
+});
+if (import.meta.env.DEV) (window as any).__tutorial = tutorial;
 title.addEventListener('pointerdown', (ev) => {
   ev.stopPropagation();
   title.classList.add('gone');
@@ -194,6 +216,12 @@ title.addEventListener('pointerdown', (ev) => {
   sfx.preloadYelp();
   sfx.green();
   music.engage(game.s.opponentIndex, game.progress01);
+  // On a genuine first launch, username/account onboarding may already be
+  // waiting behind the title card. Never stack the tutorial over that modal.
+  // The tour starts only after onboarding has completely left the screen.
+  void onboarding.then(() => {
+    if (!game.s.tutorialComplete) setTimeout(() => tutorial.start(), 500);
+  });
 }, { once: true });
 
 // Tap anywhere on the scene (not on UI) to tap
@@ -243,7 +271,7 @@ ui.onGarage = (open) => {
   });
 };
 
-const gPointers = new Map<number, { x: number; y: number }>();
+const gPointers = new Map<number, { startX: number; startY: number; x: number; y: number }>();
 let gMoved = false;
 let gPinchDist = 0;
 const isUI = (t: EventTarget | null) =>
@@ -251,16 +279,19 @@ const isUI = (t: EventTarget | null) =>
 
 // Normal tap mode also supports drag-to-look. The initial press still counts as
 // a tap; movement turns the driver's head without switching modes.
-const tapPointers = new Map<number, { x: number; y: number }>();
+const tapPointers = new Map<number, { startX: number; startY: number; x: number; y: number; moved: boolean }>();
 
 window.addEventListener('pointerdown', (ev) => {
   if (!scene.inGarage && !isUI(ev.target)) {
-    tapPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    (ev.target as HTMLElement)?.setPointerCapture?.(ev.pointerId);
+    tapPointers.set(ev.pointerId, { startX: ev.clientX, startY: ev.clientY, x: ev.clientX, y: ev.clientY, moved: false });
     return;
   }
   if (!scene.inGarage || isUI(ev.target)) return;
-  gPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  (ev.target as HTMLElement)?.setPointerCapture?.(ev.pointerId);
+  gPointers.set(ev.pointerId, { startX: ev.clientX, startY: ev.clientY, x: ev.clientX, y: ev.clientY });
   if (gPointers.size === 1) gMoved = false;
+  if (gPointers.size === 1) scene.beginGarageSwipe();
   if (gPointers.size === 2) {
     const [a, b] = [...gPointers.values()];
     gPinchDist = Math.hypot(a.x - b.x, a.y - b.y);
@@ -269,14 +300,17 @@ window.addEventListener('pointerdown', (ev) => {
 window.addEventListener('pointermove', (ev) => {
   const tapPointer = tapPointers.get(ev.pointerId);
   if (!scene.inGarage && tapPointer) {
-    const dx = ev.clientX - tapPointer.x, dy = ev.clientY - tapPointer.y;
+    const dx = ev.clientX - tapPointer.startX, dy = ev.clientY - tapPointer.startY;
     tapPointer.x = ev.clientX; tapPointer.y = ev.clientY;
+    if (!tapPointer.moved && Math.hypot(dx, dy) < 8) return;
+    if (!tapPointer.moved) scene.beginTapLook();
+    tapPointer.moved = true;
     scene.tapLook(dx, dy);
     return;
   }
   const p = gPointers.get(ev.pointerId);
   if (!scene.inGarage || !p) return;
-  const dx = ev.clientX - p.x, dy = ev.clientY - p.y;
+  const dx = ev.clientX - p.startX, dy = ev.clientY - p.startY;
   p.x = ev.clientX; p.y = ev.clientY;
   if (gPointers.size >= 2) {
     // pinch: change orbit zoom by the two-finger spread delta
@@ -291,7 +325,12 @@ window.addEventListener('pointermove', (ev) => {
   }
 });
 const endPointer = (ev: PointerEvent) => {
-  tapPointers.delete(ev.pointerId);
+  const tapPointer = tapPointers.get(ev.pointerId);
+  if (tapPointer) {
+    tapPointers.delete(ev.pointerId);
+    if (!tapPointer.moved) onTap(ev);
+    return;
+  }
   if (!gPointers.has(ev.pointerId)) return;
   const wasSingle = gPointers.size === 1;
   gPointers.delete(ev.pointerId);
@@ -299,9 +338,6 @@ const endPointer = (ev: PointerEvent) => {
   if (gPointers.size < 2) gPinchDist = 0;
 };
 scene.onGarageShop = () => ui.openGarageShop();
-
-// wire the premium-currency (M) store provider
-initPurchases().then((p) => { ui.purchases = p; });
 
 // green bouncing arrow that hovers over the garage laptop to say "tap here"
 const shopArrow = document.createElement('div');
@@ -328,8 +364,6 @@ window.addEventListener('pointercancel', endPointer);
 window.addEventListener('wheel', (ev) => {
   if (scene.inGarage && !isUI(ev.target)) scene.garageZoom(ev.deltaY * 0.003);
 }, { passive: true });
-canvas.addEventListener('pointerdown', onTap);
-document.getElementById('app')!.addEventListener('pointerdown', onTap);
 
 // All open panels/overlays duck music to 50%. Rewarded ads additionally pause it.
 const menuVolumeObserver = new MutationObserver(() => {

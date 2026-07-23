@@ -1,0 +1,253 @@
+{
+  "schema": 2,
+  "generatedAt": "2026-07-20T15:36:28.328Z",
+  "source": "blender-cosmetic-assembly-line",
+  "placement": {
+    "dashboardSlots": 6,
+    "dashboardSurface": "shared tap-FPV and garage mount coordinates",
+    "mirror": "centered on windshield roof anchor",
+    "danglers": "child of rear-view mirror, shared scale in tap-FPV and garage"
+  },
+  "items": [
+    {
+      "id": "orn_napkin",
+      "name": "First Napkin Ornament",
+      "desc": "A napkin on the dash. Historic.",
+      "cost": 50,
+      "slot": "ornament",
+      "value": "#e8e4d8"
+    },
+    {
+      "id": "decal_ment",
+      "name": "\"MENTALITY\" Decal",
+      "desc": "Top text for your windshield.",
+      "cost": 75,
+      "slot": "decal",
+      "value": "MENTALITY"
+    },
+    {
+      "id": "decal_disc",
+      "name": "\"discipline\" Decal",
+      "desc": "Bottom text. Lowercase. Powerful.",
+      "cost": 75,
+      "slot": "decal",
+      "value": "discipline"
+    },
+    {
+      "id": "goop_gold",
+      "name": "Golden Goop",
+      "desc": "The finish of champions.",
+      "cost": 200,
+      "slot": "goop",
+      "value": "#e6c84a"
+    },
+    {
+      "id": "goop_slime",
+      "name": "Toxic Goop",
+      "desc": "Radioactive green. Unsanitary.",
+      "cost": 200,
+      "slot": "goop",
+      "value": "#7be04a"
+    },
+    {
+      "id": "sky_sunset",
+      "name": "Golden Hour",
+      "desc": "Cinematic sunset for your edits.",
+      "cost": 125,
+      "slot": "sky",
+      "value": "sunset"
+    },
+    {
+      "id": "sky_vapor",
+      "name": "Vaporwave Night",
+      "desc": "A E S T H E T I C intersection.",
+      "cost": 125,
+      "slot": "sky",
+      "value": "vapor"
+    },
+    {
+      "id": "horn_sad",
+      "name": "Sad Violin Horn",
+      "desc": "Plays when opponents finish.",
+      "cost": 150,
+      "slot": "horn",
+      "value": "violin"
+    },
+    {
+      "id": "orn_cowboy",
+      "name": "Dashboard Hula Girl",
+      "desc": "A grass-skirt dashboard dancer with island style.",
+      "cost": 175,
+      "slot": "ornament",
+      "value": "#7a4a9e"
+    },
+    {
+      "id": "decal_bottom",
+      "name": "\"bottom text\" Decal",
+      "desc": "The caption completes itself.",
+      "cost": 100,
+      "slot": "decal",
+      "value": "bottom text"
+    },
+    {
+      "id": "decal_aura",
+      "name": "\"AURA +1000\" Decal",
+      "desc": "Certified aura farming equipment.",
+      "cost": 125,
+      "slot": "decal",
+      "value": "AURA +1000"
+    },
+    {
+      "id": "decal_engage",
+      "name": "\"DO NOT ENGAGE\" Decal",
+      "desc": "They will engage anyway.",
+      "cost": 125,
+      "slot": "decal",
+      "value": "DO NOT ENGAGE"
+    },
+    {
+      "id": "goop_pink",
+      "name": "Bubblegum Goop",
+      "desc": "Smells like victory and strawberries.",
+      "cost": 225,
+      "slot": "goop",
+      "value": "#f0a0c8"
+    },
+    {
+      "id": "goop_blue",
+      "name": "Wiper Fluid Goop",
+      "desc": "Technically car-related.",
+      "cost": 225,
+      "slot": "goop",
+      "value": "#4a9ae0"
+    },
+    {
+      "id": "goop_oil",
+      "name": "Crude Oil Goop",
+      "desc": "Environmentally devastating finish.",
+      "cost": 300,
+      "slot": "goop",
+      "value": "#1c1c22"
+    },
+    {
+      "id": "sky_storm",
+      "name": "Stormchaser",
+      "desc": "Permanent dramatic weather.",
+      "cost": 150,
+      "slot": "sky",
+      "value": "storm"
+    },
+    {
+      "id": "sky_noir",
+      "name": "Film Noir",
+      "desc": "The city knows what it did.",
+      "cost": 150,
+      "slot": "sky",
+      "value": "noir"
+    },
+    {
+      "id": "sky_toxic",
+      "name": "Toxic Hour",
+      "desc": "The air is 40% regret.",
+      "cost": 150,
+      "slot": "sky",
+      "value": "toxic"
+    },
+    {
+      "id": "sky_mint",
+      "name": "Mint Condition",
+      "desc": "Refreshing. Suspiciously so.",
+      "cost": 150,
+      "slot": "sky",
+      "value": "mint"
+    },
+    {
+      "id": "orn_cone",
+      "name": "Tiny Traffic Cone",
+      "desc": "A fallen soldier from the Kingpin wars.",
+      "cost": 125,
+      "slot": "ornament",
+      "value": "#e8862a"
+    },
+    {
+      "id": "orn_monk",
+      "name": "Dashboard Monk",
+      "desc": "Radiates focus onto your steering wheel.",
+      "cost": 225,
+      "slot": "ornament",
+      "value": "#e8c84a"
+    },
+    {
+      "id": "horn_air",
+      "name": "Freight Airhorn",
+      "desc": "Startles opponents mid-shake.",
+      "cost": 175,
+      "slot": "horn",
+      "value": "airhorn"
+    },
+    {
+      "id": "dangle_dice",
+      "name": "Fuzzy Dice",
+      "desc": "Classic dice hanging from the centered rear-view mirror.",
+      "cost": 90,
+      "slot": "dangler",
+      "value": "dice"
+    },
+    {
+      "id": "dangle_beads",
+      "name": "Bead Necklace",
+      "desc": "A long strand of colorful dashboard beads.",
+      "cost": 110,
+      "slot": "dangler",
+      "value": "beads"
+    },
+    {
+      "id": "dangle_yinyang",
+      "name": "Yin-Yang Ball",
+      "desc": "Perfectly balanced until the car starts moving.",
+      "cost": 140,
+      "slot": "dangler",
+      "value": "yinyang"
+    },
+    {
+      "id": "dangle_fire",
+      "name": "Fire Ball",
+      "desc": "A tiny flaming orb with unreasonable confidence.",
+      "cost": 175,
+      "slot": "dangler",
+      "value": "fire"
+    },
+    {
+      "id": "dangle_censored",
+      "name": "Censored D&B",
+      "desc": "The forbidden novelty dangler, safely pixel-censored.",
+      "cost": 225,
+      "slot": "dangler",
+      "value": "censored"
+    },
+    {
+      "id": "dangle_testing_coals",
+      "name": "Testing Coals",
+      "desc": "The suspiciously organic first prototype. Preserved for science.",
+      "cost": 200,
+      "slot": "dangler",
+      "value": "testing_coals"
+    },
+    {
+      "id": "dangle_goop",
+      "name": "Goop Dangler",
+      "desc": "Drips forever. Never reaches the floor.",
+      "cost": 250,
+      "slot": "dangler",
+      "value": "goop"
+    },
+    {
+      "id": "roof_taxi",
+      "name": "Taxi Roof Sign",
+      "desc": "A glowing cab sign for questionable side hustles.",
+      "cost": 175,
+      "slot": "roof",
+      "value": "taxi"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from 'vite';
+import legacy from '@vitejs/plugin-legacy';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -30,10 +31,12 @@ function devlogSaver(): Plugin {
 // base './' so the built app works inside a Capacitor webview or any static host
 export default defineConfig({
   base: './',
-  // Android 7 ships with a Chrome 51-era system WebView. Capacitor devices
-  // normally update WebView through Google Play, but compiling to this floor
-  // prevents a blank screen on fresh/offline API 24 devices too.
-  build: { target: 'chrome51' },
   server: { host: true },
-  plugins: [devlogSaver()],
+  plugins: [
+    devlogSaver(),
+    // Android 7's factory WebView is Chrome 51, predating ES modules. Vite's
+    // target setting transpiles syntax but does not remove <script type=module>;
+    // the official legacy plugin emits the required SystemJS/nomodule bundle.
+    legacy({ targets: ['Chrome >= 51'] }),
+  ],
 });

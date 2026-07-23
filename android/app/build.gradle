@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+def releaseProperties = new Properties()
+def releasePropertiesFile = rootProject.file('private-release.properties')
+if (releasePropertiesFile.exists()) releasePropertiesFile.withInputStream { releaseProperties.load(it) }
+def releaseProperty = { String name -> project.findProperty(name) ?: releaseProperties.getProperty(name) }
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+        && keystoreProperties.getProperty('storeFile')
+        && keystoreProperties.getProperty('storePassword')
+        && keystoreProperties.getProperty('keyAlias')
+        && keystoreProperties.getProperty('keyPassword')
+
 android {
     namespace = "com.nosiah.discipline"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -11,15 +25,29 @@ android {
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // Override for release with -PADMOB_ANDROID_APP_ID=ca-app-pub-...~...
-        manifestPlaceholders.admobAppId = project.findProperty("ADMOB_ANDROID_APP_ID") ?: "ca-app-pub-3940256099942544~3347511713"
+        manifestPlaceholders.admobAppId = releaseProperty("ADMOB_ANDROID_APP_ID") ?: "ca-app-pub-3940256099942544~3347511713"
+        // Numeric Play Games project/app id. The zero value lets local debug
+        // builds run; release:check rejects it for a publishing build.
+        resValue "string", "game_services_project_id", releaseProperty("PLAY_GAMES_APP_ID") ?: "000000000000"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                storeFile rootProject.file(keystoreProperties.getProperty('storeFile'))
+                storePassword keystoreProperties.getProperty('storePassword')
+                keyAlias keystoreProperties.getProperty('keyAlias')
+                keyPassword keystoreProperties.getProperty('keyPassword')
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasReleaseKeystore) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

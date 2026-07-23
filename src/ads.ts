@@ -15,7 +15,12 @@ import { AdMob, RewardAdPluginEvents } from '@capacitor-community/admob';
 
 export interface AdProvider {
   /** Shows a rewarded ad. fallbackSeconds is used only by the web placeholder. */
-  show(fallbackSeconds: number): Promise<AdResult>;
+  show(fallbackSeconds: number, verification?: AdVerification): Promise<AdResult>;
+}
+
+export interface AdVerification {
+  userId: string;
+  customData: string;
 }
 
 export interface AdResult {
@@ -45,10 +50,14 @@ class AdMobAdProvider implements AdProvider {
   private async init() {
     if (this.ready) return;
     await AdMob.initialize({ initializeForTesting: AD_CONFIG.TESTING });
+    let consent = await AdMob.requestConsentInfo();
+    if (!consent.canRequestAds && consent.isConsentFormAvailable)
+      consent = await AdMob.showConsentForm();
+    if (!consent.canRequestAds) throw new Error('Ad consent is required');
     this.ready = true;
   }
 
-  async show(): Promise<AdResult> {
+  async show(_fallbackSeconds?: number, verification?: AdVerification): Promise<AdResult> {
     try {
       await this.init();
       const adId = this.unitId();
@@ -75,7 +84,10 @@ class AdMobAdProvider implements AdProvider {
           AdMob.addListener(RewardAdPluginEvents.FailedToShow, () => done(false)),
         ]).then((listeners) => {
           subs.push(...listeners);
-          return AdMob.prepareRewardVideoAd({ adId });
+          return AdMob.prepareRewardVideoAd({
+            adId,
+            ...(verification ? { ssv: verification } : {}),
+          });
         }).then(() => {
           shownAt = performance.now();
           return AdMob.showRewardVideoAd();
@@ -85,6 +97,18 @@ class AdMobAdProvider implements AdProvider {
       return { rewarded: false, watchedSeconds: 0 }; // no fill / offline — player just retries
     }
   }
+}
+
+/** Reopens Google's UMP choices when the region/account requires them. */
+export async function showAdPrivacyOptions(): Promise<boolean> {
+  const cap = (window as any).Capacitor;
+  if (!cap?.isNativePlatform?.()) return false;
+  try {
+    await AdMob.initialize({ initializeForTesting: AD_CONFIG.TESTING });
+    await AdMob.requestConsentInfo();
+    await AdMob.showPrivacyOptionsForm();
+    return true;
+  } catch { return false; }
 }
 
 export class PlaceholderAdProvider implements AdProvider {
@@ -140,9 +164,9 @@ export async function initAds(): Promise<AdProvider> {
 
 export function withMusicPause(provider: AdProvider): AdProvider {
   return {
-    async show(lengthSec: number) {
+    async show(lengthSec: number, verification?: AdVerification) {
       music.pauseForAd();
-      try { return await provider.show(lengthSec); }
+      try { return await provider.show(lengthSec, verification); }
       finally { music.resumeAfterAd(); }
     },
   };

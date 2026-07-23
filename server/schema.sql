@@ -44,3 +44,17 @@ CREATE TABLE IF NOT EXISTS purchases (
   UNIQUE(platform, transaction_id)
 );
 CREATE INDEX IF NOT EXISTS idx_purchases_account ON purchases(account_id, verified_at DESC);
+
+CREATE TABLE IF NOT EXISTS ad_rewards (
+  transaction_id TEXT PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  nonce TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK(kind IN ('m','boost','offline')),
+  ad_network TEXT NOT NULL,
+  ad_unit TEXT NOT NULL,
+  reward_amount INTEGER NOT NULL,
+  reward_item TEXT NOT NULL,
+  rewarded_at INTEGER NOT NULL,
+  verified_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ad_rewards_account ON ad_rewards(account_id, verified_at DESC);

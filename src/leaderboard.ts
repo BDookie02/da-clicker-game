@@ -16,8 +16,8 @@
 
 export const BOARD = {
   name: 'All-Time Taps',
-  ios: 'grp.dclicker.taps',
-  android: 'REPLACE_WITH_PLAY_CONSOLE_ID_taps',
+  ios: import.meta.env.VITE_GAME_CENTER_LEADERBOARD_ID ?? '',
+  android: import.meta.env.VITE_PLAY_GAMES_LEADERBOARD_ID ?? '',
 };
 
 export interface LeaderboardProvider {
@@ -56,6 +56,7 @@ class GameConnectLeaderboard implements LeaderboardProvider {
   }
 
   async submit(taps: number) {
+    if (!this.boardId) return;
     if (!this.signedIn && !(await this.signIn())) return;
     try {
       await this.plugin.submitScore({ leaderboardID: this.boardId, totalScoreAmount: Math.floor(taps) });
@@ -63,6 +64,7 @@ class GameConnectLeaderboard implements LeaderboardProvider {
   }
 
   async show() {
+    if (!this.boardId) return;
     if (!this.signedIn && !(await this.signIn())) return;
     try { await this.plugin.showLeaderboard({ leaderboardID: this.boardId }); } catch { /* ignore */ }
   }
@@ -75,7 +77,7 @@ export async function initLeaderboards(): Promise<LeaderboardProvider> {
       // Keep this as a real Vite import so the JavaScript bridge is included
       // in the packaged WebView bundle. An ignored bare import cannot be
       // resolved by an Android WebView and silently disabled Play Games.
-      const mod = await import('@openforge/capacitor-game-connect');
+      const mod = await import('@ni2khanna/capacitor-game-connect');
       return new GameConnectLeaderboard(mod.CapacitorGameConnect, cap.getPlatform() === 'ios');
     } catch { /* plugin not installed yet — fall through to local */ }
   }

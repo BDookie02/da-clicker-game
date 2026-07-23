@@ -33,6 +33,8 @@ export interface SaveData {
   adsWatched: number;
   infiniteCurrency: boolean;
   appliedPurchases: string[];          // crash-safe receipt grants
+  textSizeTier: number;                // accessibility: 0=current size, 1-3 larger
+  tutorialComplete: boolean;           // first-launch walkthrough completed or skipped
 }
 
 const fresh = (): SaveData => ({
@@ -56,6 +58,8 @@ const fresh = (): SaveData => ({
   adsWatched: 0,
   infiniteCurrency: false,
   appliedPurchases: [],
+  textSizeTier: 0,
+  tutorialComplete: false,
 });
 
 export type GameEvent =
@@ -318,10 +322,26 @@ export class Game {
         // clear that test balance once. From v1 onward only the M shop can add M.
         if (!parsed.economyVersion) parsed.mentality = 0;
         const loaded = { ...fresh(), ...parsed, economyVersion: 1 } as SaveData;
+        loaded.textSizeTier = Math.max(0, Math.min(3, Math.trunc(Number(parsed.textSizeTier) || 0)));
+        // Existing players must not be forced into a first-launch tutorial
+        // added after their save was created.
+        loaded.tutorialComplete = parsed.tutorialComplete === undefined
+          ? true : Boolean(parsed.tutorialComplete);
         loaded.appliedPurchases = Array.isArray(parsed.appliedPurchases) ? parsed.appliedPurchases : [];
+        // The old build exposed fuzzy dice as a dashboard ornament.  Keep
+        // existing owners, but migrate that purchase to the real mirror-hung
+        // item so dice can never remain mounted on the dashboard.
+        if (Array.isArray(loaded.ownedCosmetics) && loaded.ownedCosmetics.includes('dash_gd')) {
+          loaded.ownedCosmetics = loaded.ownedCosmetics.filter(id => id !== 'dash_gd');
+          if (!loaded.ownedCosmetics.includes('dangle_dice')) loaded.ownedCosmetics.push('dangle_dice');
+          if (!loaded.equippedCosmetics?.dangler) loaded.equippedCosmetics.dangler = 'dangle_dice';
+        }
         loaded.dashboardSlots = Array.isArray(parsed.dashboardSlots)
           ? [...parsed.dashboardSlots.slice(0, 6), null, null, null, null, null, null].slice(0, 6)
           : [parsed.equippedCosmetics?.ornament ?? parsed.equippedCosmetics?.dash ?? null, null, null, null, null, null];
+        loaded.dashboardSlots = loaded.dashboardSlots.map(id => id === 'dash_gd' ? null : id);
+        loaded.ownedCosmetics = loaded.ownedCosmetics.filter(id => id !== 'decal_bottom');
+        if (loaded.equippedCosmetics?.decal === 'bottom text') delete loaded.equippedCosmetics.decal;
         return loaded;
       }
     } catch { /* corrupted save -> start fresh */ }

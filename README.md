@@ -80,7 +80,7 @@ Game Center / Google Play Games on every opponent defeated; the in-game list
 uses seeded placeholder rivals until real global data is wired at launch.
 Publish checklist:
 
-1. `npm i @openforge/capacitor-game-connect && npx cap sync`
+1. `npm i @ni2khanna/capacitor-game-connect && npx cap sync`
 2. App Store Connect → Game Center → create the taps leaderboard → paste its
    ID into `BOARD.ios`
 3. Play Console → Play Games Services → create it → paste its ID into

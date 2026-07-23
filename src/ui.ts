@@ -3,13 +3,13 @@ import { fmt, PRESTIGE_STEP, type Game } from './state';
 import { music, sfx } from './audio';
 import { fetchBoardRemote, getWorldList, type LbEntry, type LeaderboardProvider } from './leaderboard';
 import { API_URL } from './config';
-import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
+import { RENAME_COST, validateUsername, type UsernameService } from './username';
 import type { AccountService } from './account';
 
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
-import { PlaceholderAdProvider, withMusicPause, type AdProvider, type AdResult } from './ads';
-import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
+import { AD_CONFIG, PlaceholderAdProvider, showAdPrivacyOptions, withMusicPause, type AdProvider, type AdResult } from './ads';
+import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, queuePendingPurchase, removePendingPurchase, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -19,6 +19,7 @@ function el(tag: string, cls?: string, html?: string): HTMLElement {
 }
 
 export class UI {
+  onEyeReset?: () => void;
   root: HTMLElement;
   ads: AdProvider = withMusicPause(new PlaceholderAdProvider());
   purchases: PurchaseProvider = new PlaceholderPurchases();
@@ -32,6 +33,11 @@ export class UI {
   private garageSheetOpen = true; // cosmetics list visible over the 3D garage
   private adInProgress = false;
   private lastAdStartedAt = 0;
+  private fadeTransition = 0;
+  private readonly scaledFontElements = new Set<HTMLElement>();
+  private readonly fittedFontSizes = new Map<HTMLElement, string>();
+  private readonly textScales = [1, 1.15, 1.3, 1.45] as const;
+  private readonly layoutObserver: ResizeObserver;
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
@@ -48,7 +54,7 @@ export class UI {
         <div class="stat"><span class="k">MENTALITY</span><span class="v gold" id="v-mentality">0</span></div>
         <div class="stat small"><span class="k">/TAP</span><span class="v" id="v-tap">1</span></div>
         <div class="stat small"><span class="k">/SEC</span><span class="v" id="v-rps">0</span></div>
-        <button class="stat mute" id="btn-settings" title="settings">⚙</button>
+        <button class="stat eye" id="btn-eye" title="reset eye contact">&#128065;</button><button class="stat settings" id="btn-settings" title="settings">&#9881;</button>
       </div>
       <div class="boost-pill" id="boost-pill" hidden></div>
       <button class="quick-buy" id="quick-buy" hidden></button>
@@ -70,6 +76,34 @@ export class UI {
       <div class="toasts" id="toasts"></div>
       <div class="fade" id="fade"></div>`;
     this.fade = document.getElementById('fade')!;
+    // Reserve the space the rendered HUD/navigation actually consume. This
+    // updates after wrapping, text scaling, rotation, and split-screen resize.
+    this.layoutObserver = new ResizeObserver(() => this.updateLayoutMetrics());
+    this.layoutObserver.observe(this.root.querySelector('.hud-top')!);
+    this.layoutObserver.observe(this.root.querySelector('.menu-row')!);
+    this.applyTextSize();
+    new MutationObserver((records) => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (node instanceof HTMLElement) {
+          this.scaleTextTree(node);
+          requestAnimationFrame(() => this.fitBorderedLabels(node));
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+    new MutationObserver(() => {
+      requestAnimationFrame(() => {
+        this.updateLayoutMetrics();
+        requestAnimationFrame(() => this.updateLayoutMetrics());
+      });
+    }).observe(document.body, { attributes: true, attributeFilter: ['class', 'data-text-tier'] });
+    addEventListener('resize', () => {
+      this.updateLayoutMetrics();
+      this.fitBorderedLabels(document.body);
+    });
+    requestAnimationFrame(() => {
+      this.updateLayoutMetrics();
+      this.fitBorderedLabels(document.body);
+    });
 
     this.root.querySelectorAll('.menu-row button').forEach((b) => {
       b.addEventListener('click', (ev) => {
@@ -90,6 +124,8 @@ export class UI {
       }
     });
 
+    const eyeBtn = document.getElementById('btn-eye')!;
+    eyeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); this.onEyeReset?.(); });
     const settingsBtn = document.getElementById('btn-settings')!;
     settingsBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -97,8 +133,94 @@ export class UI {
     });
   }
 
+  private scaleTextTree(root: HTMLElement) {
+    const scale = this.textScales[this.game.s.textSizeTier] ?? 1;
+    const elements = root === document.body
+      ? [root, ...root.querySelectorAll<HTMLElement>('*')]
+      : [root, ...root.querySelectorAll<HTMLElement>('*')];
+    for (const element of elements) {
+      // Scale each actual text run once. Scaling structural parents and then
+      // their descendants compounded inherited sizes (1.45x became 2.10x).
+      // If a text-owning ancestor already scales this run, descendants inherit.
+      const ownsText = [...element.childNodes].some(node =>
+        node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()))
+        || element.matches('input, textarea, select');
+      if (!ownsText) continue;
+      let parent = element.parentElement;
+      let inheritedFromScaledParent = false;
+      while (parent && parent !== root.parentElement) {
+        if (this.scaledFontElements.has(parent)) { inheritedFromScaledParent = true; break; }
+        parent = parent.parentElement;
+      }
+      if (inheritedFromScaledParent) continue;
+      const base = Number.parseFloat(getComputedStyle(element).fontSize);
+      if (!Number.isFinite(base) || base <= 0) continue;
+      element.style.fontSize = `${Math.round(base * scale * 100) / 100}px`;
+      this.scaledFontElements.add(element);
+    }
+  }
+
+  private applyTextSize() {
+    for (const [element, size] of this.fittedFontSizes) element.style.fontSize = size;
+    this.fittedFontSizes.clear();
+    for (const element of this.scaledFontElements) element.style.removeProperty('font-size');
+    this.scaledFontElements.clear();
+    document.body.dataset.textTier = String(this.game.s.textSizeTier);
+    this.scaleTextTree(document.body);
+    requestAnimationFrame(() => {
+      this.fitBorderedLabels(document.body);
+      this.updateLayoutMetrics();
+    });
+  }
+
+  /** Keep every button/title word intact. Cells stay fixed; type shrinks only
+   * when its complete unbroken label would cross the visible border. */
+  private fitBorderedLabels(root: HTMLElement) {
+    const selector = 'button, .panel-title';
+    const targets = root.matches(selector)
+      ? [root, ...root.querySelectorAll<HTMLElement>(selector)]
+      : [...root.querySelectorAll<HTMLElement>(selector)];
+    for (const element of targets) {
+      const previous = this.fittedFontSizes.get(element);
+      if (previous !== undefined) {
+        element.style.fontSize = previous;
+        this.fittedFontSizes.delete(element);
+      }
+      if (element.clientWidth < 2 || element.clientHeight < 2
+        || (element.scrollWidth <= element.clientWidth + 1 && element.scrollHeight <= element.clientHeight + 1)) continue;
+      let current = Number.parseFloat(getComputedStyle(element).fontSize);
+      if (!Number.isFinite(current) || current <= 0) continue;
+      this.fittedFontSizes.set(element, element.style.fontSize);
+      // Emoji and fallback glyph metrics can settle a frame after first paint.
+      // Re-measure after each reduction instead of trusting a single ratio.
+      for (let attempt = 0; attempt < 4
+        && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1);
+        attempt += 1) {
+        const widthRatio = (element.clientWidth - 6) / Math.max(1, element.scrollWidth);
+        const heightRatio = (element.clientHeight - 4) / Math.max(1, element.scrollHeight);
+        const ratio = Math.max(0.1, Math.min(widthRatio, heightRatio) * 0.94);
+        current = Math.max(4, current * ratio);
+        element.style.fontSize = `${Math.floor(current * 100) / 100}px`;
+      }
+    }
+  }
+
+  private updateLayoutMetrics() {
+    const hud = this.root.querySelector<HTMLElement>('.hud-top');
+    const nav = this.root.querySelector<HTMLElement>('.menu-row');
+    if (!hud || !nav) return;
+    const hr = hud.getBoundingClientRect();
+    const nr = nav.getBoundingClientRect();
+    const hudBottom = getComputedStyle(hud).display === 'none' ? 8 : Math.ceil(hr.bottom + 8);
+    // Store the navigation's actual occupied lane. CSS adds a separate,
+    // visible panel gutter so the menu and buttons cannot share pixels.
+    const navHeight = getComputedStyle(nav).display === 'none' ? 0 : Math.ceil(innerHeight - nr.top);
+    document.body.style.setProperty('--hud-bottom', `${hudBottom}px`);
+    document.body.style.setProperty('--nav-height', `${navHeight}px`);
+  }
+
   /** One rewarded request at a time, with a five-second start cooldown. */
-  private async showRewardedAd(fallbackSeconds: number): Promise<AdResult | null> {
+  private async showRewardedAd(fallbackSeconds: number, rewardKind: 'm' | 'boost' | 'offline'): Promise<AdResult | null> {
     const now = Date.now();
     const waitMs = 5000 - (now - this.lastAdStartedAt);
     if (this.adInProgress) {
@@ -121,7 +243,18 @@ export class UI {
         </div>`);
       document.body.appendChild(loading.current);
     }, 450);
-    try { return await this.ads.show(fallbackSeconds); }
+    try {
+      const cap = (window as any).Capacitor;
+      const productionNative = !AD_CONFIG.TESTING && cap?.isNativePlatform?.();
+      if (productionNative && !this.account?.signedIn) {
+        this.toast('Log in before watching a reward ad so the reward can be verified.');
+        return null;
+      }
+      const verification = productionNative
+        ? await this.account!.adVerification(rewardKind)
+        : undefined;
+      return await this.ads.show(fallbackSeconds, verification);
+    }
     finally {
       window.clearTimeout(loadingTimer);
       loading.current?.remove();
@@ -180,7 +313,7 @@ export class UI {
           <div class="ad-label">DISCIPLINE ACCOUNT</div>
           <div class="name-copy">One login keeps your username, progress, inventory, and verified purchases across Android and iOS.</div>
           <input class="name-input account-name" maxlength="14" autocomplete="username" placeholder="USERNAME" spellcheck="false" />
-          <input class="name-input account-pass" type="password" maxlength="128" autocomplete="current-password" placeholder="PASSWORD · 10+ CHARACTERS" />
+          <input class="name-input account-pass" type="password" maxlength="128" autocomplete="current-password" placeholder="PASSWORD 10+ CHARS" />
           <div class="name-status"></div>
           <div class="name-actions"><button class="account-login">LOG IN</button><button class="account-create">CREATE ACCOUNT</button></div>
         </div>`;
@@ -189,7 +322,8 @@ export class UI {
       const pass = overlay.querySelector('.account-pass') as HTMLInputElement;
       const status = overlay.querySelector('.name-status') as HTMLElement;
       const submit = async (create: boolean) => {
-        if (!USERNAME_RE.test(name.value.trim())) { status.textContent = 'Username: 3-14 letters, numbers, or _'; return; }
+        const usernameCheck = validateUsername(name.value.trim());
+        if (!usernameCheck.ok) { status.textContent = usernameCheck.error; return; }
         if (pass.value.length < 10) { status.textContent = 'Password must be at least 10 characters.'; return; }
         status.textContent = create ? 'Creating account…' : 'Signing in…';
         try {
@@ -203,6 +337,7 @@ export class UI {
         } catch (e) {
           const code = e instanceof Error ? e.message : '';
           status.textContent = code === 'username_taken' ? 'That username is already claimed. Log in or choose another.'
+            : code === 'inappropriate_username' || code === 'reserved_username' ? 'That username is not allowed.'
             : code === 'invalid_login' ? 'Username or password is incorrect.'
               : 'Account service unavailable. Check your connection and retry.';
         }
@@ -211,6 +346,42 @@ export class UI {
       overlay.querySelector('.account-create')!.addEventListener('click', () => void submit(true));
       pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') void submit(false); });
       name.focus();
+    });
+  }
+
+  /** Policy-required, deliberate account deletion. The typed phrase prevents
+   * an accidental tap from erasing a cross-device save. */
+  promptDeleteAccount(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.account?.signedIn) { resolve(); return; }
+      const overlay = el('div', 'ad-overlay account-delete-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box name-box account-delete-box">
+          <div class="ad-label">DELETE DISCIPLINE ACCOUNT</div>
+          <div class="name-copy">Permanently deletes your username, cloud progress, leaderboard score, inventory, and purchase ledger. This cannot be undone.</div>
+          <input class="name-input delete-confirm" autocomplete="off" spellcheck="false" placeholder="TYPE DELETE" />
+          <div class="name-status">Type DELETE to confirm.</div>
+          <div class="name-actions"><button class="delete-cancel">CANCEL</button><button class="delete-final" disabled>DELETE ACCOUNT</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const input = overlay.querySelector('.delete-confirm') as HTMLInputElement;
+      const status = overlay.querySelector('.name-status') as HTMLElement;
+      const remove = overlay.querySelector('.delete-final') as HTMLButtonElement;
+      const done = () => { overlay.remove(); resolve(); };
+      overlay.querySelector('.delete-cancel')!.addEventListener('click', done);
+      input.addEventListener('input', () => { remove.disabled = input.value.trim().toUpperCase() !== 'DELETE'; });
+      remove.addEventListener('click', async () => {
+        if (input.value.trim().toUpperCase() !== 'DELETE') return;
+        remove.disabled = true; input.disabled = true; status.textContent = 'Deleting account and cloud data…';
+        try {
+          await this.account!.deleteAccount();
+          overlay.remove(); resolve(); location.reload();
+        } catch {
+          input.disabled = false; remove.disabled = false;
+          status.textContent = 'Deletion failed. Check your connection and try again.';
+        }
+      });
+      input.focus();
     });
   }
 
@@ -227,7 +398,7 @@ export class UI {
           <div class="name-copy">${firstTime
             ? 'Claim your one-of-a-kind username. Nobody else can ever register it.'
             : `Costs ${fmt(RENAME_COST)} Respect. Your new name must also be unique.`}</div>
-          <input class="name-input" maxlength="14" placeholder="3-14 letters/numbers/_" spellcheck="false" />
+          <input class="name-input" maxlength="14" placeholder="3-14 LETTERS/#/_" spellcheck="false" />
           <div class="name-status"></div>
           <div class="name-actions">
             ${firstTime ? '' : '<button class="name-cancel">CANCEL</button>'}
@@ -241,16 +412,29 @@ export class UI {
       overlay.querySelector('.name-cancel')?.addEventListener('click', done);
       overlay.querySelector('.name-ok')!.addEventListener('click', async () => {
         const name = input.value.trim();
-        if (!USERNAME_RE.test(name)) { status.textContent = '3-14 chars: letters, numbers, _'; return; }
-        if (!this.names) { status.textContent = 'Name service unavailable.'; return; }
+        const usernameCheck = validateUsername(name);
+        if (!usernameCheck.ok) { status.textContent = usernameCheck.error; return; }
+        if (!this.names && !this.account?.signedIn) { status.textContent = 'Name service unavailable.'; return; }
         if (!firstTime && g.s.respect < RENAME_COST) { status.textContent = 'Not enough Respect.'; return; }
         status.textContent = 'Checking availability...';
-        if (!(await this.names.claim(name))) { status.textContent = `"${name}" is taken. Names can't be stolen.`; return; }
         const old = g.s.username;
+        if (this.account?.signedIn) {
+          try { await this.account.rename(name); }
+          catch (e) {
+            const code = e instanceof Error ? e.message : '';
+            status.textContent = code === 'username_taken' ? `"${name}" is taken. Names can't be stolen.`
+              : code === 'inappropriate_username' || code === 'reserved_username' ? 'That username is not allowed.'
+                : 'Name service unavailable. Check your connection and retry.';
+            return;
+          }
+        } else if (!this.names || !(await this.names.claim(name))) {
+          status.textContent = `"${name}" is taken. Names can't be stolen.`; return;
+        }
         if (!firstTime) g.s.respect -= RENAME_COST;
         g.s.username = name;
         g.save();
-        if (old) void this.names.release(old);
+        // Remote rename freed old atomically. The offline provider mirrors it.
+        if (old && this.names) await this.names.release(old);
         sfx.buy();
         this.toast(`Username secured: ${name}`, 'gold');
         done();
@@ -284,7 +468,7 @@ export class UI {
     const close = () => ov.remove();
     ov.querySelector('.x')!.addEventListener('click', close);
     ov.querySelector('.m-ad')!.addEventListener('click', async () => {
-      const ad = await this.showRewardedAd(15);
+      const ad = await this.showRewardedAd(15, 'm');
       if (!ad) return;
       if (ad.rewarded) {
         this.game.s.mentality += AD_M_REWARD;
@@ -297,25 +481,41 @@ export class UI {
     ov.querySelectorAll('.row button[data-pack]').forEach((b) => {
       b.addEventListener('click', async () => {
         const pack = M_PACKS.find(p => p.id === (b as HTMLElement).dataset.pack)!;
-        if (this.purchases.platform === 'native' && !this.account?.signedIn) {
-          this.toast('Log in to your Discipline account before purchasing.');
-          close(); await this.promptAccount(); return;
-        }
-        const receipt = await this.purchases.buy(pack);
+        const receipt = await this.purchases.buy(pack, this.account?.accountId);
         if (receipt) {
           try {
+            if (receipt.platform !== 'web') {
+              // Persist first: a store completion survives a crash, offline
+              // period, or a player choosing to log in only after checkout.
+              queuePendingPurchase(receipt);
+              if (!this.account) {
+                this.toast('Purchase saved. Connect the account service to verify and restore it.');
+                return;
+              }
+              if (!this.account.signedIn) {
+                close();
+                this.toast('Payment saved. Log in now to attach it to your Discipline account.', 'gold');
+                await this.promptAccount();
+              }
+            }
             const grant = receipt.platform === 'web'
               ? { amount: pack.amount, transactionId: `web-${Date.now()}` }
               : await this.account!.verifyPurchase(receipt);
             const { amount, transactionId } = grant;
             if (this.game.s.appliedPurchases.includes(transactionId)) {
+              if (await this.account?.save(this.game.s)) removePendingPurchase(receipt);
+              await this.purchases.finish(receipt);
               this.toast('Purchase was already added to this account.'); return;
             }
-            if (amount <= 0) { this.toast('Purchase was already added to this account.'); return; }
+            if (amount <= 0) {
+              if (await this.account?.save(this.game.s)) removePendingPurchase(receipt);
+              await this.purchases.finish(receipt); this.toast('Purchase was already added to this account.'); return;
+            }
             this.game.s.mentality += amount;
             this.game.s.appliedPurchases.push(transactionId);
             this.game.save();
-            await this.account?.save(this.game.s);
+            if (await this.account?.save(this.game.s)) removePendingPurchase(receipt);
+            await this.purchases.finish(receipt);
             sfx.buy();
             this.toast(`Purchased ${fmt(amount)} M!`, 'gold');
             this.refresh();
@@ -367,6 +567,7 @@ export class UI {
     this.panel?.remove();
     this.panel = el('div', tab === 'garage' ? 'panel panel-garage collapsed' : 'panel');
     this.root.appendChild(this.panel);
+    document.body.classList.add('panel-open');
     this.refreshPanel();
     const isGarage = tab === 'garage';
     // Only the actual garage transition gets a scene fade/audio swap.
@@ -397,7 +598,7 @@ export class UI {
     });
     overlay.querySelector('.off-double')!.addEventListener('click', async () => {
       overlay.remove();
-      const ad = await this.showRewardedAd(15);
+      const ad = await this.showRewardedAd(15, 'offline');
       if (!ad) return;
       if (ad.rewarded) {
         this.game.s.respect += gain; // second copy of the earnings
@@ -410,10 +611,17 @@ export class UI {
 
   /** fast black dip for scene transitions (garage in/out) */
   quickFade(cb: () => void) {
+    const transition = ++this.fadeTransition;
     this.fade.classList.add('quick', 'on');
-    setTimeout(() => { cb(); }, 180);
-    setTimeout(() => this.fade.classList.remove('on'), 320);
-    setTimeout(() => this.fade.classList.remove('quick'), 650);
+    setTimeout(() => {
+      if (transition === this.fadeTransition) cb();
+    }, 180);
+    setTimeout(() => {
+      if (transition === this.fadeTransition) this.fade.classList.remove('on');
+    }, 320);
+    setTimeout(() => {
+      if (transition === this.fadeTransition) this.fade.classList.remove('quick');
+    }, 650);
   }
 
   close() {
@@ -423,6 +631,7 @@ export class UI {
     this.remoteBoard = null; // refetch live board next open
     this.panel?.remove();
     this.panel = null;
+    document.body.classList.remove('panel-open');
     if (wasGarage) this.onGarage?.(false);
   }
 
@@ -431,7 +640,7 @@ export class UI {
   private refreshPanel() {
     if (!this.panel || !this.openTab) return;
     const g = this.game;
-    const rows: string[] = [`<div class="panel-head">${this.openTab.toUpperCase()}<button class="x">✕</button></div>`];
+    const rows: string[] = [`<div class="panel-head"><span class="panel-title">${this.openTab.toUpperCase()}</span><button class="x">✕</button></div>`];
 
     if (this.openTab === 'upgrades') {
       // New Route (prestige) lives at the top of the upgrades list
@@ -541,26 +750,40 @@ export class UI {
       const musicVol = Math.round(Number(localStorage.getItem('discipline-music-volume') ?? '1') * 100);
       const sfxVol = Math.round(Number(localStorage.getItem('discipline-sfx-volume') ?? '1') * 100);
       const fov = Number(localStorage.getItem('discipline-fov') ?? '100');
-      const sensitivity = Number(localStorage.getItem('discipline-look-sensitivity') ?? '1');
+      const sensitivity = Number(localStorage.getItem('discipline-look-sensitivity') ?? '1.5');
       const vibration = localStorage.getItem('discipline-vibration') !== '0';
       const reduced = localStorage.getItem('discipline-reduced-motion') === '1';
+      const textTier = Math.max(0, Math.min(3, this.game.s.textSizeTier ?? 0));
       rows.push(`<div class="panel-note">Audio and view settings save automatically on this device.</div>
+        <div class="setting text-size-setting"><label>Universal text size <span class="text-size-val">${['SMALL', 'MEDIUM', 'LARGE', 'EXTRA LARGE'][textTier]}</span></label>
+          <div class="text-size-choices" role="group" aria-label="Universal text size">${['S', 'M', 'L', 'XL'].map((label, tier) => `<button type="button" data-text-tier="${tier}" class="${tier === textTier ? 'selected' : ''}" aria-pressed="${tier === textTier}">${label}</button>`).join('')}</div>
+        </div>
         <div class="setting"><label>Music <span class="music-val">${musicVol}%</span></label><input class="music-volume" type="range" min="0" max="100" value="${musicVol}"></div>
         <div class="setting"><label>Sound effects <span class="sfx-val">${sfxVol}%</span></label><input class="sfx-volume" type="range" min="0" max="100" value="${sfxVol}"></div>
         <div class="setting"><label>Field of view <span class="fov-val">${fov}%</span></label><input class="fov-setting" type="range" min="70" max="130" value="${fov}"></div>
         <div class="setting"><label>Look sensitivity <span class="sense-val">${sensitivity.toFixed(1)}×</span></label><input class="sense-setting" type="range" min="0.5" max="2" step="0.1" value="${sensitivity}"></div>
-        <label class="setting-check"><input class="vibration-setting" type="checkbox" ${vibration ? 'checked' : ''}> Vibration</label>
+        <label class="setting-check"><input class="vibration-setting" type="checkbox" ${vibration ? 'checked' : ''}> Haptic feedback <span class="setting-hint">subtle taps · strong explosions</span></label>
         <label class="setting-check"><input class="motion-setting" type="checkbox" ${reduced ? 'checked' : ''}> Reduced motion</label>
         <button class="reset-view">RESET VIEW TO OPPONENT</button>
+        <button class="ad-privacy">AD PRIVACY OPTIONS</button>
         <details class="cheat-vault"><summary>ENCRYPTED ACCESS</summary>
           <div class="panel-note">Owner codes are verified by one-way cryptographic hash.</div>
           <div class="cheat-entry"><input class="cheat-code" type="password" autocomplete="off" spellcheck="false" placeholder="ENTER OWNER CODE"><button class="cheat-submit">UNLOCK</button></div>
         </details>`);
-      if (this.account?.signedIn) rows.push(row('logout', `Account: ${this.account.username}`,
-        'Progress is synced across devices.', 'LOG OUT', true, 'account'));
+      if (this.account?.signedIn) {
+        rows.push(row('logout', `Account: ${this.account.username}`,
+          'Progress is synced across devices.', 'LOG OUT', true, 'account'));
+        rows.push(row('delete', 'Delete account',
+          'Permanently erase this account and associated cloud data.', 'DELETE', true, 'account'));
+      }
     }
 
-    this.panel.innerHTML = rows.join('');
+    const collapsedGarage = this.openTab === 'garage' && !this.garageSheetOpen;
+    // Keep the header/close (and GARAGE hide) controls outside the scrolling
+    // content. Scrolling can no longer carry rows underneath those buttons.
+    this.panel.innerHTML = collapsedGarage
+      ? rows.join('')
+      : `${rows[0]}<div class="panel-viewport"><div class="panel-scroll">${rows.slice(1).join('')}</div></div>`;
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
     if (this.openTab === 'settings') this.bindSettings();
     // garage-specific controls
@@ -589,6 +812,15 @@ export class UI {
     const senseInput = this.panel.querySelector('.sense-setting') as HTMLInputElement;
     const vibration = this.panel.querySelector('.vibration-setting') as HTMLInputElement;
     const motion = this.panel.querySelector('.motion-setting') as HTMLInputElement;
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-text-tier]').forEach((button) => {
+      button.addEventListener('click', (ev) => {
+        ev.stopImmediatePropagation();
+        this.game.s.textSizeTier = Number(button.dataset.textTier);
+        this.game.save();
+        this.applyTextSize();
+        this.refreshPanel();
+      });
+    });
     const applyView = () => {
       localStorage.setItem('discipline-fov', fovInput.value);
       localStorage.setItem('discipline-look-sensitivity', senseInput.value);
@@ -611,6 +843,11 @@ export class UI {
     vibration.addEventListener('change', () => localStorage.setItem('discipline-vibration', vibration.checked ? '1' : '0'));
     this.panel.querySelector('.reset-view')!.addEventListener('click', (ev) => {
       ev.stopImmediatePropagation(); this.onResetView?.(); this.toast('View reset.');
+    });
+    this.panel.querySelector('.ad-privacy')!.addEventListener('click', async (ev) => {
+      ev.stopImmediatePropagation();
+      const shown = await showAdPrivacyOptions();
+      if (!shown) this.toast('Ad privacy options are unavailable on this build.');
     });
     this.panel.querySelector('.cheat-submit')!.addEventListener('click', async (ev) => {
       ev.stopImmediatePropagation();
@@ -673,9 +910,12 @@ export class UI {
       this.account?.logout();
       this.close();
       await this.promptAccount();
+    } else if (kind === 'account' && id === 'delete') {
+      this.close();
+      await this.promptDeleteAccount();
     } else if (kind === 'booster') {
       this.close(); // starting an ad closes any open menu — no stacked overlays
-      const ad = await this.showRewardedAd(15);
+      const ad = await this.showRewardedAd(15, 'boost');
       if (!ad) return;
       if (ad.rewarded) {
         const b = ad.watchedSeconds < 10 ? BOOSTERS[0]

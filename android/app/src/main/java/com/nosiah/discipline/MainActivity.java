@@ -3,10 +3,12 @@ package com.nosiah.discipline;
 import android.os.Bundle;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
+import com.openforge.capacitorgameconnect.CapacitorGameConnectPlugin;
 
 public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        registerPlugin(CapacitorGameConnectPlugin.class);
         super.onCreate(savedInstanceState);
 
         // A hardware-keyboard Escape/Back event used to invoke Android's
