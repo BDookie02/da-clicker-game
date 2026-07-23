@@ -184,7 +184,10 @@ export class FirstLaunchTutorial {
       const navRect = nav?.getBoundingClientRect();
       const navVisible = nav && getComputedStyle(nav).display !== 'none' && navRect && navRect.height > 1;
       const safeBottom = navVisible ? navRect.top - 12 : innerHeight - 8;
-      const belowStart = box.top + box.height + gap;
+      // The SKIP control is itself enlarged by the universal text tier. Start
+      // below both the highlighted target and SKIP; otherwise a tall SKIP
+      // button can cut across the upper-left of a settings callout.
+      const belowStart = Math.max(box.top + box.height + gap, safeTop);
       const aboveEnd = box.top - gap;
       const below = Math.max(0, safeBottom - belowStart);
       const above = Math.max(0, aboveEnd - safeTop);
@@ -212,6 +215,10 @@ export class FirstLaunchTutorial {
 
   private advance() {
     this.steps[this.index].after?.();
+    // A top-level tutorial target opens a full menu. Close it before the next
+    // explanation so menu rows, NEXT, and the next required target never
+    // occupy the same visual lane on a compact screen.
+    this.hooks.closePanel();
     this.index += 1;
     if (this.index >= this.steps.length) this.end();
     else this.render();

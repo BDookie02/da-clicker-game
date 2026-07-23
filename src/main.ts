@@ -11,11 +11,12 @@ import { FirstLaunchTutorial } from './tutorial';
 import { AccountService } from './account';
 
 const game = new Game();
+const visualAudit = import.meta.env.DEV || localStorage.getItem('discipline-visual-audit') === '1';
+if (visualAudit) (window as unknown as { __game: Game }).__game = game;
 // Visual-audit and capture handles exist only in Vite's development build.
 // Keeping them out of the production bundle prevents a release WebView from
 // exposing mutable game/UI objects through window.__game/__ui/__scene.
 if (import.meta.env.DEV) {
-  (window as unknown as { __game: Game }).__game = game;
   const saveBlob = async (name: string, blob: Blob) => {
     await fetch(`/__save?name=${encodeURIComponent(name)}`, { method: 'POST', body: blob });
   };
@@ -45,7 +46,7 @@ const canvas = document.createElement('canvas');
 canvas.id = 'game-canvas';
 document.body.insertBefore(canvas, document.body.firstChild);
 const scene = new GameScene(canvas);
-if (import.meta.env.DEV) (window as any).__scene = scene;
+if (visualAudit) (window as any).__scene = scene;
 
 const applyCosmetics = () => {
   // equipped sky cosmetic overrides the current district's time-of-day
@@ -59,7 +60,7 @@ const applyCosmetics = () => {
 };
 
 const ui = new UI(game, applyCosmetics);
-if (import.meta.env.DEV) (window as any).__ui = ui;
+if (visualAudit) (window as any).__ui = ui;
 const purchasesReady = initPurchases().then((provider) => {
   ui.purchases = provider;
   return provider;
@@ -214,7 +215,7 @@ const tutorial = new FirstLaunchTutorial({
   closePanel: () => ui.close(),
   finish: () => { game.s.tutorialComplete = true; game.save(); },
 });
-if (import.meta.env.DEV) (window as any).__tutorial = tutorial;
+if (visualAudit) (window as any).__tutorial = tutorial;
 title.addEventListener('pointerdown', (ev) => {
   ev.stopPropagation();
   title.classList.add('gone');

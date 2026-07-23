@@ -40,10 +40,10 @@ for(const [name,width,height] of viewports){
         const outside=e=>{const r=R(e);return r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight};
         const clipped=e=>e.scrollWidth>e.clientWidth+2||e.scrollHeight>e.clientHeight+2;
         const selector=t.steps[${step}].target,target=selector&&selector!=='#game-canvas'?document.querySelector(selector):null,br=R(b),fr=R(f);
-        const overlap=!f.hidden&&intersects(br,fr),sr=R(skip),skipTarget=!f.hidden&&intersects(sr,fr);
+        const overlap=!f.hidden&&intersects(br,fr),sr=R(skip),skipTarget=!f.hidden&&intersects(sr,fr),skipBubble=intersects(sr,br);
         const controls=[...document.querySelectorAll('.menu-row,.hud-top button')].filter(e=>{const r=R(e),s=getComputedStyle(e);return r.width>1&&r.height>1&&s.display!=='none'&&s.visibility!=='hidden'});
         const controlOverlap=controls.filter(e=>intersects(br,R(e))||intersects(sr,R(e))).map(e=>e.className||e.id||e.tagName);
-        return {outside:[b,skip,...b.querySelectorAll('*')].filter(outside).map(e=>e.className||e.tagName),clipped:[b,skip,...b.querySelectorAll('*')].filter(clipped).map(e=>e.className||e.tagName),focusOverlap:overlap||skipTarget,controlOverlap,bubble:br.toJSON(),bubbleSize:{client:[b.clientWidth,b.clientHeight],scroll:[b.scrollWidth,b.scrollHeight]},focus:f.hidden?null:fr.toJSON()}
+        return {outside:[b,skip,...b.querySelectorAll('*')].filter(outside).map(e=>e.className||e.tagName),clipped:[b,skip,...b.querySelectorAll('*')].filter(clipped).map(e=>e.className||e.tagName),focusOverlap:overlap||skipTarget||skipBubble,controlOverlap,bubble:br.toJSON(),bubbleSize:{client:[b.clientWidth,b.clientHeight],scroll:[b.scrollWidth,b.scrollHeight]},focus:f.hidden?null:fr.toJSON()}
       })()`);
       reports.push({viewport:name,width,height,tier,step:step+1,...result});
       if(tier===3&&visualViewports.has(name)){

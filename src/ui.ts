@@ -70,8 +70,8 @@ export class UI {
         <button data-tab="upgrades">UPGRADES</button>
         <button data-tab="crew">CREW</button>
         <button data-tab="garage">GARAGE</button>
-        <button data-tab="ranks">🏆 RANKS</button>
-        <button data-tab="boosters" class="hot">📺 BOOSTERS</button>
+        <button data-tab="ranks">RANKS</button>
+        <button data-tab="boosters" class="hot">BOOSTERS</button>
       </div>
       <div class="toasts" id="toasts"></div>
       <div class="fade" id="fade"></div>`;
@@ -183,7 +183,7 @@ export class UI {
    * between words. Type shrinks only when an unbroken word would cross its
    * visible container. */
   private fitBorderedLabels(root: HTMLElement) {
-    const selector = 'button, .panel-title, .stat .k, .stat .v, .row-name, .row-desc, .panel-note, .setting label, .setting-check, .name-copy, .ad-copy, .tutorial-copy';
+    const selector = 'button, .panel-title, .stat .k, .stat .v, .row-name, .row-desc, .panel-note, .setting-name, .setting-value, .setting-check, .name-copy, .ad-copy, .tutorial-copy';
     const targets = root.matches(selector)
       ? [root, ...root.querySelectorAll<HTMLElement>(selector)]
       : [...root.querySelectorAll<HTMLElement>(selector)];
@@ -766,13 +766,13 @@ export class UI {
       const reduced = localStorage.getItem('discipline-reduced-motion') === '1';
       const textTier = Math.max(0, Math.min(3, this.game.s.textSizeTier ?? 0));
       rows.push(`<div class="panel-note">Audio and view settings save automatically on this device.</div>
-        <div class="setting text-size-setting"><label>Universal text size <span class="text-size-val">${['SMALL', 'MEDIUM', 'LARGE', 'EXTRA LARGE'][textTier]}</span></label>
+        <div class="setting text-size-setting"><label><span class="setting-name">Universal text size</span><span class="setting-value text-size-val">${['SMALL', 'MEDIUM', 'LARGE', 'EXTRA LARGE'][textTier]}</span></label>
           <div class="text-size-choices" role="group" aria-label="Universal text size">${['S', 'M', 'L', 'XL'].map((label, tier) => `<button type="button" data-text-tier="${tier}" class="${tier === textTier ? 'selected' : ''}" aria-pressed="${tier === textTier}">${label}</button>`).join('')}</div>
         </div>
-        <div class="setting"><label>Music <span class="music-val">${musicVol}%</span></label><input class="music-volume" type="range" min="0" max="100" value="${musicVol}"></div>
-        <div class="setting"><label>Sound effects <span class="sfx-val">${sfxVol}%</span></label><input class="sfx-volume" type="range" min="0" max="100" value="${sfxVol}"></div>
-        <div class="setting"><label>Field of view <span class="fov-val">${fov}%</span></label><input class="fov-setting" type="range" min="70" max="130" value="${fov}"></div>
-        <div class="setting"><label>Look sensitivity <span class="sense-val">${sensitivity.toFixed(1)}×</span></label><input class="sense-setting" type="range" min="0.5" max="2" step="0.1" value="${sensitivity}"></div>
+        <div class="setting"><label><span class="setting-name">Music</span><span class="setting-value music-val">${musicVol}%</span></label><input class="music-volume" type="range" min="0" max="100" value="${musicVol}"></div>
+        <div class="setting"><label><span class="setting-name">Sound effects</span><span class="setting-value sfx-val">${sfxVol}%</span></label><input class="sfx-volume" type="range" min="0" max="100" value="${sfxVol}"></div>
+        <div class="setting"><label><span class="setting-name">Field of view</span><span class="setting-value fov-val">${fov}%</span></label><input class="fov-setting" type="range" min="70" max="130" value="${fov}"></div>
+        <div class="setting"><label><span class="setting-name">Look sensitivity</span><span class="setting-value sense-val">${sensitivity.toFixed(1)}×</span></label><input class="sense-setting" type="range" min="0.5" max="2" step="0.1" value="${sensitivity}"></div>
         <label class="setting-check"><input class="vibration-setting" type="checkbox" ${vibration ? 'checked' : ''}> Haptic feedback <span class="setting-hint">subtle taps · strong explosions</span></label>
         <label class="setting-check"><input class="motion-setting" type="checkbox" ${reduced ? 'checked' : ''}> Reduced motion</label>
         <button class="reset-view">RESET VIEW TO OPPONENT</button>

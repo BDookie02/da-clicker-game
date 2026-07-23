@@ -4,6 +4,10 @@ import sharp from 'sharp';
 
 const port = Number(process.argv[2] || 9222);
 const screenFilter = process.argv[3]?.split(',').filter(Boolean) ?? null;
+const viewportFilter = process.argv[4] && process.argv[4] !== 'all'
+  ? process.argv[4].split(',').filter(Boolean)
+  : null;
+const captureEnabled = process.argv[5] !== 'no-captures';
 const root = resolve(import.meta.dirname, '..');
 const out = join(root, 'devlog', screenFilter ? 'responsive-ui-targeted' : 'responsive-ui');
 mkdirSync(out, { recursive: true });
@@ -39,7 +43,7 @@ const viewports = [
   { name: 'short-landscape', width: 480, height: 280 },
   { name: 'landscape', width: 640, height: 360 },
   { name: 'tablet', width: 768, height: 1024 },
-];
+].filter(viewport => !viewportFilter || viewportFilter.includes(viewport.name));
 const visualViewports = new Set(['legacy-small', 'compact', 'tall', 'short-landscape', 'landscape']);
 const allScreens = ['main', 'upgrades', 'crew', 'garage', 'ranks', 'boosters', 'settings', 'settings-account', 'account', 'username', 'mshop', 'offline', 'delete-account'];
 const screens = screenFilter ? allScreens.filter(screen => screenFilter.includes(screen)) : allScreens;
@@ -70,19 +74,37 @@ for (const viewport of viewports) {
   await wait(120);
   for (let tier = 0; tier < 4; tier++) {
     await evaluate(`(async()=>{
-      window.__ui.close();
-      window.__game.s.textSizeTier=${tier};
-      window.__ui.applyTextSize();
-      await new Promise(r=>setTimeout(r,30));
+      if(window.__ui&&window.__game){
+        window.__ui.close();
+        window.__game.s.textSizeTier=${tier};
+        window.__ui.applyTextSize();
+      }else{
+        document.querySelector('.garage-exit-fixed')?.click();
+        document.querySelector('.panel .x')?.click();
+        document.querySelector('#btn-settings')?.click();
+        await new Promise(r=>setTimeout(r,80));
+        document.querySelector('[data-text-tier="${tier}"]')?.click();
+        await new Promise(r=>setTimeout(r,80));
+        document.querySelector('.panel .x')?.click();
+      }
+      await new Promise(r=>setTimeout(r,80));
       return true;
     })()`);
     for (const screen of screens) {
       await evaluate(`(async()=>{
         document.querySelectorAll('.ad-overlay').forEach(e=>e.remove());
-        window.__ui.close();
+        if(window.__ui) window.__ui.close();
+        else {
+          document.querySelector('.garage-exit-fixed')?.click();
+          document.querySelector('.panel .x')?.click();
+        }
         await new Promise(r=>setTimeout(r,25));
         const screen=${JSON.stringify(screen)};
-        if(screen==='settings') window.__ui.toggle('settings');
+        if(!window.__ui){
+          if(['settings','upgrades','crew','garage','ranks','boosters'].includes(screen))
+            document.querySelector(screen==='settings'?'#btn-settings':'[data-tab="'+screen+'"]')?.click();
+        }
+        else if(screen==='settings') window.__ui.toggle('settings');
         else if(screen==='settings-account') { window.__ui.account={signedIn:true,username:'VISUALQA',deleteAccount:async()=>{}}; window.__ui.toggle('settings'); }
         else if(screen==='account') { if(!window.__ui.account) window.__ui.account={}; void window.__ui.promptAccount(); }
         else if(screen==='username') void window.__ui.promptUsername(false);
@@ -115,10 +137,18 @@ for (const viewport of viewports) {
         const inScrollableClip=e=>{let p=e.parentElement;while(p){const s=getComputedStyle(p);if(/auto|scroll|hidden/.test(s.overflowY+s.overflowX)){const a=e.getBoundingClientRect(),b=p.getBoundingClientRect();if(a.top<b.top||a.bottom>b.bottom||a.left<b.left||a.right>b.right)return true;}p=p.parentElement;}return false;};
         const outside=interactive.filter(e=>!inScrollableClip(e)).filter(e=>{const r=e.getBoundingClientRect();return r.left<-1||r.top<-1||r.right>innerWidth+1||r.bottom>innerHeight+1}).map(label);
         const overlaps=[];
-        const panelBox=document.querySelector('.panel')?.getBoundingClientRect(),navElement=document.querySelector('.menu-row'),navBox=navElement?.getBoundingClientRect();
+        const panelBox=document.querySelector('.panel')?.getBoundingClientRect(),navElement=document.querySelector('.menu-row'),navBox=navElement?.getBoundingClientRect(),hudBox=document.querySelector('.hud-top')?.getBoundingClientRect();
         const navVisible=navElement&&visible(navElement);
         if(panelBox&&navBox&&Math.min(panelBox.right,navBox.right)-Math.max(panelBox.left,navBox.left)>2&&Math.min(panelBox.bottom,navBox.bottom)-Math.max(panelBox.top,navBox.top)>2) overlaps.push('PANEL <> BOTTOM NAV');
         if(panelBox&&navVisible&&navBox&&navBox.top-panelBox.bottom<8) overlaps.push('PANEL HAS LESS THAN 8PX NAV GUTTER');
+        if(panelBox&&hudBox&&Math.min(panelBox.right,hudBox.right)-Math.max(panelBox.left,hudBox.left)>2&&Math.min(panelBox.bottom,hudBox.bottom)-Math.max(panelBox.top,hudBox.top)>2) overlaps.push('PANEL <> HUD');
+        for(const labelNode of document.querySelectorAll('.setting label')){
+          const parts=[...labelNode.children].filter(visible);
+          for(let i=0;i<parts.length;i++)for(let j=i+1;j<parts.length;j++){
+            const a=parts[i].getBoundingClientRect(),b=parts[j].getBoundingClientRect();
+            if(Math.min(a.right,b.right)-Math.max(a.left,b.left)>1&&Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>1) overlaps.push('SETTING LABEL PARTS OVERLAP');
+          }
+        }
         for(let i=0;i<interactive.length;i++)for(let j=i+1;j<interactive.length;j++){
           const a=interactive[i],b=interactive[j];
           const panelNav=(a.closest('.panel')&&b.closest('.menu-row'))||(b.closest('.panel')&&a.closest('.menu-row'));
@@ -130,7 +160,7 @@ for (const viewport of viewports) {
           if(Math.min(x.right,y.right)-Math.max(x.left,y.left)>2&&Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top)>2) overlaps.push(label(a)+' <> '+label(b));
         }
         const occluded=interactive.filter(e=>!inScrollableClip(e)&&!topVisible(e)).map(label);
-        const clipped=[...document.querySelectorAll('button,input,.stat,.stat .k,.stat .v,.panel-head,.row-name,.row-desc,.panel-note,.setting label,.setting-check,.lb-row,.garage-bar,.name-copy,.ad-label,.ad-copy')].filter(visible).filter(e=>{
+        const clipped=[...document.querySelectorAll('button,input,.stat,.stat .k,.stat .v,.panel-head,.row-name,.row-desc,.panel-note,.setting-name,.setting-value,.setting-check,.lb-row,.garage-bar,.name-copy,.ad-label,.ad-copy')].filter(visible).filter(e=>{
           const s=getComputedStyle(e); return (e.scrollWidth>e.clientWidth+2&&s.overflowX!=='auto'&&s.overflowX!=='scroll')||(e.scrollHeight>e.clientHeight+2&&s.overflowY!=='auto'&&s.overflowY!=='scroll');
         }).map(label);
         const buttonLabels=[...document.querySelectorAll('button')].filter(visible).filter(button=>{
@@ -156,7 +186,7 @@ for (const viewport of viewports) {
         return { outside, overlaps, occluded, clipped, buttonLabels, multiRowGroups, panelOpaque, garageState, viewport:[innerWidth,innerHeight], panel:panel?.getBoundingClientRect().toJSON?.()||null };
       })()`);
       reports.push({ viewport: viewport.name, tier, screen, ...audit });
-      if (visualViewports.has(viewport.name)) {
+      if (captureEnabled && visualViewports.has(viewport.name)) {
         const shot = await call('Page.captureScreenshot', { format: 'png', fromSurface: true });
         const file = `${viewport.name}-t${tier}-${screen}.png`;
         writeFileSync(join(out, file), Buffer.from(shot.data, 'base64'));
@@ -171,7 +201,7 @@ writeFileSync(join(out, 'audit.json'), JSON.stringify(reports, null, 2));
 const failures = reports.filter(r => r.outside.length || r.overlaps.length || r.occluded.length || r.clipped.length || r.buttonLabels.length || r.multiRowGroups.length || !r.panelOpaque || !r.garageState);
 writeFileSync(join(out, 'failures.json'), JSON.stringify(failures, null, 2));
 
-for (const screen of screens) {
+if (captureEnabled) for (const screen of screens) {
   const items = captures.filter(c => c.screen === screen);
   const tileW = 240, tileH = 390, labelH = 28, cols = 4;
   const rows = Math.ceil(items.length / cols);

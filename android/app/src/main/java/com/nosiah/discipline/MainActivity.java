@@ -1,6 +1,8 @@
 package com.nosiah.discipline;
 
 import android.os.Bundle;
+import android.content.pm.ApplicationInfo;
+import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
 import com.openforge.capacitorgameconnect.CapacitorGameConnectPlugin;
@@ -8,6 +10,11 @@ import com.openforge.capacitorgameconnect.CapacitorGameConnectPlugin;
 public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Expose the debug APK's WebView to local visual-regression tooling.
+        // Release builds remain non-debuggable and do not expose this socket.
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
         registerPlugin(CapacitorGameConnectPlugin.class);
         super.onCreate(savedInstanceState);
 
