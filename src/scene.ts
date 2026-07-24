@@ -14,6 +14,10 @@ import type { OpponentDef } from './config';
 // ---------------------------------------------------------------------------
 
 const PSX_H = 240; // vertical native res; width follows aspect
+// A 1.0-sensitivity swipe should feel like direct manipulation instead of
+// flinging the camera several screen widths. Using one scale for both axes
+// also prevents the asymmetric/inverted feel the old tuning created.
+const LOOK_RADIANS_PER_CSS_PIXEL = 0.0018;
 
 const snapChunk = /* glsl */ `
   vec4 snapToGrid(vec4 clip) {
@@ -187,8 +191,12 @@ export class GameScene {
   tapLook(totalDx: number, totalDy: number) {
     if (!this.freeLook) this.beginTapLook();
     const s = this.lookSensitivity;
-    this.lookTargetYaw = this.lookDragYaw - totalDx * 0.0065 * s;
-    this.lookTargetPitch = THREE.MathUtils.clamp(this.lookDragPitch + totalDy * 0.0052 * s, -0.75, 0.75);
+    this.lookTargetYaw = this.lookDragYaw - totalDx * LOOK_RADIANS_PER_CSS_PIXEL * s;
+    this.lookTargetPitch = THREE.MathUtils.clamp(
+      this.lookDragPitch + totalDy * LOOK_RADIANS_PER_CSS_PIXEL * s,
+      -0.75,
+      0.75,
+    );
   }
 
   setViewSettings(fovPercent: number, lookSensitivity: number, reducedMotion: boolean) {
@@ -1827,14 +1835,20 @@ export class GameScene {
       // The garage car/camera basis is mirrored relative to the street
       // cockpit. Android projection QA therefore requires the opposite yaw
       // sign here for rendered dashboard content to follow the finger.
-      this.fpTargetYaw = this.fpDragYaw + totalDx * 0.0065 * s;
-      this.fpTargetPitch = Math.min(0.75, Math.max(-0.75, this.fpDragPitch + totalDy * 0.0052 * s));
+      this.fpTargetYaw = this.fpDragYaw + totalDx * LOOK_RADIANS_PER_CSS_PIXEL * s;
+      this.fpTargetPitch = Math.min(
+        0.75,
+        Math.max(-0.75, this.fpDragPitch + totalDy * LOOK_RADIANS_PER_CSS_PIXEL * s),
+      );
     } else {
       // Orbiting a subject reverses the apparent screen motion compared with
       // turning a first-person camera. Negate the orbit angle so the car and
       // garage follow the finger exactly like the Tap view does.
-      this.garageTargetYaw = this.garageDragYaw - totalDx * 0.0065 * s;
-      this.garageTargetPitch = Math.min(0.9, Math.max(0.06, this.garageDragPitch - totalDy * 0.0052 * s));
+      this.garageTargetYaw = this.garageDragYaw - totalDx * LOOK_RADIANS_PER_CSS_PIXEL * s;
+      this.garageTargetPitch = Math.min(
+        0.9,
+        Math.max(0.06, this.garageDragPitch - totalDy * LOOK_RADIANS_PER_CSS_PIXEL * s),
+      );
     }
   }
 
