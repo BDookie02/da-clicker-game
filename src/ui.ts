@@ -356,7 +356,7 @@ export class UI {
 
     // Settings contains live sliders and a password field. Rebuilding it every
     // frame resets native controls, closes <details>, and erases typed codes.
-    if (this.openTab && ['upgrades', 'crew', 'garage'].includes(this.openTab)
+    if (this.openTab && ['upgrades', 'crew'].includes(this.openTab)
         && performance.now() - this.lastPanelRenderAt >= 1000) this.refreshPanel();
   }
 
