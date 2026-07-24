@@ -25,6 +25,14 @@ test('Play Games is auto-discovered once and splash resources cover Android 7 th
   assert.match(styles, /postSplashScreenTheme">@style\/AppTheme\.NoActionBar<\/item>/);
 });
 
+test('Android 7 compatibility bootstrap does not depend on Chrome 71 globalThis', () => {
+  const compatibility = read('src/compat.ts');
+  assert.match(compatibility, /const root = window as Window/);
+  assert.doesNotMatch(compatibility, /\bglobalThis\b(?!`)/);
+  assert.match(compatibility, /root\.crypto\.getRandomValues/);
+  assert.match(compatibility, /Object\.defineProperty\(root\.crypto, 'randomUUID'/);
+});
+
 test('release tooling pins Gradle integrity and records exact source provenance', () => {
   const wrapper = read('android/gradle/wrapper/gradle-wrapper.properties');
   const build = read('scripts/build-play-release.ps1');

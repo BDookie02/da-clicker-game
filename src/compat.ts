@@ -5,7 +5,10 @@
  * so a factory-era WebView does not fail before the title screen appears.
  */
 export function installCompatibilityFallbacks() {
-  const root = globalThis as typeof globalThis & {
+  // `globalThis` was not added until Chrome 71. Android 7 devices can use a
+  // Chrome 69 WebView, so the compatibility bootstrap must not reference it
+  // before the game has had a chance to install any fallbacks.
+  const root = window as Window & {
     ResizeObserver?: typeof ResizeObserver;
     queueMicrotask?: (callback: VoidFunction) => void;
   };
@@ -55,17 +58,17 @@ export function installCompatibilityFallbacks() {
     root.ResizeObserver = ResizeObserverFallback as unknown as typeof ResizeObserver;
   }
 
-  if (globalThis.crypto && typeof globalThis.crypto.randomUUID !== 'function') {
+  if (root.crypto && typeof root.crypto.randomUUID !== 'function') {
     const randomUUID = () => {
       const bytes = new Uint8Array(16);
-      globalThis.crypto.getRandomValues(bytes);
+      root.crypto.getRandomValues(bytes);
       bytes[6] = (bytes[6] & 0x0f) | 0x40;
       bytes[8] = (bytes[8] & 0x3f) | 0x80;
       const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
       return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     };
     try {
-      Object.defineProperty(globalThis.crypto, 'randomUUID', {
+      Object.defineProperty(root.crypto, 'randomUUID', {
         configurable: true,
         value: randomUUID,
       });
