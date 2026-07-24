@@ -295,7 +295,7 @@ body.in-garage .quick-buy { display: none; }
 @keyframes arrowbob { from { margin-top: -8px; } to { margin-top: 8px; } }
 /* M store */
 .ad-box.mshop {
-  /* Chrome 91 on the Android 7/12 test devices predates dynamic viewport
+  /* Chrome 91 on the Android 12 test device predates dynamic viewport
      units, so keep the vh declaration as the operative fallback. */
   max-height: 80vh;
   max-height: min(80vh, calc(100dvh - 12px));
@@ -913,7 +913,7 @@ body.in-garage .boost-pill { display: none; }
   }
   /* Preserve the selected text tier while tightening only tutorial chrome.
      This keeps the complete copy and action visible between SKIP and the
-     single-row navigation on Android 7-era narrow screens. */
+     single-row navigation on narrow Android screens. */
   .tutorial-bubble { padding: 8px 10px; }
   .tutorial-step { margin-bottom: 4px; }
   .tutorial-copy { line-height: 1.3; }

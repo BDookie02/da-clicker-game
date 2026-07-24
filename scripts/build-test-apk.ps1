@@ -4,7 +4,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $javaHome = 'C:\Program Files\Android\Android Studio\jbr'
 $androidNamespace = 'http://schemas.android.com/apk/res/android'
 $expectedPackage = 'com.nosiah.discipline'
-$expectedMinSdk = '24'
+$expectedMinSdk = '31'
 $expectedTargetSdk = '36'
 $expectedTestAdMobAppId = 'ca-app-pub-3940256099942544~3347511713'
 

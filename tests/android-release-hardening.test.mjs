@@ -14,7 +14,7 @@ test('Android release variants require explicit versions and reject Google sampl
   assert.match(gradle, /manifestPlaceholders\.admobAppId = releaseAdMobAppId \?: ""/);
 });
 
-test('Play Games is auto-discovered once and splash resources cover Android 7 through 12+', () => {
+test('Play Games is auto-discovered once and splash resources cover Android 12+', () => {
   const activity = read('android/app/src/main/java/com/nosiah/discipline/MainActivity.java');
   const styles = read('android/app/src/main/res/values/styles.xml');
   assert.doesNotMatch(activity, /registerPlugin\s*\(\s*CapacitorGameConnectPlugin/);
@@ -25,7 +25,7 @@ test('Play Games is auto-discovered once and splash resources cover Android 7 th
   assert.match(styles, /postSplashScreenTheme">@style\/AppTheme\.NoActionBar<\/item>/);
 });
 
-test('Android 7 compatibility bootstrap does not depend on Chrome 71 globalThis', () => {
+test('Android compatibility bootstrap uses the browser global directly', () => {
   const compatibility = read('src/compat.ts');
   assert.match(compatibility, /const root = window as Window/);
   assert.doesNotMatch(compatibility, /\bglobalThis\b(?!`)/);

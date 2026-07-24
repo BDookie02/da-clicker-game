@@ -11,7 +11,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         // Required by the AndroidX splash-screen compat API. The same approved
-        // launcher artwork and background are used on Android 7 through 12+.
+        // launcher artwork and background are used on Android 12+.
         SplashScreen.installSplashScreen(this);
 
         // Expose the debug APK's WebView to local visual-regression tooling.

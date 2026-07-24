@@ -1,13 +1,12 @@
-/** Runtime fallbacks for the oldest supported Android 7 WebViews.
+/** Runtime fallbacks for the oldest supported Android 12 WebViews.
  *
  * Vite's legacy bundle transpiles JavaScript syntax, but browser APIs are not
  * automatically supplied. Keep these tiny fallbacks ahead of UI construction
  * so a factory-era WebView does not fail before the title screen appears.
  */
 export function installCompatibilityFallbacks() {
-  // `globalThis` was not added until Chrome 71. Android 7 devices can use a
-  // Chrome 69 WebView, so the compatibility bootstrap must not reference it
-  // before the game has had a chance to install any fallbacks.
+  // Use the browser-global `window` directly so compatibility setup cannot
+  // fail before the game has had a chance to install its API fallbacks.
   const root = window as Window & {
     ResizeObserver?: typeof ResizeObserver;
     queueMicrotask?: (callback: VoidFunction) => void;

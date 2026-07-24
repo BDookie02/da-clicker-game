@@ -40,7 +40,7 @@ connection.
 ## Android support
 
 - Package: `com.nosiah.discipline`
-- Minimum: Android 7 / API 24
+- Minimum: Android 12 / API 31
 - Target and compile SDK: API 36
 - Store format: signed Android App Bundle
 
