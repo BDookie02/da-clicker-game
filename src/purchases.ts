@@ -39,8 +39,12 @@ export const M_PACKS: MPack[] = [
 export const AD_M_REWARD = 5;
 export interface PurchaseProvider {
   readonly platform: string;
+  /** Store-authoritative, localized display price. Null means unavailable. */
+  getPrice(pack: MPack): string | null;
   /** Opens the store. Currency is granted only after backend verification. */
   buy(pack: MPack, accountId?: string): Promise<PurchaseReceipt | null>;
+  /** Recover only transactions cryptographically bound to this account. */
+  restoreForAccount(accountId: string): Promise<void>;
   /** Finish an iOS transaction only after the server ledger is durable. */
   finish(receipt: PurchaseReceipt): Promise<void>;
 }
@@ -54,6 +58,15 @@ export interface PurchaseReceipt {
   appAccountToken?: string;
 }
 
+interface NativeTransactionReceipt {
+  productIdentifier: string;
+  transactionId: string;
+  purchaseToken?: string;
+  receipt?: string;
+  jwsRepresentation?: string;
+  appAccountToken?: string | null;
+}
+
 const PENDING_PURCHASES_KEY = 'discipline-pending-purchases-v2';
 
 function receiptKey(receipt: PurchaseReceipt): string {
@@ -63,15 +76,24 @@ function receiptKey(receipt: PurchaseReceipt): string {
 export function pendingPurchases(): PurchaseReceipt[] {
   try {
     const value = JSON.parse(localStorage.getItem(PENDING_PURCHASES_KEY) ?? '[]');
-    return Array.isArray(value) ? value : [];
+    return Array.isArray(value)
+      ? value.filter(item => item && typeof item.productId === 'string'
+          && ['web', 'android', 'ios'].includes(item.platform)).slice(-50)
+      : [];
   } catch { return []; }
 }
 
 export function queuePendingPurchase(receipt: PurchaseReceipt) {
+  // Native receipts without the deterministic account token cannot be safely
+  // assigned on a shared device. The app was unreleased when legacy unbound
+  // receipts existed, so quarantine them instead of allowing first-claim wins.
+  if (receipt.platform !== 'web'
+      && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+        .test(receipt.appAccountToken || '')) return;
   const queue = pendingPurchases();
   const key = receiptKey(receipt);
   if (!queue.some((item) => receiptKey(item) === key)) queue.push(receipt);
-  localStorage.setItem(PENDING_PURCHASES_KEY, JSON.stringify(queue));
+  localStorage.setItem(PENDING_PURCHASES_KEY, JSON.stringify(queue.slice(-50)));
 }
 
 export function removePendingPurchase(receipt: PurchaseReceipt) {
@@ -93,9 +115,20 @@ async function accountUuid(accountId: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** Remove only the deleted account's unfinished transactions. A shared device
+ * may still have cryptographically bound receipts for another login. */
+export async function clearPendingPurchasesForAccount(accountId: string): Promise<void> {
+  if (!accountId) return;
+  const token = await accountUuid(accountId);
+  localStorage.setItem(PENDING_PURCHASES_KEY, JSON.stringify(
+    pendingPurchases().filter(receipt => receipt.appAccountToken !== token),
+  ));
+}
+
 /** Web/dev provider: a confirm dialog stands in for the store sheet. */
 export class PlaceholderPurchases implements PurchaseProvider {
   readonly platform = 'web';
+  getPrice(pack: MPack) { return pack.price; }
   buy(pack: MPack): Promise<PurchaseReceipt | null> {
     return new Promise((resolve) => {
       const ov = document.createElement('div');
@@ -118,13 +151,52 @@ export class PlaceholderPurchases implements PurchaseProvider {
       ov.querySelector('.buy-ok')!.addEventListener('click', () => { ov.remove(); resolve({ platform: 'web', productId: pack.id }); });
     });
   }
+  async restoreForAccount(): Promise<void> {}
+  async finish(): Promise<void> {}
+}
+
+/** Safe startup state while the native store catalog is loading. */
+export class UnavailablePurchases implements PurchaseProvider {
+  readonly platform = 'unavailable';
+  getPrice() { return null; }
+  async buy(): Promise<PurchaseReceipt | null> { return null; }
+  async restoreForAccount(): Promise<void> {}
   async finish(): Promise<void> {}
 }
 
 class NativePurchaseProvider implements PurchaseProvider {
   readonly platform = 'native';
+  private readonly prices = new Map<string, string>();
+  private activeAccountToken = '';
+
+  constructor() {
+    // The reviewed native patch leaves StoreKit updates unfinished. Persist a
+    // matching update immediately; the backend verifies it before finish().
+    void NativePurchases.addListener('transactionUpdated', transaction => {
+      if (!this.activeAccountToken
+          || transaction.appAccountToken !== this.activeAccountToken
+          || !M_PACKS.some(pack => pack.id === transaction.productIdentifier)) return;
+      this.queueNativeTransaction(transaction);
+    });
+  }
+
+  getPrice(pack: MPack) {
+    return this.prices.get(pack.id) ?? null;
+  }
+
+  async loadCatalog() {
+    const { products } = await NativePurchases.getProducts({
+      productIdentifiers: M_PACKS.map(pack => pack.id),
+      productType: PURCHASE_TYPE.INAPP,
+    });
+    for (const product of products) {
+      if (product.identifier && product.priceString)
+        this.prices.set(product.identifier, product.priceString);
+    }
+  }
 
   async buy(pack: MPack, accountId?: string): Promise<PurchaseReceipt | null> {
+    if (!accountId) throw new Error('login_required');
     try {
       const { isBillingSupported } = await NativePurchases.isBillingSupported();
       if (!isBillingSupported) return null;
@@ -134,7 +206,8 @@ class NativePurchaseProvider implements PurchaseProvider {
         productIdentifier: pack.id,
         productType: PURCHASE_TYPE.INAPP,
       });
-      const appAccountToken = accountId ? await accountUuid(accountId) : undefined;
+      const appAccountToken = await accountUuid(accountId);
+      this.activeAccountToken = appAccountToken;
       const transaction = await NativePurchases.purchaseProduct({
         productIdentifier: pack.id,
         productType: PURCHASE_TYPE.INAPP,
@@ -145,18 +218,29 @@ class NativePurchaseProvider implements PurchaseProvider {
         autoAcknowledgePurchases: false,
       });
       if (transaction.productIdentifier !== pack.id) return null;
-      return {
+      const receipt = this.receiptFromTransaction(transaction);
+      if (receipt.appAccountToken !== appAccountToken) return null;
+      return receipt;
+    } catch (error) {
+      if ((error as Error).message === 'login_required') throw error;
+      return null;
+    }
+  }
+
+  private receiptFromTransaction(transaction: NativeTransactionReceipt): PurchaseReceipt {
+    return {
         platform: ((window as any).Capacitor?.getPlatform?.() === 'ios' ? 'ios' : 'android'),
-        productId: pack.id,
+        productId: transaction.productIdentifier,
         transactionId: transaction.transactionId,
         purchaseToken: transaction.purchaseToken,
         receipt: transaction.receipt,
         jwsRepresentation: transaction.jwsRepresentation,
-        appAccountToken: transaction.appAccountToken ?? appAccountToken,
+        appAccountToken: transaction.appAccountToken ?? undefined,
       };
-    } catch {
-      return null;
-    }
+  }
+
+  private queueNativeTransaction(transaction: NativeTransactionReceipt) {
+    queuePendingPurchase(this.receiptFromTransaction(transaction));
   }
 
   async finish(receipt: PurchaseReceipt): Promise<void> {
@@ -164,24 +248,19 @@ class NativePurchaseProvider implements PurchaseProvider {
       await NativePurchases.acknowledgePurchase({ purchaseToken: receipt.transactionId });
   }
 
-  async restorePendingStorePurchases(): Promise<void> {
+  async restoreForAccount(accountId: string): Promise<void> {
+    const appAccountToken = await accountUuid(accountId);
+    this.activeAccountToken = appAccountToken;
     try {
       const { purchases } = await NativePurchases.getPurchases({
         productType: PURCHASE_TYPE.INAPP,
+        appAccountToken,
         onlyCurrentEntitlements: false,
       });
-      const platform = ((window as any).Capacitor?.getPlatform?.() === 'ios' ? 'ios' : 'android') as 'ios' | 'android';
       for (const transaction of purchases) {
-        if (!M_PACKS.some((pack) => pack.id === transaction.productIdentifier)) continue;
-        queuePendingPurchase({
-          platform,
-          productId: transaction.productIdentifier,
-          transactionId: transaction.transactionId,
-          purchaseToken: transaction.purchaseToken,
-          receipt: transaction.receipt,
-          jwsRepresentation: transaction.jwsRepresentation,
-          appAccountToken: transaction.appAccountToken ?? undefined,
-        });
+        if (!M_PACKS.some(pack => pack.id === transaction.productIdentifier)
+            || transaction.appAccountToken !== appAccountToken) continue;
+        this.queueNativeTransaction(transaction);
       }
     } catch { /* offline/store unavailable; the local durable queue remains */ }
   }
@@ -193,7 +272,8 @@ export async function initPurchases(): Promise<PurchaseProvider> {
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.()) {
     const provider = new NativePurchaseProvider();
-    await provider.restorePendingStorePurchases();
+    try { await provider.loadCatalog(); }
+    catch { /* Play unavailable/offline: the shop shows products unavailable */ }
     return provider;
   }
   return new PlaceholderPurchases();

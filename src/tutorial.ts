@@ -1,6 +1,7 @@
 export interface TutorialHooks {
   finish: () => void;
   closePanel: () => void;
+  eyeContactPoint?: () => { x: number; y: number } | null;
 }
 
 type Step = {
@@ -22,9 +23,10 @@ export class FirstLaunchTutorial {
   private raf = 0;
   private bubbleObserver: ResizeObserver | null = null;
   private advanceQueued = false;
+  private advanceTimer = 0;
 
   private readonly steps: Step[] = [
-    { target: '#game-canvas', taps: 3, text: 'Hold eye contact and tap the driver to earn RESPECT. Land 3 taps.' },
+    { target: '#game-canvas', taps: 3, text: 'Eye contact. Tap driver 3x. Earn RESPECT.' },
     { target: '[data-tab="upgrades"]', text: 'UPGRADES spend Respect to make every manual tap stronger.' },
     { button: 'GOT IT', text: 'Buy the cheapest upgrade whenever you can. The quick-buy prompt also surfaces affordable power.' },
     { target: '[data-tab="crew"]', text: 'CREW spends Respect on automatic Respect per second.' },
@@ -41,8 +43,15 @@ export class FirstLaunchTutorial {
 
   constructor(private readonly hooks: TutorialHooks) {}
 
+  get isActive() { return this.active; }
+
   start() {
     if (this.active) return;
+    clearTimeout(this.advanceTimer);
+    this.advanceTimer = 0;
+    this.advanceQueued = false;
+    this.index = 0;
+    this.tapCount = 0;
     // A killed/restarted app can restore whichever panel was open. Every tour
     // run begins from the same unobstructed tap screen.
     this.hooks.closePanel();
@@ -59,13 +68,13 @@ export class FirstLaunchTutorial {
     // happens so it can grow away from the required control, never over it.
     this.bubbleObserver = new ResizeObserver(() => this.queuePosition());
     this.bubbleObserver.observe(this.bubble!);
-    this.overlay.querySelector('.tutorial-skip')!.addEventListener('pointerdown', (e) => {
-      e.stopPropagation(); this.end();
+    this.overlay.querySelector('.tutorial-skip')!.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.end();
     });
     document.addEventListener('pointerdown', this.guard, true);
     document.addEventListener('pointerup', this.guard, true);
     document.addEventListener('click', this.guard, true);
-    document.addEventListener('pointerup', this.onPointerUp, false);
     document.addEventListener('click', this.onClick, true);
     addEventListener('resize', this.position);
     this.render();
@@ -77,30 +86,30 @@ export class FirstLaunchTutorial {
     if (target.closest('.tutorial-skip, .tutorial-next')) return;
     const step = this.steps[this.index];
     const allowed = step.target === '#game-canvas'
-      ? !target.closest('.panel, .menu-row, .ad-overlay, button')
+      // #app is the transparent full-screen gesture surface above the WebGL
+      // canvas. Accept only those two exact gameplay surfaces—never tutorial
+      // copy or another descendant layered over them.
+      ? target.matches('#game-canvas, #app')
       : step.target && target.closest(step.target);
     if (!allowed) {
       event.preventDefault(); event.stopImmediatePropagation(); return;
     }
   };
 
-  /** Complete targets on pointer-up. Mobile browsers can suppress the later
-   * click when opening a panel changes the DOM under the finger, so waiting
-   * for click alone can strand the tutorial even though the menu opened. */
-  private readonly onPointerUp = (event: PointerEvent) => {
+  /** Count only taps the game accepted after its eye-contact and transition
+   * gates. Touching tutorial copy or a rejected canvas press can never satisfy
+   * the first step. */
+  recordSuccessfulTap() {
     if (!this.active) return;
     const step = this.steps[this.index];
-    const target = event.target as HTMLElement;
-    if (step.target === '#game-canvas') {
-      if (target.closest('.panel, .menu-row, .ad-overlay, button')) return;
-      this.tapCount += 1;
-      if (this.tapCount < (step.taps ?? 1)) {
-        this.updateCopy(`${step.text} (${this.tapCount}/${step.taps})`);
-        return;
-      }
-      this.queueAdvance();
+    if (step.target !== '#game-canvas') return;
+    this.tapCount += 1;
+    if (this.tapCount < (step.taps ?? 1)) {
+      this.updateCopy(`${step.text} (${this.tapCount}/${step.taps})`);
+      return;
     }
-  };
+    this.queueAdvance();
+  }
 
   /** Observe allowed menu clicks during capture because the game intentionally
    * stops them from bubbling. The queued advance runs after its handler opens
@@ -116,7 +125,8 @@ export class FirstLaunchTutorial {
   private queueAdvance() {
     if (this.advanceQueued) return;
     this.advanceQueued = true;
-    setTimeout(() => {
+    this.advanceTimer = window.setTimeout(() => {
+      this.advanceTimer = 0;
       this.advanceQueued = false;
       if (this.active) this.advance();
     }, 0);
@@ -132,7 +142,7 @@ export class FirstLaunchTutorial {
     const next = this.overlay!.querySelector('.tutorial-next') as HTMLButtonElement;
     next.hidden = !step.button;
     next.textContent = step.button ?? '';
-    next.onpointerdown = step.button ? (event) => {
+    next.onclick = step.button ? (event) => {
       event.stopPropagation(); event.preventDefault(); this.advance();
     } : null;
     this.focus!.hidden = !step.target;
@@ -158,6 +168,7 @@ export class FirstLaunchTutorial {
     if (!this.active) return;
     const step = this.steps[this.index];
     const target = step.target ? document.querySelector<HTMLElement>(step.target) : null;
+    Object.assign(this.bubble!.style, { left: '18px', right: '18px', width: 'auto' });
     if (step.target && (!target || target.getBoundingClientRect().width < 1)) {
       this.raf = requestAnimationFrame(this.position); return;
     }
@@ -166,9 +177,21 @@ export class FirstLaunchTutorial {
       const pad = step.target === '#game-canvas' ? 0 : 6;
       const shortLandscape = innerWidth > innerHeight;
       const box = step.target === '#game-canvas'
-        ? shortLandscape
-          ? { left: innerWidth * .38, top: innerHeight * .22, width: innerWidth * .24, height: innerHeight * .15 }
-          : { left: innerWidth * .32, top: innerHeight * .27, width: innerWidth * .36, height: innerHeight * .20 }
+        ? (() => {
+          // Project the real 3D face into this viewport. Opponent cars and
+          // driver mounts vary, so a percentage-based windshield rectangle
+          // can point above or beside the person the player must look at.
+          const point = this.hooks.eyeContactPoint?.()
+            ?? { x: innerWidth / 2, y: innerHeight * (shortLandscape ? .42 : .5) };
+          const width = Math.min(150, Math.max(84, Math.min(innerWidth, innerHeight) * .26));
+          const height = width * .9;
+          return {
+            left: Math.max(4, Math.min(innerWidth - width - 4, point.x - width / 2)),
+            top: Math.max(4, Math.min(innerHeight - height - 4, point.y - height / 2)),
+            width,
+            height,
+          };
+        })()
         : { left: r.left - pad, top: r.top - pad, width: r.width + pad * 2, height: r.height + pad * 2 };
       Object.assign(this.focus!.style, {
         left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`,
@@ -177,13 +200,40 @@ export class FirstLaunchTutorial {
       // can overflow and cover the required control on short displays.
       // Keep a clear visual gutter without wasting the few pixels that short
       // landscape/compact screens need to show the entire callout.
-      const gap = 10;
+      const compactNarrow = innerWidth <= 320;
+      const gap = compactNarrow ? 4 : 10;
       const skip = this.overlay!.querySelector<HTMLElement>('.tutorial-skip')!.getBoundingClientRect();
       const safeTop = Math.max(8, skip.bottom + 8);
       const nav = document.querySelector<HTMLElement>('.menu-row');
       const navRect = nav?.getBoundingClientRect();
       const navVisible = nav && getComputedStyle(nav).display !== 'none' && navRect && navRect.height > 1;
-      const safeBottom = navVisible ? navRect.top - 12 : innerHeight - 8;
+      const safeBottom = navVisible ? navRect.top - (compactNarrow ? 8 : 12) : innerHeight - 8;
+      // In a short landscape viewport the real face sits near vertical center,
+      // leaving too little room above or below for accessible text. Put the
+      // first callout beside the projected face, bounded by the rendered HUD
+      // and navigation, instead of clipping or scrolling its instructions.
+      if (shortLandscape && step.target === '#game-canvas') {
+        const sideInset = 8;
+        const sideGap = 10;
+        const leftWidth = box.left - sideGap - sideInset;
+        const rightStart = box.left + box.width + sideGap;
+        const rightWidth = innerWidth - rightStart - sideInset;
+        const useLeft = leftWidth >= 140 || leftWidth >= rightWidth;
+        const sideWidth = useLeft ? leftWidth : rightWidth;
+        if (sideWidth >= 120) {
+          const hud = document.querySelector<HTMLElement>('.hud-top')?.getBoundingClientRect();
+          const top = Math.max(8, (hud?.bottom ?? 0) + 6);
+          Object.assign(this.bubble!.style, {
+            left: `${useLeft ? sideInset : rightStart}px`,
+            right: 'auto',
+            width: `${sideWidth}px`,
+            top: `${top}px`,
+            bottom: 'auto',
+            maxHeight: `${Math.max(24, safeBottom - top)}px`,
+          });
+          return;
+        }
+      }
       // The SKIP control is itself enlarged by the universal text tier. Start
       // below both the highlighted target and SKIP; otherwise a tall SKIP
       // button can cut across the upper-left of a settings callout.
@@ -227,13 +277,15 @@ export class FirstLaunchTutorial {
   private end() {
     if (!this.active) return;
     this.active = false;
+    clearTimeout(this.advanceTimer);
+    this.advanceTimer = 0;
+    this.advanceQueued = false;
     cancelAnimationFrame(this.raf);
     this.bubbleObserver?.disconnect();
     this.bubbleObserver = null;
     document.removeEventListener('pointerdown', this.guard, true);
     document.removeEventListener('pointerup', this.guard, true);
     document.removeEventListener('click', this.guard, true);
-    document.removeEventListener('pointerup', this.onPointerUp, false);
     document.removeEventListener('click', this.onClick, true);
     removeEventListener('resize', this.position);
     this.overlay?.remove();

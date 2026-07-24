@@ -2,16 +2,21 @@ import { Game, fmt } from './state';
 import { GameScene } from './scene';
 import { UI } from './ui';
 import { music, sfx } from './audio';
-import { API_URL, getDistrict } from './config';
+import { API_URL, BOOSTERS, getDistrict } from './config';
 import { initLeaderboards, type LeaderboardProvider } from './leaderboard';
 import { LocalUsernameService } from './username';
 import { initAds } from './ads';
 import { initPurchases, removePendingPurchase } from './purchases';
 import { FirstLaunchTutorial } from './tutorial';
 import { AccountService } from './account';
+import { installCompatibilityFallbacks } from './compat';
+
+installCompatibilityFallbacks();
 
 const game = new Game();
-const visualAudit = import.meta.env.DEV || localStorage.getItem('discipline-visual-audit') === '1';
+// This is compile-time only. A production player cannot expose mutable game
+// internals by changing localStorage; tracked test builds opt in via .env.test.
+const visualAudit = import.meta.env.VITE_VISUAL_AUDIT === 'true';
 if (visualAudit) (window as unknown as { __game: Game }).__game = game;
 // Visual-audit and capture handles exist only in Vite's development build.
 // Keeping them out of the production bundle prevents a release WebView from
@@ -99,35 +104,91 @@ initAds().then((ads) => { ui.ads = ads; }); // AdMob on device, placeholder on w
 // The local name provider exists only for offline web development.
 let account: AccountService | null = null;
 let onboarding: Promise<void> = Promise.resolve();
+let entitlementRecovery: Promise<void> | null = null;
+
+const recoverAccountEntitlements = (refreshStore: boolean): Promise<void> => {
+  if (!account?.signedIn || !account.cloudReady) return Promise.resolve();
+  if (entitlementRecovery) return entitlementRecovery;
+  const service = account;
+  const recoveringAccountId = service.accountId;
+  entitlementRecovery = (async () => {
+    const purchases = await purchasesReady;
+    if (refreshStore) await purchases.restoreForAccount(recoveringAccountId);
+    const recovered = await service.recoverPendingPurchases();
+    for (const { receipt, grant } of recovered) {
+      if (service.accountId !== recoveringAccountId || !service.cloudReady) return;
+      if (!game.s.appliedPurchases.includes(grant.transactionId) && grant.amount > 0) {
+        game.s.mentality += grant.amount;
+        game.s.appliedPurchases.push(grant.transactionId);
+        ui.toast(`Recovered purchase: +${fmt(grant.amount)} M`, 'gold');
+      }
+      game.save();
+      if (await service.save(game.s)) removePendingPurchase(receipt);
+      await purchases.finish(receipt).catch(() => undefined);
+    }
+    const recoveredAds = await service.recoverPendingAdRewards();
+    for (const reward of recoveredAds) {
+      if (service.accountId !== recoveringAccountId || !service.cloudReady) return;
+      if (game.s.appliedAdRewards.includes(reward.nonce)) {
+        service.clearPendingAdReward(reward.nonce);
+        continue;
+      }
+      // M is reconciled from the signed server ledger by save(). Boost/offline
+      // effects use the account-scoped intent persisted before AdMob opened.
+      if (reward.kind === 'boost') {
+        const booster = reward.watchedSeconds < 10 ? BOOSTERS[0]
+          : reward.watchedSeconds < 25 ? BOOSTERS[1] : BOOSTERS[2];
+        game.grantBooster(booster);
+      } else if (reward.kind === 'offline') {
+        game.s.respect += reward.bonusRespect;
+      }
+      game.s.appliedAdRewards.push(reward.nonce);
+      game.save();
+      if (await service.save(game.s)) service.clearPendingAdReward(reward.nonce);
+      ui.toast(`Recovered verified ${reward.kind === 'm' ? 'M' : reward.kind} ad reward.`, 'gold');
+    }
+  })().finally(() => { entitlementRecovery = null; });
+  return entitlementRecovery;
+};
+
 if (API_URL) {
   account = new AccountService(API_URL);
   ui.account = account;
   onboarding = (async () => {
-    let identity = await account!.verify().catch(() => null);
+    let identity = null;
+    let verifiedOnline = false;
+    try {
+      identity = await account!.verify();
+      verifiedOnline = Boolean(identity);
+    } catch {
+      // A cached, previously verified identity is enough for honest offline
+      // play. Do not replace the whole app with an impossible network login.
+      identity = account!.cachedIdentity;
+      if (identity) ui.toast(`Offline as ${identity.username}. Progress will sync when connected.`);
+    }
     if (!identity) {
       await ui.promptAccount();
       // A first-launch registration/login must enter the exact same sync and
       // purchase-recovery path immediately, not wait for an app restart.
       identity = await account!.verify().catch(() => null);
       if (!identity) return;
+      verifiedOnline = true;
     }
     game.s.username = identity.username;
+    if (!verifiedOnline) return;
     const source = await account!.sync(game.s).catch(() => null);
-    if (source === 'cloud') location.reload();
+    if (source === 'reload') {
+      location.reload();
+      return;
+    }
+    if (source !== 'local') {
+      ui.toast('Cloud sync is unavailable. Local play is safe; account uploads are paused.');
+      return;
+    }
     else {
-      const purchases = await purchasesReady;
-      const recovered = await account!.recoverPendingPurchases();
-      for (const { receipt, grant } of recovered) {
-        if (!game.s.appliedPurchases.includes(grant.transactionId) && grant.amount > 0) {
-          game.s.mentality += grant.amount;
-          game.s.appliedPurchases.push(grant.transactionId);
-          ui.toast(`Recovered purchase: +${fmt(grant.amount)} M`, 'gold');
-        }
-        game.save();
-        if (await account!.save(game.s)) removePendingPurchase(receipt);
-        await purchases.finish(receipt).catch(() => undefined);
-      }
+      await recoverAccountEntitlements(true);
       game.save(); void account!.save(game.s);
+      if (!account!.termsCurrent) await ui.promptTermsAcceptance();
     }
   })();
 } else {
@@ -136,9 +197,32 @@ if (API_URL) {
 }
 
 const syncScore = () => {
-  if (account?.signedIn) void account.save(game.s);
+  if (account?.signedIn && account.cloudReady) void account.save(game.s);
 };
 syncScore();
+
+const reconnectAccount = async () => {
+  if (!account?.signedIn) return;
+  try {
+    const identity = await account.verify();
+    if (!identity) return;
+    game.s.username = identity.username;
+    const source = await account.sync(game.s);
+    if (source === 'reload') {
+      location.reload();
+      return;
+    }
+    await recoverAccountEntitlements(true);
+    if (!account.termsCurrent) await ui.promptTermsAcceptance();
+  } catch {
+    // The cloud gate remains closed. Local play and account-scoped saves stay
+    // intact until a later online event succeeds.
+  }
+};
+window.addEventListener('online', () => void reconnectAccount());
+setInterval(() => {
+  if (account?.cloudReady) void recoverAccountEntitlements(false);
+}, 15_000);
 
 scene.setOpponent(game.opponent);
 scene.setShakeAmp(game.shakeAmp);
@@ -213,6 +297,7 @@ title.innerHTML = `
 document.body.appendChild(title);
 const tutorial = new FirstLaunchTutorial({
   closePanel: () => ui.close(),
+  eyeContactPoint: () => scene.eyeContactScreenPoint(),
   finish: () => { game.s.tutorialComplete = true; game.save(); },
 });
 if (visualAudit) (window as any).__tutorial = tutorial;
@@ -249,6 +334,7 @@ const onTap = (ev: Event) => {
   }
   sfx.preloadYelp();
   game.tap();
+  tutorial.recordSuccessfulTap();
   sfx.tap();
   ev.preventDefault();
 };
@@ -281,8 +367,12 @@ ui.onGarage = (open) => {
 const gPointers = new Map<number, { startX: number; startY: number; x: number; y: number }>();
 let gMoved = false;
 let gPinchDist = 0;
-const isUI = (t: EventTarget | null) =>
-  !!(t as HTMLElement)?.closest?.('.panel, .menu-row, button, .ad-overlay, .garage-exit-fixed');
+const isUI = (t: EventTarget | null) => {
+  const hit = (t as HTMLElement)?.closest?.('.panel, .menu-row, button, .ad-overlay, .garage-exit-fixed');
+  // A collapsed garage sheet is visually absent and must not leave an
+  // invisible gesture-blocking rectangle over the car.
+  return !!hit && !(hit.classList.contains('panel') && hit.classList.contains('collapsed'));
+};
 
 // Normal tap mode also supports drag-to-look. The initial press still counts as
 // a tap; movement turns the driver's head without switching modes.
@@ -309,7 +399,7 @@ window.addEventListener('pointermove', (ev) => {
   if (!scene.inGarage && tapPointer) {
     const dx = ev.clientX - tapPointer.startX, dy = ev.clientY - tapPointer.startY;
     tapPointer.x = ev.clientX; tapPointer.y = ev.clientY;
-    if (!tapPointer.moved && Math.hypot(dx, dy) < 8) return;
+    if (!tapPointer.moved && Math.hypot(dx, dy) < 3) return;
     if (!tapPointer.moved) scene.beginTapLook();
     tapPointer.moved = true;
     scene.tapLook(dx, dy);
@@ -344,6 +434,14 @@ const endPointer = (ev: PointerEvent) => {
   if (scene.inGarage && wasSingle && !gMoved) scene.garageTap(ev.clientX, ev.clientY);
   if (gPointers.size < 2) gPinchDist = 0;
 };
+const cancelPointer = (ev: PointerEvent) => {
+  // Cancellation is cleanup only. It must never award a tap or toggle the
+  // garage camera when Android interrupts a gesture.
+  tapPointers.delete(ev.pointerId);
+  gPointers.delete(ev.pointerId);
+  if (gPointers.size < 2) gPinchDist = 0;
+  if (gPointers.size === 0) gMoved = false;
+};
 scene.onGarageShop = () => ui.openGarageShop();
 
 // green bouncing arrow that hovers over the garage laptop to say "tap here"
@@ -366,7 +464,7 @@ function updateShopArrow() {
 }
 requestAnimationFrame(updateShopArrow);
 window.addEventListener('pointerup', endPointer);
-window.addEventListener('pointercancel', endPointer);
+window.addEventListener('pointercancel', cancelPointer);
 // mouse wheel = zoom on desktop
 window.addEventListener('wheel', (ev) => {
   if (scene.inGarage && !isUI(ev.target)) scene.garageZoom(ev.deltaY * 0.003);
@@ -384,7 +482,9 @@ let uiAccum = 0;
 function frame(now: number) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
-  game.tick(dt);
+    // A second idle defeat while the green-light drive is still staging would
+    // replace its callback and desynchronize the opponent state from the scene.
+    if (!transitioning) game.tick(dt);
   scene.render(dt);
   uiAccum += dt;
   if (uiAccum > 0.2) {
@@ -401,4 +501,17 @@ ui.refresh();
 // autosave
 setInterval(() => { game.save(); syncScore(); }, 5000);
 window.addEventListener('beforeunload', () => { game.save(); syncScore(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) { game.save(); syncScore(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    game.save();
+    syncScore();
+    return;
+  }
+  // requestAnimationFrame is suspended in the background and its first delta
+  // is intentionally capped. Apply the elapsed window here exactly once.
+  game.applyOffline();
+  game.save();
+  syncScore();
+  if (navigator.onLine) void recoverAccountEntitlements(false);
+  ui.refresh();
+});

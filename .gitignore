@@ -2,6 +2,8 @@ node_modules/
 dist/
 *.local
 .env
+.env.*
+!.env.example
 android/private-release.properties
 .DS_Store
 .higgsfield-token.json
@@ -18,6 +20,7 @@ tools/blender/
 android/.idea/
 /DISCIPLINE-*.apk
 /DISCIPLINE-*.apk.idsig
+/artifacts/
 # Generated QA captures stay local; previously tracked release-history images
 # remain tracked, but new screenshots cannot accidentally bloat a source push.
 devlog/**/*.png

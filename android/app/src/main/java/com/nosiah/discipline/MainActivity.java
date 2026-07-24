@@ -4,18 +4,21 @@ import android.os.Bundle;
 import android.content.pm.ApplicationInfo;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
+import androidx.core.splashscreen.SplashScreen;
 import com.getcapacitor.BridgeActivity;
-import com.openforge.capacitorgameconnect.CapacitorGameConnectPlugin;
 
 public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Required by the AndroidX splash-screen compat API. The same approved
+        // launcher artwork and background are used on Android 7 through 12+.
+        SplashScreen.installSplashScreen(this);
+
         // Expose the debug APK's WebView to local visual-regression tooling.
         // Release builds remain non-debuggable and do not expose this socket.
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             WebView.setWebContentsDebuggingEnabled(true);
         }
-        registerPlugin(CapacitorGameConnectPlugin.class);
         super.onCreate(savedInstanceState);
 
         // A hardware-keyboard Escape/Back event used to invoke Android's

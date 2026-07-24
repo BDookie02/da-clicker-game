@@ -25,6 +25,15 @@ const gradle = parseEnv(path.join(root, 'android', 'private-release.properties')
 const keystore = parseEnv(path.join(root, 'android', 'keystore.properties'));
 const localFailures = [];
 const productionFailures = [];
+const GOOGLE_SAMPLE_ADMOB_PUBLISHER = '3940256099942544';
+
+function admobPublisher(value) {
+  return String(value || '').match(/^ca-app-pub-(\d+)[~/]\d+$/)?.[1] || '';
+}
+
+function isGoogleSampleAdMobId(value) {
+  return admobPublisher(value) === GOOGLE_SAMPLE_ADMOB_PUBLISHER;
+}
 
 async function requirePng(relativePath, width, height, label, maxBytes = Infinity) {
   const file = path.join(root, relativePath);
@@ -83,6 +92,21 @@ if (!workerSource.includes("url.pathname === '/v1/admob/reward'") || !workerSour
 const androidConfig = `${fs.readFileSync(path.join(root, 'android', 'app', 'build.gradle'), 'utf8')}\n${fs.readFileSync(path.join(root, 'android', 'variables.gradle'), 'utf8')}`;
 if (!/minSdkVersion\s*=\s*24\b/.test(androidConfig)) localFailures.push('Android minSdkVersion must remain 24 (Android 7)');
 if (!/targetSdkVersion\s*=\s*36\b/.test(androidConfig)) localFailures.push('Android targetSdkVersion must be 36');
+const mainActivity = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'java', 'com', 'nosiah', 'discipline', 'MainActivity.java'), 'utf8');
+if (/registerPlugin\s*\(\s*CapacitorGameConnectPlugin/.test(mainActivity))
+  localFailures.push('MainActivity must not manually register the auto-discovered Play Games plugin');
+if (!/SplashScreen\.installSplashScreen\(this\)/.test(mainActivity))
+  localFailures.push('MainActivity is missing AndroidX legacy splash installation');
+const splashStyle = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'res', 'values', 'styles.xml'), 'utf8');
+for (const requiredSplashEntry of ['windowSplashScreenBackground', 'windowSplashScreenAnimatedIcon', 'postSplashScreenTheme']) {
+  if (!splashStyle.includes(requiredSplashEntry))
+    localFailures.push(`Android splash theme is missing ${requiredSplashEntry}`);
+}
+if (!splashStyle.includes('@mipmap/ic_launcher'))
+  localFailures.push('Android splash must use the approved launcher icon');
+const wrapperProperties = parseEnv(path.join(root, 'android', 'gradle', 'wrapper', 'gradle-wrapper.properties'));
+if (wrapperProperties.distributionSha256Sum !== 'ed1a8d686605fd7c23bdf62c7fc7add1c5b23b2bbc3721e661934ef4a4911d7c')
+  localFailures.push('Gradle 8.14.3 distribution SHA-256 is missing or does not match Gradle’s official checksum');
 
 if (!localOnly) {
   const required = [
@@ -93,12 +117,24 @@ if (!localOnly) {
   for (const [key, pattern, label] of required) {
     if (!pattern.test(values[key] || '')) productionFailures.push(`${key}: missing/invalid ${label}`);
   }
+  if (isGoogleSampleAdMobId(values.VITE_ADMOB_ANDROID_REWARDED_ID))
+    productionFailures.push('VITE_ADMOB_ANDROID_REWARDED_ID must not use Google’s sample rewarded-ad ID');
   if (String(values.VITE_ADMOB_TESTING).toLowerCase() !== 'false')
     productionFailures.push('VITE_ADMOB_TESTING must be false');
   if (!/^ca-app-pub-\d+~\d+$/.test(gradle.ADMOB_ANDROID_APP_ID || ''))
     productionFailures.push('android/private-release.properties: missing production ADMOB_ANDROID_APP_ID');
+  else if (isGoogleSampleAdMobId(gradle.ADMOB_ANDROID_APP_ID))
+    productionFailures.push('android/private-release.properties: ADMOB_ANDROID_APP_ID must not use Google’s sample app ID');
+  const appPublisher = admobPublisher(gradle.ADMOB_ANDROID_APP_ID);
+  const rewardedPublisher = admobPublisher(values.VITE_ADMOB_ANDROID_REWARDED_ID);
+  if (appPublisher && rewardedPublisher && appPublisher !== rewardedPublisher)
+    productionFailures.push('AdMob app and rewarded-ad IDs must belong to the same publisher account');
   if (!/^\d{6,}$/.test(gradle.PLAY_GAMES_APP_ID || '') || /^0+$/.test(gradle.PLAY_GAMES_APP_ID || ''))
     productionFailures.push('android/private-release.properties: missing numeric PLAY_GAMES_APP_ID');
+  if (!/^[1-9]\d*$/.test(gradle.VERSION_CODE || ''))
+    productionFailures.push('android/private-release.properties: VERSION_CODE must be an unused positive Play version code');
+  if (!/^\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/.test(gradle.VERSION_NAME || ''))
+    productionFailures.push('android/private-release.properties: missing/invalid VERSION_NAME');
   const signingFields = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'];
   if (signingFields.some((key) => !keystore[key] || /REPLACE/i.test(keystore[key]))) {
     productionFailures.push('android/keystore.properties: missing production upload-key configuration');
@@ -107,6 +143,10 @@ if (!localOnly) {
   }
   const wrangler = fs.readFileSync(path.join(root, 'wrangler.toml'), 'utf8');
   if (wrangler.includes('PASTE_ID_FROM_')) productionFailures.push('wrangler.toml: D1 database_id is still a placeholder');
+  const clientAdUnit = String(values.VITE_ADMOB_ANDROID_REWARDED_ID || '').match(/\/(\d+)$/)?.[1] || '';
+  const serverAdUnit = wrangler.match(/^\s*ADMOB_REWARDED_AD_UNIT_ID\s*=\s*"(\d+)"\s*$/m)?.[1] || '';
+  if (!serverAdUnit || serverAdUnit !== clientAdUnit)
+    productionFailures.push('wrangler.toml: ADMOB_REWARDED_AD_UNIT_ID must match the production Android rewarded unit');
 }
 
 const failures = [...localFailures, ...productionFailures];

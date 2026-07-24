@@ -4,9 +4,8 @@
 //
 // Score sync: on device the provider drives @openforge/capacitor-game-connect
 // to submit taps to Game Center (iOS) / Google Play Games (Android) and can
-// open the official platform overlay. The in-game list itself uses a seeded
-// placeholder population until real global data is wired at publish (the
-// platform services or a tiny score API can back it — same render path).
+// open the official platform overlay. The in-game list uses only authenticated
+// Discipline-account rows from the backend; it never invents competitors.
 //
 // Publish-time setup:
 //  - App Store Connect -> Game Center -> create the taps leaderboard -> ios id
@@ -86,22 +85,33 @@ export async function initLeaderboards(): Promise<LeaderboardProvider> {
 
 // ---- worldwide list ---------------------------------------------------------
 
-export interface LbEntry { rank: number; name: string; taps: number; you: boolean; }
-
-/** Submit the player's raw tap total to the real backend (fire-and-forget). */
-export function submitScoreRemote(apiUrl: string, name: string, taps: number) {
-  fetch(`${apiUrl}/score`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, taps: Math.floor(taps) }),
-  }).catch(() => { /* offline — next defeat resubmits */ });
+export interface LbEntry {
+  rank: number;
+  name: string;
+  taps: number;
+  you: boolean;
+  playerRef?: string;
+}
+export interface BlockedEntry { name: string; playerRef: string }
+export interface BoardResult {
+  entries: LbEntry[];
+  blocked: BlockedEntry[];
+  termsRequired: boolean;
+  unavailable?: boolean;
 }
 
 /** Fetch the real worldwide board: top 10 + the caller's neighborhood. */
-export async function fetchBoardRemote(apiUrl: string, name: string): Promise<LbEntry[] | null> {
+export async function fetchBoardRemote(apiUrl: string, name: string): Promise<BoardResult | null> {
   try {
     const token = localStorage.getItem('discipline-account-token-v1');
     const res = await fetch(`${apiUrl}/v1/board`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (res.status === 428) return { entries: [], blocked: [], termsRequired: true };
+    if (res.status === 503) return {
+      entries: [],
+      blocked: [],
+      termsRequired: false,
+      unavailable: true,
+    };
     if (!res.ok) return null;
     const data = await res.json();
     const rows: LbEntry[] = data.top ?? [];
@@ -110,7 +120,14 @@ export async function fetchBoardRemote(apiUrl: string, name: string): Promise<Lb
     if (data.me && !entries.some(e => e.you)) {
       entries.push({ rank: data.me.rank, name: data.me.name, taps: data.me.taps, you: true });
     }
-    return entries;
+    const blocked: BlockedEntry[] = Array.isArray(data.blocked)
+      ? data.blocked.filter((entry: unknown): entry is BlockedEntry => {
+        if (!entry || typeof entry !== 'object') return false;
+        const candidate = entry as Record<string, unknown>;
+        return typeof candidate.name === 'string' && typeof candidate.playerRef === 'string';
+      })
+      : [];
+    return { entries, blocked, termsRequired: false };
   } catch { return null; }
 }
 

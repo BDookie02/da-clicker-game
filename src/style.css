@@ -16,6 +16,7 @@ html, body {
 #game-canvas {
   touch-action: none;
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   width: 100%;
   height: 100%;
@@ -24,6 +25,7 @@ html, body {
 
 #app {
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   /* The transparent HUD covers the canvas. Android otherwise treats a drag
      that starts between controls as a browser gesture and cancels it after a
@@ -54,6 +56,7 @@ body.film-noir .ad-overlay { filter: grayscale(1); }
 #app::after {
   content: '';
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px);
@@ -62,9 +65,11 @@ body.film-noir .ad-overlay { filter: grayscale(1); }
 
 .hud-top {
   position: absolute;
+  top: 8px;
   top: max(8px, env(safe-area-inset-top));
   left: 8px;
   right: 8px;
+  display: flex;
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.35fr) minmax(0, .8fr) minmax(0, .8fr) auto auto;
   gap: 6px;
@@ -93,15 +98,19 @@ body.film-noir .ad-overlay { filter: grayscale(1); }
   cursor: pointer;
   color: #e8e8f0;
 }
-.stat .k { display: block; font-size: clamp(10px, 2.6vw, 12px); color: #a0a0c8; letter-spacing: 1px; }
-.stat .v { display: block; font-size: clamp(16px, 4.4vw, 20px); text-shadow: 2px 2px 0 #000; }
+.stat .k { display: block; font-size: 10px; font-size: clamp(10px, 2.6vw, 12px); color: #a0a0c8; letter-spacing: 1px; }
+.stat .v { display: block; font-size: 16px; font-size: clamp(16px, 4.4vw, 20px); text-shadow: 2px 2px 0 #000; }
 .stat .k, .stat .v { white-space: nowrap; overflow: hidden; }
 .stat .v.gold { color: #f2d24a; }
 
 .ad-loading {
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   display: grid;
   place-items: center;
   background: rgba(5, 5, 12, 0.72);
@@ -141,11 +150,13 @@ body.film-noir .ad-overlay { filter: grayscale(1); }
   letter-spacing: 1px;
 }
 .dash-slot-grid {
+  display: flex;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 3px;
   margin-bottom: 8px;
 }
+.dash-slot-grid > * { flex: 1 1 0; }
 .dash-slot {
   min-width: 0;
   padding: 5px 1px;
@@ -164,8 +175,8 @@ body.film-noir .ad-overlay { filter: grayscale(1); }
 }
 .cheat-vault { margin-top: 14px; border: 1px solid #303044; background: #0d0d16; }
 .cheat-vault summary { padding: 10px; color: #68687f; font-size: 10px; letter-spacing: 1px; cursor: pointer; }
-.cheat-entry { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 0 9px 10px; }
-.cheat-entry input { min-width: 0; padding: 9px; border: 1px solid #3a3a55; background: #08080e; color: #ffd890; font: inherit; }
+.cheat-entry { display: flex; display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 0 9px 10px; }
+.cheat-entry input { flex: 1 1 auto; min-width: 0; padding: 9px; border: 1px solid #3a3a55; background: #08080e; color: #ffd890; font: inherit; }
 .cheat-entry button { padding: 8px; }
 
 .quick-buy {
@@ -219,8 +230,8 @@ body.in-garage .quick-buy { display: none; }
   z-index: 10;
   text-align: center;
 }
-.opp-name { font-size: clamp(15px, 4vw, 19px); letter-spacing: 1px; text-shadow: 2px 2px 0 #000; }
-.opp-blurb { font-size: clamp(12px, 3.2vw, 14px); color: #b4b4d8; margin-top: 4px; text-shadow: 1px 1px 0 #000; line-height: 1.35; }
+.opp-name { font-size: 15px; font-size: clamp(15px, 4vw, 19px); letter-spacing: 1px; text-shadow: 2px 2px 0 #000; }
+.opp-blurb { font-size: 12px; font-size: clamp(12px, 3.2vw, 14px); color: #b4b4d8; margin-top: 4px; text-shadow: 1px 1px 0 #000; line-height: 1.35; }
 .bar {
   position: relative;
   height: 14px;
@@ -238,9 +249,11 @@ body.in-garage .quick-buy { display: none; }
 
 .menu-row {
   position: absolute;
+  bottom: 10px;
   bottom: max(10px, env(safe-area-inset-bottom));
   left: 8px;
   right: 8px;
+  display: flex;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 5px;
@@ -252,7 +265,9 @@ body.in-garage .quick-buy { display: none; }
 /* always-reachable garage exit — fixed, above everything */
 .garage-exit-fixed {
   position: fixed;
+  top: 10px;
   top: max(10px, env(safe-area-inset-top));
+  left: 10px;
   left: max(10px, env(safe-area-inset-left));
   z-index: 100;
   font-family: inherit;
@@ -279,7 +294,26 @@ body.in-garage .quick-buy { display: none; }
 }
 @keyframes arrowbob { from { margin-top: -8px; } to { margin-top: 8px; } }
 /* M store */
-.ad-box.mshop { max-height: 80vh; overflow-y: auto; text-align: left; width: min(94vw, 420px); }
+.ad-box.mshop {
+  /* Chrome 91 on the Android 7/12 test devices predates dynamic viewport
+     units, so keep the vh declaration as the operative fallback. */
+  max-height: 80vh;
+  max-height: min(80vh, calc(100dvh - 12px));
+  overflow-y: auto;
+  text-align: left;
+  width: 94vw;
+  max-width: 420px;
+  width: min(94vw, 420px);
+}
+.ad-box.mshop .panel-head {
+  position: sticky;
+  top: -12px;
+  z-index: 4;
+  margin: -12px -12px 8px;
+  padding: 12px;
+  background: #14141f;
+  border-bottom: 2px solid #4a4a70;
+}
 .mtag { color: #4ae66a; font-size: 9px; border: 1px solid #4ae66a; padding: 1px 4px; letter-spacing: 1px; }
 .mshop-ad { border-bottom: 2px solid #4a4a70; }
 .menu-row button, .panel button, .ad-skip {
@@ -316,7 +350,9 @@ button {
 .menu-row button.hot { border-color: #e66a2a; color: #ffd890; }
 /* Fixed-row grid cells keep every label on one line and shrink it to fit. */
 .menu-row button {
+  flex: 1 1 0;
   min-width: 0;
+  font-size: 9px;
   font-size: clamp(9px, 2.6vw, 12px);
   padding: 8px 1px;
   line-height: 1.05;
@@ -355,6 +391,7 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  font-size: 16px;
   font-size: clamp(16px, 4.2vw, 19px);
   letter-spacing: 2px;
   color: #ffd890;
@@ -412,9 +449,19 @@ body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px !important; }
 .panel-head .x { flex: 0 0 auto; padding: 2px 10px; margin-left: 8px; }
 
 /* garage: shorter bottom sheet so the 3D car shows above it */
-.panel-garage { top: 42vh; max-height: none; bottom: max(10px, env(safe-area-inset-bottom)); }
-.panel-garage.collapsed { max-height: none; background: transparent; border: none; padding: 0; }
+.panel-garage { top: 42vh; max-height: none; bottom: 10px; bottom: max(10px, env(safe-area-inset-bottom)); }
+.panel-garage.collapsed {
+  max-height: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  pointer-events: none;
+}
+.panel-garage.collapsed .garage-bar { pointer-events: none; }
+.panel-garage.collapsed .garage-bar button { pointer-events: auto; }
 .garage-head {
+  display: flex;
+  justify-content: space-between;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -427,11 +474,11 @@ body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px !important; }
   border: 2px solid #4a4a70; border-bottom-width: 3px; padding: 6px 12px; font-size: 11px; cursor: pointer;
 }
 .garage-bar {
-  position: absolute; left: 8px; right: 8px; bottom: max(10px, env(safe-area-inset-bottom));
+  position: absolute; left: 8px; right: 8px; bottom: 10px; bottom: max(10px, env(safe-area-inset-bottom));
   display: flex; gap: 8px; justify-content: space-between;
 }
 .garage-bar button { flex: 1; padding: 12px 8px; }
-.panel-note { font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-bottom: 8px; line-height: 1.55; }
+.panel-note { font-size: 11px; font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-bottom: 8px; line-height: 1.55; }
 .row {
   display: flex;
   align-items: center;
@@ -440,23 +487,34 @@ body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px !important; }
   border-bottom: 1px solid #22223a;
 }
 .row-txt { flex: 1; min-width: 0; }
-.row-name { font-size: clamp(13px, 3.4vw, 15px); }
-.row-desc { font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-top: 3px; line-height: 1.4; }
-.row button { flex: 0 0 100px; padding: 10px 4px; font-size: clamp(11px, 3vw, 13px); }
+.row-name { font-size: 13px; font-size: clamp(13px, 3.4vw, 15px); }
+.row-desc { font-size: 11px; font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-top: 3px; line-height: 1.4; }
+.row button { flex: 0 0 100px; padding: 10px 4px; font-size: 11px; font-size: clamp(11px, 3vw, 13px); }
 .row button:disabled { opacity: 0.4; cursor: default; }
 
 /* worldwide leaderboard list */
 .lb-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 6px 8px;
   border-bottom: 1px solid #22223a;
   font-size: 12px;
 }
-.lb-rank { flex: 0 0 44px; color: #8a8ab0; }
-.lb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lb-score { flex: 0 0 auto; color: #e6c84a; }
+.lb-rank { color: #8a8ab0; white-space: nowrap; }
+.lb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-score { color: #e6c84a; white-space: nowrap; }
+.lb-actions { display: flex; flex-wrap: nowrap; gap: 3px; }
+.panel button.lb-action {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 6px 4px;
+  border-width: 1px;
+  border-bottom-width: 2px;
+  font-size: 8px;
+  white-space: nowrap;
+}
 .lb-you {
   background: #2a2440;
   border: 2px solid #e6c84a;
@@ -464,6 +522,25 @@ body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px !important; }
 }
 .lb-you .lb-name, .lb-you .lb-rank { color: #ffd890; }
 .lb-gap { text-align: center; color: #4a4a70; padding: 2px 0; font-size: 12px; }
+.lb-blocked-title {
+  margin-top: 12px;
+  color: #8a8ab0;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+.lb-blocked-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #22223a;
+  color: #8a8ab0;
+  font-size: 11px;
+}
+.lb-blocked-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-blocked-row > .lb-action { flex: 0 0 auto; }
 
 .toasts {
   position: absolute;
@@ -481,6 +558,7 @@ body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px !important; }
   background: rgba(8, 8, 18, 0.9);
   border: 2px solid #4a4a70;
   padding: 8px 16px;
+  font-size: 13px;
   font-size: clamp(13px, 3.4vw, 15px);
   opacity: 0;
   transform: translateY(-8px);
@@ -495,6 +573,7 @@ body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px !important; }
 
 .fade {
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   background: #fff;
   opacity: 0;
@@ -515,6 +594,7 @@ body.in-garage .boost-pill { display: none; }
 /* title card */
 .title-screen {
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   z-index: 70;
   background: #06060e;
@@ -528,6 +608,7 @@ body.in-garage .boost-pill { display: none; }
 }
 .title-screen.gone { opacity: 0; pointer-events: none; }
 .title-word {
+  font-size: 34px;
   font-size: clamp(34px, 9vw, 64px);
   letter-spacing: 4px;
   color: #f2f2f2;
@@ -535,10 +616,12 @@ body.in-garage .boost-pill { display: none; }
 }
 .title-sub { font-size: 12px; color: #8a8ab0; letter-spacing: 3px; }
 .setting {
-  display: grid; gap: 7px; padding: 11px 12px; margin: 7px 0;
+  display: block; display: grid; gap: 7px; padding: 11px 12px; margin: 7px 0;
   background: #171722; border: 1px solid #39394f; color: #eeeeef;
 }
 .setting label {
+  display: flex;
+  justify-content: space-between;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -556,8 +639,9 @@ body.in-garage .boost-pill { display: none; }
 .setting-name { overflow: hidden; }
 .setting-value { justify-self: end; }
 .setting input[type="range"] { width: 100%; accent-color: #e6c84a; }
-.text-size-choices { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.text-size-choices { display: flex; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
 .text-size-choices button {
+  flex: 1 1 0;
   min-width: 0; padding: 9px 2px; border: 1px solid #4a4a70;
   background: #0d0d16; color: #b0b0d0; font-family: inherit; font-weight: bold;
 }
@@ -570,7 +654,7 @@ body.in-garage .boost-pill { display: none; }
 
 /* First-launch guided tour. The spotlight is visual; capture-phase input
    gating in tutorial.ts makes only the highlighted control interactive. */
-.tutorial-layer { position: fixed; inset: 0; z-index: 2000; pointer-events: none; }
+.tutorial-layer { position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 2000; pointer-events: none; }
 .tutorial-skip {
   pointer-events: auto; position: fixed; top: var(--hud-bottom); left: 12px;
   z-index: 3; padding: 10px 12px; border: 2px solid #e66a2a; background: #11111c;
@@ -586,10 +670,10 @@ body.in-garage .boost-pill { display: none; }
   animation: arrowbob .55s ease-in-out infinite alternate;
 }
 .tutorial-bubble {
-  pointer-events: auto; position: fixed; left: 18px; right: 18px; bottom: max(22px, env(safe-area-inset-bottom));
+  pointer-events: auto; position: fixed; left: 18px; right: 18px; bottom: 22px; bottom: max(22px, env(safe-area-inset-bottom));
   padding: 14px; border: 2px solid #e66a2a; background: rgba(10,10,20,.98); color: #eee;
   box-shadow: 5px 5px 0 #000; text-align: left; overflow-y: auto;
-  max-height: min(55vh, calc(100vh - 92px));
+  max-height: 55vh; max-height: min(55vh, calc(100vh - 92px));
 }
 .tutorial-step { color: #ffd24a; font-size: 10px; letter-spacing: 2px; margin-bottom: 8px; }
 .tutorial-copy { font-size: 13px; line-height: 1.55; }
@@ -602,11 +686,31 @@ body.in-garage .boost-pill { display: none; }
 .tutorial-active .hud-top .stat.eye,
 .tutorial-active:not(.tutorial-target-settings) .hud-top .stat.settings { visibility: hidden; }
 .reset-view,
-.ad-privacy {
+.ad-privacy,
+.accept-terms,
+.privacy-policy {
   display: block;
   width: 100%;
   margin: 10px 0 0;
 }
+.privacy-policy {
+  padding: 10px 6px;
+  border: 2px solid #4a4a70;
+  border-bottom-width: 4px;
+  background: #1c1c2c;
+  color: #e8e8f0;
+  font: bold 10px 'Courier New', monospace;
+  text-align: center;
+  text-decoration: none;
+}
+.privacy-policy[disabled] { opacity: .42; }
+.legal-controls {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  width: 100%;
+}
+.legal-controls .privacy-policy { flex: 1; min-width: 0; }
 
 .title-tap {
   margin-top: 34px;
@@ -620,6 +724,7 @@ body.in-garage .boost-pill { display: none; }
 /* fake rewarded-ad overlay */
 .ad-overlay {
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   background: rgba(0, 0, 0, 0.92);
   /* Blocking flows (account, purchases, rewarded ads) must always sit above
@@ -630,9 +735,14 @@ body.in-garage .boost-pill { display: none; }
   justify-content: center;
 }
 .ad-box {
+  box-sizing: border-box;
+  width: 90vw;
+  max-width: 380px;
   width: min(90vw, 380px);
-  max-height: calc(100vh - 24px);
+  max-height: calc(100vh - 12px);
+  max-height: calc(100dvh - 12px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: #14141f;
   border: 2px solid #4a4a70;
   padding: 12px;
@@ -666,9 +776,55 @@ body.in-garage .boost-pill { display: none; }
 }
 .name-input:focus { border-color: #e6c84a; }
 .account-box .name-input { margin-top: 8px; text-transform: none; }
+.terms-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0;
+  color: #b0b0d0;
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: left;
+}
+.terms-check input { flex: 0 0 auto; margin-top: 2px; }
+.report-label {
+  display: block;
+  margin-top: 10px;
+  color: #a0a0c8;
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-align: left;
+}
+.report-reason,
+.report-details {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 5px;
+  padding: 9px 7px;
+  border: 2px solid #4a4a70;
+  background: #0a0a12;
+  color: #e8e8f0;
+  font: bold 11px 'Courier New', monospace;
+}
+.report-details { resize: vertical; min-height: 68px; }
 .name-status { font-size: 10px; color: #e66a2a; min-height: 16px; margin: 6px 0; }
 .name-actions { display: flex; flex-wrap: nowrap; gap: 6px; }
 .name-actions button { flex: 1; min-width: 0; padding: 10px 6px; font-size: 11px; }
+.report-box .name-actions {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  margin: 0 -4px -4px;
+  padding: 8px 4px 4px;
+  background: linear-gradient(to bottom, rgba(20, 20, 31, 0), #14141f 7px);
+}
+@media (max-height: 360px) {
+  .report-box { padding: 8px; }
+  .report-box .name-copy { margin: 5px 0; }
+  .report-box .report-label { margin-top: 6px; }
+  .report-box .report-details { min-height: 52px; }
+  .report-box .name-status { min-height: 10px; margin: 3px 0; }
+}
 .account-delete-box { border-color: #d94b4b; }
 .account-delete-box .ad-label { color: #ff8b8b; }
 .account-delete-box .delete-final { border-color: #d94b4b; background: #3a1118; color: #ffb0b0; }
@@ -707,6 +863,12 @@ body.in-garage .boost-pill { display: none; }
   body { --hud-clearance: 72px; }
   body[data-text-tier="2"] { --nav-clearance: 104px; }
   body[data-text-tier="3"] { --nav-clearance: 116px; }
+  /* The utility-button lane is empty throughout the tour except when the
+     SETTINGS gear itself is highlighted. Reuse that space for SKIP so large
+     explanatory callouts never have to cross it on short displays. */
+  body.tutorial-active:not(.tutorial-target-settings) .tutorial-skip {
+    top: 8px; left: auto; right: 8px;
+  }
   .panel:not(.panel-garage) {
     top: calc(var(--hud-bottom) + 10px);
     bottom: calc(var(--nav-height) + 10px);
@@ -720,6 +882,10 @@ body.in-garage .boost-pill { display: none; }
    follows the selected accessibility tier, and the required action remains
    fully visible without an internal scroll. */
 @media (orientation: landscape) and (max-height: 320px) {
+  /* Quick Buy is a redundant shortcut to UPGRADES/CREW. On this ultra-short
+     layout it cannot coexist with four-tier accessible opponent copy without
+     obscuring it, so preserve the required HUD and one-row navigation. */
+  .quick-buy { display: none !important; }
   .tutorial-skip { padding: 5px 8px; font-size: 9px; }
   .tutorial-bubble { padding: 6px 8px; }
   .tutorial-step { margin-bottom: 4px; }
@@ -745,6 +911,13 @@ body.in-garage .boost-pill { display: none; }
     width: 82px;
     padding: 6px 3px;
   }
+  /* Preserve the selected text tier while tightening only tutorial chrome.
+     This keeps the complete copy and action visible between SKIP and the
+     single-row navigation on Android 7-era narrow screens. */
+  .tutorial-bubble { padding: 8px 10px; }
+  .tutorial-step { margin-bottom: 4px; }
+  .tutorial-copy { line-height: 1.3; }
+  .tutorial-next { margin-top: 6px; padding: 6px; }
 }
 
 @media (max-width: 480px) {

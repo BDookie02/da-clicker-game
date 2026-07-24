@@ -33,11 +33,12 @@ export interface SaveData {
   adsWatched: number;
   infiniteCurrency: boolean;
   appliedPurchases: string[];          // crash-safe receipt grants
+  appliedAdRewards: string[];          // crash-safe, server-verified ad grants
   textSizeTier: number;                // accessibility: 0=current size, 1-3 larger
   tutorialComplete: boolean;           // first-launch walkthrough completed or skipped
 }
 
-const fresh = (): SaveData => ({
+export const createFreshSave = (): SaveData => ({
   economyVersion: 1,
   username: null,
   prestiges: 0,
@@ -58,6 +59,7 @@ const fresh = (): SaveData => ({
   adsWatched: 0,
   infiniteCurrency: false,
   appliedPurchases: [],
+  appliedAdRewards: [],
   textSizeTier: 0,
   tutorialComplete: false,
 });
@@ -321,13 +323,16 @@ export class Game {
         // M. The game was still unreleased and purchases were inactive, so
         // clear that test balance once. From v1 onward only the M shop can add M.
         if (!parsed.economyVersion) parsed.mentality = 0;
-        const loaded = { ...fresh(), ...parsed, economyVersion: 1 } as SaveData;
+        const loaded = { ...createFreshSave(), ...parsed, economyVersion: 1 } as SaveData;
         loaded.textSizeTier = Math.max(0, Math.min(3, Math.trunc(Number(parsed.textSizeTier) || 0)));
         // Existing players must not be forced into a first-launch tutorial
         // added after their save was created.
         loaded.tutorialComplete = parsed.tutorialComplete === undefined
           ? true : Boolean(parsed.tutorialComplete);
         loaded.appliedPurchases = Array.isArray(parsed.appliedPurchases) ? parsed.appliedPurchases : [];
+        loaded.appliedAdRewards = Array.isArray(parsed.appliedAdRewards)
+          ? parsed.appliedAdRewards.filter((nonce: unknown) => typeof nonce === 'string').slice(-500)
+          : [];
         // The old build exposed fuzzy dice as a dashboard ornament.  Keep
         // existing owners, but migrate that purchase to the real mirror-hung
         // item so dice can never remain mounted on the dashboard.
@@ -345,7 +350,7 @@ export class Game {
         return loaded;
       }
     } catch { /* corrupted save -> start fresh */ }
-    return fresh();
+    return createFreshSave();
   }
 
   save() {
@@ -353,13 +358,16 @@ export class Game {
     localStorage.setItem(SAVE_KEY, JSON.stringify(this.s));
   }
 
-  private applyOffline() {
-    const away = Math.min((Date.now() - this.s.lastSeen) / 1000, 8 * 3600); // cap 8h
+  applyOffline(now = Date.now()) {
+    const away = Math.min(Math.max(0, (now - this.s.lastSeen) / 1000), 8 * 3600); // cap 8h
+    // Advance the anchor even when the window is below the award threshold.
+    // Repeated resume/visibility events can therefore never double-collect.
+    this.s.lastSeen = now;
     if (away > 30) {
       let rps = 0;
       for (const c of CREW) rps += (this.s.crewCounts[c.id] ?? 0) * c.tapsPerSec;
       const rate = this.s.labOwned?.includes('lab_offline') ? 0.8 : 0.5;
-      const gain = Math.round(rps * away * rate);
+      const gain = Math.round(rps * this.routeMult * away * rate);
       if (gain > 0) {
         this.s.respect += gain;
         this.s.opponentProgress += gain;

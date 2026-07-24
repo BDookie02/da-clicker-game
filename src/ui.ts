@@ -1,7 +1,7 @@
 import { BOOSTERS, COSMETICS, CREW, LAB, UPGRADES, type BoosterDef } from './config';
 import { fmt, PRESTIGE_STEP, type Game } from './state';
 import { music, sfx } from './audio';
-import { fetchBoardRemote, getWorldList, type LbEntry, type LeaderboardProvider } from './leaderboard';
+import { fetchBoardRemote, getWorldList, type BoardResult, type LeaderboardProvider } from './leaderboard';
 import { API_URL } from './config';
 import { RENAME_COST, validateUsername, type UsernameService } from './username';
 import type { AccountService } from './account';
@@ -9,7 +9,7 @@ import type { AccountService } from './account';
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
 import { AD_CONFIG, PlaceholderAdProvider, showAdPrivacyOptions, withMusicPause, type AdProvider, type AdResult } from './ads';
-import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, queuePendingPurchase, removePendingPurchase, type PurchaseProvider } from './purchases';
+import { AD_M_REWARD, M_PACKS, UnavailablePurchases, queuePendingPurchase, removePendingPurchase, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -22,14 +22,17 @@ export class UI {
   onEyeReset?: () => void;
   root: HTMLElement;
   ads: AdProvider = withMusicPause(new PlaceholderAdProvider());
-  purchases: PurchaseProvider = new PlaceholderPurchases();
+  purchases: PurchaseProvider = new UnavailablePurchases();
   account: AccountService | null = null;
   private panel: HTMLElement | null = null;
   private bars: Record<string, HTMLElement> = {};
   private fade: HTMLElement;
   private openTab: string | null = null;
   private prestigeArmed = false;
-  private remoteBoard: LbEntry[] | null = null;
+  private remoteBoard: BoardResult | null = null;
+  private remoteBoardLoading = false;
+  private remoteBoardRetryAt = 0;
+  private termsPrompt: Promise<boolean> | null = null;
   private garageSheetOpen = true; // cosmetics list visible over the 3D garage
   private adInProgress = false;
   private lastAdStartedAt = 0;
@@ -38,6 +41,7 @@ export class UI {
   private readonly fittedFontSizes = new Map<HTMLElement, string>();
   private readonly textScales = [1, 1.15, 1.3, 1.45] as const;
   private readonly layoutObserver: ResizeObserver;
+  private lastPanelRenderAt = 0;
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
@@ -134,11 +138,15 @@ export class UI {
   }
 
   private scaleTextTree(root: HTMLElement) {
+    this.pruneTextCaches();
     const scale = this.textScales[this.game.s.textSizeTier] ?? 1;
     const elements = root === document.body
       ? [root, ...root.querySelectorAll<HTMLElement>('*')]
       : [root, ...root.querySelectorAll<HTMLElement>('*')];
     for (const element of elements) {
+      // MutationObserver can report both a newly inserted panel and its
+      // descendants. Never multiply a font that this tier already scaled.
+      if (this.scaledFontElements.has(element)) continue;
       // Scale each actual text run once. Scaling structural parents and then
       // their descendants compounded inherited sizes (1.45x became 2.10x).
       // If a text-owning ancestor already scales this run, descendants inherit.
@@ -157,6 +165,15 @@ export class UI {
       if (!Number.isFinite(base) || base <= 0) continue;
       element.style.fontSize = `${Math.round(base * scale * 100) / 100}px`;
       this.scaledFontElements.add(element);
+    }
+  }
+
+  private pruneTextCaches() {
+    for (const element of this.scaledFontElements) {
+      if (!element.isConnected) this.scaledFontElements.delete(element);
+    }
+    for (const element of this.fittedFontSizes.keys()) {
+      if (!element.isConnected) this.fittedFontSizes.delete(element);
     }
   }
 
@@ -183,7 +200,8 @@ export class UI {
    * between words. Type shrinks only when an unbroken word would cross its
    * visible container. */
   private fitBorderedLabels(root: HTMLElement) {
-    const selector = 'button, .panel-title, .stat .k, .stat .v, .row-name, .row-desc, .panel-note, .setting-name, .setting-value, .setting-check, .name-copy, .ad-copy, .tutorial-copy';
+    this.pruneTextCaches();
+    const selector = 'button, .privacy-policy, .panel-title, .stat .k, .stat .v, .row-name, .row-desc, .panel-note, .setting-name, .setting-value, .setting-check, .name-copy, .ad-copy, .tutorial-copy';
     const targets = root.matches(selector)
       ? [root, ...root.querySelectorAll<HTMLElement>(selector)]
       : [...root.querySelectorAll<HTMLElement>(selector)];
@@ -231,7 +249,8 @@ export class UI {
   }
 
   /** One rewarded request at a time, with a five-second start cooldown. */
-  private async showRewardedAd(fallbackSeconds: number, rewardKind: 'm' | 'boost' | 'offline'): Promise<AdResult | null> {
+  private async showRewardedAd(fallbackSeconds: number, rewardKind: 'm' | 'boost' | 'offline',
+    bonusRespect = 0): Promise<AdResult | null> {
     const now = Date.now();
     const waitMs = 5000 - (now - this.lastAdStartedAt);
     if (this.adInProgress) {
@@ -264,7 +283,45 @@ export class UI {
       const verification = productionNative
         ? await this.account!.adVerification(rewardKind)
         : undefined;
-      return await this.ads.show(fallbackSeconds, verification);
+      // Persist the intent before opening the native ad. If Android terminates
+      // the WebView after AdMob's reward event but before dismissal, the signed
+      // SSV callback can still restore this exact account-scoped reward.
+      if (verification)
+        this.account!.queueAdReward(verification, fallbackSeconds, bonusRespect);
+      let result: AdResult;
+      try {
+        result = await this.ads.show(fallbackSeconds, verification);
+      } catch (error) {
+        if (verification) this.account!.clearPendingAdReward(verification.nonce);
+        throw error;
+      }
+      if (!productionNative || !verification) return result;
+      if (!result.rewarded) {
+        this.account!.clearPendingAdReward(verification.nonce);
+        return result;
+      }
+      // The SDK event proves that the client watched an ad; the signed AdMob
+      // callback proves which authenticated account and nonce earned it.
+      this.account!.queueAdReward(verification, result.watchedSeconds, bonusRespect);
+      if (loading.current) {
+        const label = loading.current.querySelector('.ad-loading-box > div:nth-child(2)');
+        if (label) label.textContent = 'VERIFYING REWARD…';
+        const detail = loading.current.querySelector('small');
+        if (detail) detail.textContent = 'Confirming the signed AdMob receipt';
+      } else {
+        loading.current = el('div', 'ad-loading', `
+          <div class="ad-loading-box" role="status" aria-live="polite">
+            <div class="ad-loading-spinner" aria-hidden="true"></div>
+            <div>VERIFYING REWARD…</div>
+            <small>Confirming the signed AdMob receipt</small>
+          </div>`);
+        document.body.appendChild(loading.current);
+      }
+      const status = await this.account!.waitForAdReward(verification.nonce, verification.kind)
+        .catch(() => ({ verified: false }));
+      return status.verified
+        ? { ...result, rewardNonce: verification.nonce }
+        : { ...result, rewarded: false, rewardNonce: verification.nonce, verificationPending: true };
     }
     finally {
       window.clearTimeout(loadingTimer);
@@ -299,7 +356,8 @@ export class UI {
 
     // Settings contains live sliders and a password field. Rebuilding it every
     // frame resets native controls, closes <details>, and erases typed codes.
-    if (this.openTab && this.openTab !== 'settings') this.refreshPanel();
+    if (this.openTab && ['upgrades', 'crew', 'garage'].includes(this.openTab)
+        && performance.now() - this.lastPanelRenderAt >= 1000) this.refreshPanel();
   }
 
   toast(msg: string, cls = '') {
@@ -315,49 +373,203 @@ export class UI {
   }
 
   /** One Discipline login restores the same save on Android, iOS, and web. */
-  promptAccount(): Promise<void> {
+  async promptAccount(): Promise<void> {
+    if (!this.account) return;
+    let termsVersion = '';
+    try { termsVersion = (await this.account.legalConfig()).termsVersion; }
+    catch { /* Login remains available; account creation waits for legal config. */ }
     return new Promise((resolve) => {
-      if (!this.account) { resolve(); return; }
       const overlay = el('div', 'ad-overlay');
       overlay.innerHTML = `
         <div class="ad-box name-box account-box">
           <div class="ad-label">DISCIPLINE ACCOUNT</div>
-          <div class="name-copy">One login keeps your username, progress, inventory, and verified purchases across Android and iOS.</div>
+          <div class="name-copy">One login keeps your username, progress, inventory, and verified purchases tied to your Discipline account.</div>
+          ${legalControls()}
           <input class="name-input account-name" maxlength="14" autocomplete="username" placeholder="USERNAME" spellcheck="false" />
           <input class="name-input account-pass" type="password" maxlength="128" autocomplete="current-password" placeholder="PASSWORD 10+ CHARS" />
+          <label class="terms-check"><input class="account-terms" type="checkbox" ${termsVersion ? '' : 'disabled'}>
+            <span>I agree to the current Terms and Privacy Policy to create a public account.</span>
+          </label>
           <div class="name-status"></div>
-          <div class="name-actions"><button class="account-login">LOG IN</button><button class="account-create">CREATE ACCOUNT</button></div>
+          <div class="name-actions"><button class="account-login">LOG IN</button><button class="account-create" disabled>CREATE ACCOUNT</button></div>
         </div>`;
       document.body.appendChild(overlay);
       const name = overlay.querySelector('.account-name') as HTMLInputElement;
       const pass = overlay.querySelector('.account-pass') as HTMLInputElement;
+      const terms = overlay.querySelector('.account-terms') as HTMLInputElement;
+      const createButton = overlay.querySelector('.account-create') as HTMLButtonElement;
       const status = overlay.querySelector('.name-status') as HTMLElement;
+      if (!termsVersion) status.textContent = 'Connect to load the current Terms before creating an account.';
+      terms.addEventListener('change', () => { createButton.disabled = !terms.checked || !termsVersion; });
       const submit = async (create: boolean) => {
         const usernameCheck = validateUsername(name.value.trim());
         if (!usernameCheck.ok) { status.textContent = usernameCheck.error; return; }
         if (pass.value.length < 10) { status.textContent = 'Password must be at least 10 characters.'; return; }
+        if (create && (!termsVersion || !terms.checked)) {
+          status.textContent = 'Accept the current Terms and Privacy Policy to create an account.';
+          return;
+        }
         status.textContent = create ? 'Creating account…' : 'Signing in…';
         try {
-          if (create) await this.account!.register(name.value.trim(), pass.value);
+          if (create) await this.account!.register(name.value.trim(), pass.value, termsVersion);
           else await this.account!.login(name.value.trim(), pass.value);
           this.game.s.username = this.account!.username;
           const source = await this.account!.sync(this.game.s);
           overlay.remove();
-          if (source === 'cloud') location.reload();
-          else { this.game.save(); this.toast(`Signed in as ${this.account!.username}`, 'gold'); this.refresh(); resolve(); }
+          if (source === 'reload') location.reload();
+          else {
+            this.game.save();
+            this.toast(`Signed in as ${this.account!.username}`, 'gold');
+            this.refresh();
+            if (!this.account!.termsCurrent) await this.promptTermsAcceptance();
+            resolve();
+          }
         } catch (e) {
           const code = e instanceof Error ? e.message : '';
           status.textContent = code === 'username_taken' ? 'That username is already claimed. Log in or choose another.'
             : code === 'inappropriate_username' || code === 'reserved_username' ? 'That username is not allowed.'
             : code === 'invalid_login' ? 'Username or password is incorrect.'
+            : code === 'terms_required' ? 'The Terms changed. Review and accept the current version.'
               : 'Account service unavailable. Check your connection and retry.';
         }
       };
       overlay.querySelector('.account-login')!.addEventListener('click', () => void submit(false));
-      overlay.querySelector('.account-create')!.addEventListener('click', () => void submit(true));
+      createButton.addEventListener('click', () => void submit(true));
       pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') void submit(false); });
       name.focus();
     });
+  }
+
+  /** Existing accounts keep ordinary/offline progress when Terms change, but
+   * must explicitly reaccept before returning to the public leaderboard. */
+  promptTermsAcceptance(): Promise<boolean> {
+    if (!this.account?.signedIn || this.account.termsCurrent) return Promise.resolve(true);
+    if (this.termsPrompt) return this.termsPrompt;
+    this.termsPrompt = (async () => {
+      let legal;
+      try { legal = await this.account!.legalConfig(); }
+      catch {
+        this.toast('Connect to review the updated community Terms.');
+        return false;
+      }
+      return new Promise<boolean>((resolve) => {
+        const overlay = el('div', 'ad-overlay terms-overlay');
+        overlay.innerHTML = `
+          <div class="ad-box name-box terms-box">
+            <div class="ad-label">COMMUNITY TERMS UPDATE</div>
+            <div class="name-copy">Your saved progress remains available. Review and accept version ${escapeHtml(legal.termsVersion)} before your username and taps return to the public leaderboard.</div>
+            ${legalControls(legal.termsUrl, legal.privacyUrl)}
+            <label class="terms-check"><input class="terms-accept-check" type="checkbox">
+              <span>I have read and agree to the current Terms and Privacy Policy.</span>
+            </label>
+            <div class="name-status" aria-live="polite"></div>
+            <div class="name-actions"><button class="terms-later">LATER</button><button class="terms-accept" disabled>ACCEPT</button></div>
+          </div>`;
+        document.body.appendChild(overlay);
+        const check = overlay.querySelector('.terms-accept-check') as HTMLInputElement;
+        const accept = overlay.querySelector('.terms-accept') as HTMLButtonElement;
+        const status = overlay.querySelector('.name-status') as HTMLElement;
+        check.addEventListener('change', () => { accept.disabled = !check.checked; });
+        overlay.querySelector('.terms-later')!.addEventListener('click', () => {
+          overlay.remove();
+          resolve(false);
+        });
+        accept.addEventListener('click', async () => {
+          if (!check.checked) return;
+          check.disabled = true; accept.disabled = true;
+          status.textContent = 'Saving acceptance…';
+          try {
+            await this.account!.acceptTerms(legal.termsVersion);
+            this.remoteBoard = null;
+            overlay.remove();
+            this.toast('Community Terms accepted.', 'gold');
+            if (this.openTab === 'ranks') this.refreshPanel();
+            resolve(true);
+          } catch {
+            check.disabled = false;
+            accept.disabled = false;
+            status.textContent = 'Could not save acceptance. Check your connection and retry.';
+          }
+        });
+      });
+    })().finally(() => { this.termsPrompt = null; });
+    return this.termsPrompt;
+  }
+
+  private promptLeaderboardReport(playerRef: string, playerName: string): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.account?.signedIn) { resolve(); return; }
+      const overlay = el('div', 'ad-overlay report-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box name-box report-box">
+          <div class="ad-label">REPORT LEADERBOARD ACCOUNT</div>
+          <div class="name-copy">Report ${escapeHtml(playerName)} for operator review. Reports are private.</div>
+          <label class="report-label">REASON
+            <select class="report-reason">
+              <option value="username">INAPPROPRIATE USERNAME</option>
+              <option value="cheating">SUSPICIOUS SCORE</option>
+              <option value="harassment">HARASSMENT</option>
+              <option value="other">OTHER</option>
+            </select>
+          </label>
+          <label class="report-label">OPTIONAL DETAILS
+            <textarea class="report-details" maxlength="500" rows="3" placeholder="WHAT SHOULD THE REVIEWER KNOW?"></textarea>
+          </label>
+          <div class="name-status" aria-live="polite"></div>
+          <div class="name-actions"><button class="report-cancel">CANCEL</button><button class="report-send">SEND REPORT</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const status = overlay.querySelector('.name-status') as HTMLElement;
+      const send = overlay.querySelector('.report-send') as HTMLButtonElement;
+      const done = () => { overlay.remove(); resolve(); };
+      overlay.querySelector('.report-cancel')!.addEventListener('click', done);
+      send.addEventListener('click', async () => {
+        send.disabled = true;
+        status.textContent = 'Sending report…';
+        const reason = (overlay.querySelector('.report-reason') as HTMLSelectElement).value;
+        const details = (overlay.querySelector('.report-details') as HTMLTextAreaElement).value;
+        try {
+          const created = await this.account!.reportPlayer(playerRef, reason, details);
+          done();
+          this.toast(created ? 'Report sent for review.' : 'You already reported this account.', 'gold');
+        } catch (error) {
+          send.disabled = false;
+          if ((error as Error).message === 'terms_required') {
+            done();
+            await this.promptTermsAcceptance();
+          } else status.textContent = 'Could not send the report. Check your connection and retry.';
+        }
+      });
+    });
+  }
+
+  private async handleCommunityAction(button: HTMLButtonElement) {
+    if (!this.account?.signedIn) return;
+    const action = button.dataset.communityAction;
+    const playerRef = button.dataset.playerRef || '';
+    const playerName = button.dataset.playerName || 'this player';
+    if (!playerRef) return;
+    if (action === 'report') {
+      await this.promptLeaderboardReport(playerRef, playerName);
+      return;
+    }
+    button.disabled = true;
+    try {
+      if (action === 'block') {
+        await this.account.blockPlayer(playerRef);
+        this.toast(`${playerName} hidden.`, 'gold');
+      } else if (action === 'unblock') {
+        await this.account.unblockPlayer(playerRef);
+        this.toast(`${playerName} is visible again.`, 'gold');
+      } else return;
+      this.remoteBoard = null;
+      this.remoteBoardRetryAt = 0;
+      if (this.openTab === 'ranks') this.refreshPanel();
+    } catch (error) {
+      button.disabled = false;
+      if ((error as Error).message === 'terms_required') await this.promptTermsAcceptance();
+      else this.toast('Leaderboard action unavailable. Check your connection.');
+    }
   }
 
   /** Policy-required, deliberate account deletion. The typed phrase prevents
@@ -407,7 +619,7 @@ export class UI {
         <div class="ad-box name-box">
           <div class="ad-label">${firstTime ? 'WELCOME TO THE INTERSECTION' : 'CHANGE USERNAME'}</div>
           <div class="name-copy">${firstTime
-            ? 'Claim your one-of-a-kind username. Nobody else can ever register it.'
+            ? 'Claim your one-of-a-kind username. It stays yours until you rename or delete the account.'
             : `Costs ${fmt(RENAME_COST)} Respect. Your new name must also be unique.`}</div>
           <input class="name-input" maxlength="14" placeholder="3-14 LETTERS/#/_" spellcheck="false" />
           <div class="name-status"></div>
@@ -455,22 +667,25 @@ export class UI {
   }
 
   /** The M (Mentality) store: buy premium currency with real money, or watch
-   *  a rewarded ad for a small amount (roughly the ad's worth). */
+   *  a rewarded ad for the fixed amount disclosed before playback. */
   showMShop() {
     const ov = el('div', 'ad-overlay');
-    const packRows = M_PACKS.map(p => `
-      <div class="row">
-        <div class="row-txt"><div class="row-name">💎 ${fmt(p.amount)} M${p.tag ? ` <span class="mtag">${p.tag}</span>` : ''}</div>
-          <div class="row-desc">${p.bonus ? `${p.bonus} bonus` : 'Starter pack'}</div></div>
-        <button data-pack="${p.id}">${p.price}</button>
-      </div>`).join('');
+    const packRows = M_PACKS.map(p => {
+      const price = this.purchases.getPrice(p);
+      return `
+        <div class="row">
+          <div class="row-txt"><div class="row-name">💎 ${fmt(p.amount)} M${p.tag ? ` <span class="mtag">${p.tag}</span>` : ''}</div>
+            <div class="row-desc">${p.bonus ? `${p.bonus} bonus` : 'Starter pack'}</div></div>
+          <button data-pack="${p.id}" ${price ? '' : 'disabled'}>${price ?? 'UNAVAILABLE'}</button>
+        </div>`;
+    }).join('');
     ov.innerHTML = `
       <div class="ad-box mshop">
         <div class="panel-head">GET MORE M<button class="x">✕</button></div>
-        <div class="panel-note">M is premium currency for cosmetics & The Lab. Complete the ad to earn M; closing early or going offline gives no reward.</div>
+        <div class="panel-note">M is premium currency for cosmetics & The Lab. Every completed M ad awards exactly ${AD_M_REWARD} M; closing early or going offline gives no reward.</div>
         <div class="row mshop-ad">
           <div class="row-txt"><div class="row-name">📺 Watch ad → +${AD_M_REWARD} M</div>
-            <div class="row-desc">Free. As much M as the ad is worth.</div></div>
+            <div class="row-desc">Free. Fixed ${AD_M_REWARD} M reward after completion.</div></div>
           <button class="m-ad">WATCH</button>
         </div>
         ${packRows}
@@ -483,15 +698,35 @@ export class UI {
       if (!ad) return;
       if (ad.rewarded) {
         this.game.s.mentality += AD_M_REWARD;
+        if (ad.rewardNonce) this.game.s.appliedAdRewards.push(ad.rewardNonce);
         this.game.save();
+        if (ad.rewardNonce && this.account && await this.account.save(this.game.s))
+          this.account.clearPendingAdReward(ad.rewardNonce);
         sfx.buy();
         this.toast(`+${AD_M_REWARD} M`, 'gold');
         this.refresh();
+      } else if (ad.verificationPending) {
+        this.toast('Ad complete. Signed reward verification is pending and will restore automatically.');
       } else this.toast('Ad closed early or unavailable — no M awarded.');
     });
     ov.querySelectorAll('.row button[data-pack]').forEach((b) => {
       b.addEventListener('click', async () => {
         const pack = M_PACKS.find(p => p.id === (b as HTMLElement).dataset.pack)!;
+        if (this.purchases.platform === 'native') {
+          if (!this.account) {
+            this.toast('Purchases are unavailable until the account service is connected.');
+            return;
+          }
+          if (!this.account.signedIn) {
+            close();
+            this.toast('Log in before opening Google Play checkout.', 'gold');
+            await this.promptAccount();
+          }
+          if (!this.account.signedIn || !this.account.cloudReady) {
+            this.toast('Finish account sync before making a purchase.');
+            return;
+          }
+        }
         const receipt = await this.purchases.buy(pack, this.account?.accountId);
         if (receipt) {
           try {
@@ -609,12 +844,18 @@ export class UI {
     });
     overlay.querySelector('.off-double')!.addEventListener('click', async () => {
       overlay.remove();
-      const ad = await this.showRewardedAd(15, 'offline');
+      const ad = await this.showRewardedAd(15, 'offline', gain);
       if (!ad) return;
       if (ad.rewarded) {
         this.game.s.respect += gain; // second copy of the earnings
+        if (ad.rewardNonce) this.game.s.appliedAdRewards.push(ad.rewardNonce);
+        this.game.save();
+        if (ad.rewardNonce && this.account && await this.account.save(this.game.s))
+          this.account.clearPendingAdReward(ad.rewardNonce);
         sfx.buy();
         this.toast(`DOUBLED: +${fmt(gain)} bonus Respect`, 'gold');
+      } else if (ad.verificationPending) {
+        this.toast('Ad complete. Signed reward verification is pending and will restore automatically.');
       } else this.toast('Ad closed early or unavailable — no bonus awarded.');
       this.refresh();
     });
@@ -650,6 +891,8 @@ export class UI {
 
   private refreshPanel() {
     if (!this.panel || !this.openTab) return;
+    const previousScroll = this.panel.querySelector<HTMLElement>('.panel-scroll')?.scrollTop ?? 0;
+    this.lastPanelRenderAt = performance.now();
     const g = this.game;
     const rows: string[] = [`<div class="panel-head"><span class="panel-title">${this.openTab.toUpperCase()}</span><button class="x">✕</button></div>`];
 
@@ -725,13 +968,33 @@ export class UI {
       rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS (raw taps only, boosters don't count)${native
         ? ` · syncing via ${this.lb!.platform === 'gamecenter' ? 'Game Center' : 'Google Play Games'}`
         : API_URL ? ' · real Discipline accounts only' : ' · account server not connected'}</div>`);
-      // Live worldwide data patches in when the authenticated fetch lands.
-      if (API_URL && g.s.username && this.openTab === 'ranks' && !this.remoteBoard) {
-        void fetchBoardRemote(API_URL, g.s.username).then((b) => {
-          if (b?.length) { this.remoteBoard = b; if (this.openTab === 'ranks') this.refreshPanel(); }
-        });
+      const termsRequired = Boolean(this.account?.signedIn && !this.account.termsCurrent)
+        || this.remoteBoard?.termsRequired === true;
+      if (termsRequired) {
+        rows.push(row('terms', 'Community Terms update',
+          'Offline progress is safe. Accept the current Terms to return to the public board.',
+          'REVIEW', true, 'account'));
       }
-      const list = this.remoteBoard ?? getWorldList(g.s.totalTaps, g.s.username ?? 'YOU');
+      // Live worldwide data patches in when the authenticated fetch lands.
+      if (!termsRequired && API_URL && g.s.username && this.openTab === 'ranks' && !this.remoteBoard
+          && !this.remoteBoardLoading && Date.now() >= this.remoteBoardRetryAt) {
+        this.remoteBoardLoading = true;
+        void fetchBoardRemote(API_URL, g.s.username).then((b) => {
+          if (b) {
+            if (b.termsRequired) this.account?.markTermsOutdated();
+            this.remoteBoard = b;
+            if (this.openTab === 'ranks') this.refreshPanel();
+          } else {
+            this.remoteBoardRetryAt = Date.now() + 10_000;
+          }
+        }).finally(() => { this.remoteBoardLoading = false; });
+      }
+      if (this.remoteBoard?.unavailable) {
+        rows.push('<div class="panel-note">The community board is temporarily unavailable. Your taps and local progress are unaffected.</div>');
+      }
+      const list = this.remoteBoard?.unavailable
+        ? []
+        : this.remoteBoard?.entries ?? getWorldList(g.s.totalTaps, g.s.username ?? 'YOU');
       const yourRank = list.find(e => e.you)?.rank ?? Infinity;
       // Subway-Surfers-style ranked list: top 10, a gap, then your neighborhood
       const shown = list.filter(e => e.rank <= 10 || Math.abs(e.rank - yourRank) <= 2);
@@ -741,9 +1004,18 @@ export class UI {
         prev = e.rank;
         rows.push(`<div class="lb-row${e.you ? ' lb-you' : ''}">
           <span class="lb-rank">${e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : '#' + e.rank}</span>
-          <span class="lb-name">${e.you ? `⭐ ${e.name}` : e.name}</span>
+          <span class="lb-name">${e.you ? '⭐ ' : ''}${escapeHtml(e.name)}</span>
           <span class="lb-score">${fmt(e.taps)}</span>
+          ${this.account?.signedIn && this.account.termsCurrent && !e.you && e.playerRef
+            ? `<span class="lb-actions"><button class="lb-action" data-community-action="report" data-player-ref="${escapeAttr(e.playerRef)}" data-player-name="${escapeAttr(e.name)}">FLAG</button><button class="lb-action" data-community-action="block" data-player-ref="${escapeAttr(e.playerRef)}" data-player-name="${escapeAttr(e.name)}">HIDE</button></span>`
+            : ''}
         </div>`);
+      }
+      if (this.remoteBoard?.blocked.length) {
+        rows.push('<div class="lb-blocked-title">HIDDEN PLAYERS</div>');
+        for (const blocked of this.remoteBoard.blocked) {
+          rows.push(`<div class="lb-blocked-row"><span>${escapeHtml(blocked.name)}</span><button class="lb-action" data-community-action="unblock" data-player-ref="${escapeAttr(blocked.playerRef)}" data-player-name="${escapeAttr(blocked.name)}">UNHIDE</button></div>`);
+        }
       }
       if (!API_URL) rows.push(row('rename', `Username: ${g.s.username ?? '—'}`,
         `Change costs ${fmt(RENAME_COST)} Respect (one-of-a-kind, can't be stolen)`,
@@ -776,6 +1048,10 @@ export class UI {
         <label class="setting-check"><input class="vibration-setting" type="checkbox" ${vibration ? 'checked' : ''}> Haptic feedback <span class="setting-hint">subtle taps · strong explosions</span></label>
         <label class="setting-check"><input class="motion-setting" type="checkbox" ${reduced ? 'checked' : ''}> Reduced motion</label>
         <button class="reset-view">RESET VIEW TO OPPONENT</button>
+        ${legalControls()}
+        ${this.account?.signedIn && !this.account.termsCurrent
+          ? '<button class="accept-terms">REVIEW COMMUNITY TERMS</button>'
+          : ''}
         <button class="ad-privacy">AD PRIVACY OPTIONS</button>
         <details class="cheat-vault"><summary>ENCRYPTED ACCESS</summary>
           <div class="panel-note">Owner codes are verified by one-way cryptographic hash.</div>
@@ -795,6 +1071,9 @@ export class UI {
     this.panel.innerHTML = collapsedGarage
       ? rows.join('')
       : `${rows[0]}<div class="panel-viewport"><div class="panel-scroll">${rows.slice(1).join('')}</div></div>`;
+    this.pruneTextCaches();
+    const nextScroll = this.panel.querySelector<HTMLElement>('.panel-scroll');
+    if (nextScroll) nextScroll.scrollTop = previousScroll;
     this.scheduleTextFit(this.panel);
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
     if (this.openTab === 'settings') this.bindSettings();
@@ -812,6 +1091,12 @@ export class UI {
         const id = (btn as HTMLElement).dataset.id!;
         const kind = (btn as HTMLElement).dataset.kind!;
         this.action(kind, id);
+      });
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('.lb-action').forEach((button) => {
+      button.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        void this.handleCommunityAction(button);
       });
     });
   }
@@ -855,6 +1140,10 @@ export class UI {
     vibration.addEventListener('change', () => localStorage.setItem('discipline-vibration', vibration.checked ? '1' : '0'));
     this.panel.querySelector('.reset-view')!.addEventListener('click', (ev) => {
       ev.stopImmediatePropagation(); this.onResetView?.(); this.toast('View reset.');
+    });
+    this.panel.querySelector('.accept-terms')?.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation();
+      void this.promptTermsAcceptance();
     });
     this.panel.querySelector('.ad-privacy')!.addEventListener('click', async (ev) => {
       ev.stopImmediatePropagation();
@@ -925,6 +1214,8 @@ export class UI {
     } else if (kind === 'account' && id === 'delete') {
       this.close();
       await this.promptDeleteAccount();
+    } else if (kind === 'account' && id === 'terms') {
+      await this.promptTermsAcceptance();
     } else if (kind === 'booster') {
       this.close(); // starting an ad closes any open menu — no stacked overlays
       const ad = await this.showRewardedAd(15, 'boost');
@@ -934,12 +1225,36 @@ export class UI {
           : ad.watchedSeconds < 25 ? BOOSTERS[1]
             : BOOSTERS[2];
         g.grantBooster(b);
+        if (ad.rewardNonce) g.s.appliedAdRewards.push(ad.rewardNonce);
+        g.save();
+        if (ad.rewardNonce && this.account && await this.account.save(g.s))
+          this.account.clearPendingAdReward(ad.rewardNonce);
         sfx.boost();
         this.toast(`${Math.round(ad.watchedSeconds)}s ad complete — ${b.name} awarded!`, 'gold');
+      } else if (ad.verificationPending) {
+        this.toast('Ad complete. Signed reward verification is pending and will restore automatically.');
       } else this.toast('Ad closed early or unavailable — no boost awarded.');
     }
+    if (this.openTab && this.openTab !== 'settings') this.refreshPanel();
     this.refresh();
   }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]!);
+}
+
+function escapeAttr(value: string): string {
+  return escapeHtml(value);
+}
+
+function legalControls(termsUrl = `${API_URL}/terms`, privacyUrl = `${API_URL}/privacy`): string {
+  if (!API_URL) {
+    return '<div class="legal-controls"><button class="privacy-policy" type="button" disabled title="Account service is not connected">TERMS UNAVAILABLE</button><button class="privacy-policy" type="button" disabled title="Account service is not connected">PRIVACY UNAVAILABLE</button></div>';
+  }
+  return `<div class="legal-controls"><a class="privacy-policy" href="${escapeAttr(termsUrl)}" target="_blank" rel="noopener noreferrer">TERMS</a><a class="privacy-policy" href="${escapeAttr(privacyUrl)}" target="_blank" rel="noopener noreferrer">PRIVACY</a></div>`;
 }
 
 function row(id: string, name: string, desc: string, action: string, enabled: boolean, kind?: string): string {

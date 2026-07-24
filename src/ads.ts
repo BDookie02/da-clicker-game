@@ -21,11 +21,15 @@ export interface AdProvider {
 export interface AdVerification {
   userId: string;
   customData: string;
+  nonce: string;
+  kind: 'm' | 'boost' | 'offline';
 }
 
 export interface AdResult {
   rewarded: boolean;
   watchedSeconds: number;
+  rewardNonce?: string;
+  verificationPending?: boolean;
 }
 
 export const AD_CONFIG = {
@@ -86,7 +90,10 @@ class AdMobAdProvider implements AdProvider {
           subs.push(...listeners);
           return AdMob.prepareRewardVideoAd({
             adId,
-            ...(verification ? { ssv: verification } : {}),
+            ...(verification ? { ssv: {
+              userId: verification.userId,
+              customData: verification.customData,
+            } } : {}),
           });
         }).then(() => {
           shownAt = performance.now();

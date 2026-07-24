@@ -2,6 +2,9 @@ name = "discipline-api"
 main = "server/worker.js"
 compatibility_date = "2026-07-01"
 
+[triggers]
+crons = ["17 * * * *"]
+
 [vars]
 ADMOB_REWARDED_AD_UNIT_ID = "2001670311"
 

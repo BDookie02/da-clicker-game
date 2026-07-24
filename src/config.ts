@@ -222,7 +222,7 @@ export const COSMETICS: CosmeticDef[] = [
   { id: 'sky_toxic',    name: 'Toxic Hour',            desc: 'The air is 40% regret.',                       cost: 150,  slot: 'sky',      value: 'toxic' },
   { id: 'sky_mint',     name: 'Mint Condition',        desc: 'Refreshing. Suspiciously so.',                 cost: 150,  slot: 'sky',      value: 'mint' },
   { id: 'orn_cone',     name: 'Tiny Traffic Cone',     desc: 'A fallen soldier from the Kingpin wars.',      cost: 125,  slot: 'ornament', value: '#e8862a' },
-  { id: 'orn_monk',     name: 'creamus',                desc: 'chodelike pile of cream for your dashboard', cost: 225, slot: 'ornament', value: '#e8c84a' },
+  { id: 'orn_monk',     name: 'Dashboard Buddha',       desc: 'A golden seated Buddha statue for calm at every red light.', cost: 225, slot: 'ornament', value: '#e8c84a' },
   { id: 'horn_air',     name: 'Freight Airhorn',       desc: 'Startles opponents mid-shake.',                cost: 175,  slot: 'horn',     value: 'airhorn' },
   { id: 'dangle_dice', name: 'Fuzzy Dice', desc: 'Classic dice hanging from the centered rear-view mirror.', cost: 90, slot: 'dangler', value: 'dice' },
   { id: 'dangle_beads', name: 'Bead Necklace', desc: 'A long strand of colorful dashboard beads.', cost: 110, slot: 'dangler', value: 'beads' },

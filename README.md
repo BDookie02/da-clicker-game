@@ -1,99 +1,92 @@
-# DISCIPLINE. — da clicker game
+# DISCIPLINE.
 
-A PS1-styled city idle-clicker. You're stopped at a red light. The car in the
-next lane is shaking. You know the meme. Tap until the goop happens, the light
-turns green, and roll on to the next opponent.
+DISCIPLINE. is a portrait, PS1-styled idle clicker set at an endless series of
+red lights. Hold eye contact, tap for Respect, build a Crew, upgrade your route,
+and outlast increasingly unhinged rivals.
 
-Built as a themed reimagining of the classic idle-colonizer loop: tap currency,
-idle generators, staged progression, milestone rewards — reskinned around the
-discipline car meme.
+## Game
 
-## Gameplay
+- Tap while facing the rival to earn Respect and fill the current light.
+- Watch the opposing car and driver react at 25%, 50%, 75%, and 90% progress.
+- Recruit Crew for idle Respect and buy upgrades for stronger taps.
+- Take New Routes for permanent progression.
+- Drive through changing city districts and an extended opponent roster.
+- Look around smoothly in both the main first-person view and the garage.
+- Customize the player car with six fixed dashboard mounts, mirror danglers,
+  decals, goop finishes, horns, sky styles, and a roof-mounted taxi sign.
+- Use separate music, effects, and engine volume controls plus FOV, look
+  sensitivity, reduced motion, four text-size tiers, and optional haptics.
+- Follow a skippable first-launch tutorial that keeps unrelated controls locked
+  until each highlighted step is complete.
 
-- **Tap** anywhere to build **Respect**. The opponent's car shakes harder at
-  25% / 50% / 75% / 90% milestones, then gets covered in white goop at 100%.
-  Green light. You're free to go. Next light, next opponent.
-- **Opponents**: 10 handcrafted meme-lineage rivals (The O.G., MENTALITY,
-  Blockhead, Easy Face, The Mercenary, Subway Stranger, Steel Cowboy,
-  Demon Face, The Sigma, DISCIPLINE.), then endless procedurally-assembled
-  opponents (seeded names, paint, car styles) so no two lights feel the same.
-- **Districts**: the environment re-skins every 10 lights (day downtown,
-  sunset suburbs, vaporwave strip, fog industrial, midnight, dawn highway).
-- **Upgrades** (tap power) and **Crew** (idle taps/sec).
-- **Garage**: aesthetic unlockables bought with **Mentality** (earned per
-  opponent defeated) — decals, ornaments, goop colors, skies, horns.
-- **Boosters**: watch a (placeholder) rewarded ad for 2x/5x/10x multipliers.
-  No daily limit. Longer ad, fatter boost. Rewards require verified full
-  watches — hiding the page pauses the countdown.
-- **Usernames**: one-of-a-kind, claimed at first launch, never re-registrable
-  (case-insensitive), rename for 1M Respect. Local registry in dev; swap
-  `UsernameService` (src/username.ts) for an atomic insert-if-absent API at
-  launch (Cloudflare Worker/KV or Firebase doc-key both work).
-- **Escalating rage**: the opponent's driver visibly angers with each shake
-  milestone — reddening skin, V brows, narrowed eyes, gritted teeth.
-- Autosaves to localStorage; earns offline at 50% rate (8h cap).
+Respect is earned by playing. Mentality (M) is separate premium currency: it is
+granted only by verified store purchases or a completed rewarded ad. Booster
+ads never grant M. Closing an ad early or failing verification grants nothing.
 
-## Tech
+## Accounts and rankings
 
-- **Vite + TypeScript + Three.js**, zero binary assets — every texture is
-  generated on canvas, every sound synthesized in WebAudio.
-- **Authentic PS1 pipeline**: native 320×240-class render target with
-  nearest-neighbor upscale, clip-space vertex snapping (GTE fixed-point
-  wobble), vertex-lit flat shading, 15-bit color crush + 4×4 Bayer ordered
-  dithering, point-filtered 64px textures, short-draw-distance fog.
-- 2D character sprites mount on a named anchor at each opponent's driver
-  window (`sprite:<slot>`), facing the player — art lands via the Higgsfield
-  MCP pipeline (vehicles intentionally empty until then).
+The included platform-neutral account service provides unique usernames,
+cross-device cloud saves, durable inventory, verified purchase recovery, and a
+real-player leaderboard. Fake ranked fillers are not used. Google Play Games
+provides the Android platform leaderboard overlay; a future iOS build can use
+Game Center while the same DISCIPLINE. account continues to own portable game
+progress.
 
-## Develop
+Production accounts require the Worker and D1 service in `server/`. The game
+remains playable offline for a previously authenticated player, but paid
+purchases, rewarded-ad grants, rankings, and cloud synchronization require a
+connection.
 
-```sh
-npm install
-npm run dev      # dev server (also enables devlog capture endpoint)
-npm run build    # typecheck + production build to dist/
+## Android support
+
+- Package: `com.nosiah.discipline`
+- Minimum: Android 7 / API 24
+- Target and compile SDK: API 36
+- Store format: signed Android App Bundle
+
+The Android build uses Capacitor, Google Mobile Ads rewarded ads, Google Play
+Billing, and Play Games Services. Release builds fail closed when production
+IDs, the deployed account API, store art, or upload signing configuration are
+missing.
+
+## Development
+
+```powershell
+cmd /c npm install
+cmd /c npm test
+cmd /c npm run build:test
+cmd /c npm run android:test:apk
 ```
 
-Dev helpers on `window`: `__game` (state), `__shot(name)` (save PNG to
-devlog/), `__rec(name, seconds)` (save WebM to devlog/).
+`build:test` deliberately uses Google's public test ad units. Development-only
+visual-audit handles are excluded from a normal production bundle.
 
-## Ship to iOS / Android
+## Play release
 
-The app is a static web bundle (`dist/`), designed for Capacitor:
+Configure the ignored production files and external services described in
+`SHIPPING.md`, then run exactly:
 
-```sh
-npm i -D @capacitor/core @capacitor/cli
-npx cap init "DISCIPLINE." com.nosiah.discipline --web-dir dist
-npx cap add android   # needs Android Studio
-npx cap add ios       # needs Xcode on macOS
-npm run build && npx cap sync
+```powershell
+cmd /c npm run release:play
 ```
 
-Rewarded ads: the game calls a single `AdProvider.show(lengthSec)` interface
-(src/ui.ts). Swap the placeholder for `@capacitor-community/admob` RewardedAd
-for store builds. Note: the goop humor likely lands a 17+ rating; plan App
-Review positioning accordingly.
+That command runs the tests and release preflight, creates a fresh production
+web bundle, synchronizes that exact bundle into Android, verifies that the
+packaged payload matches it byte-for-byte, runs release lint, builds the signed
+AAB, and verifies its signature. It never uploads or publishes anything.
 
-Worldwide leaderboard (🏆 RANKS menu): a single board — **All-Time Taps** —
-rendered as an in-game ranked list (top 10 + your neighborhood, your row
-highlighted). `LeaderboardProvider` (src/leaderboard.ts) submits your taps to
-Game Center / Google Play Games on every opponent defeated; the in-game list
-uses seeded placeholder rivals until real global data is wired at launch.
-Publish checklist:
+Do not build a Play candidate with `gradlew bundleRelease` alone, and do not
+upload an older AAB or APK from the repository root.
 
-1. `npm i @ni2khanna/capacitor-game-connect && npx cap sync`
-2. App Store Connect → Game Center → create the taps leaderboard → paste its
-   ID into `BOARD.ios`
-3. Play Console → Play Games Services → create it → paste its ID into
-   `BOARD.android`
+## Architecture
 
-## Asset pipeline (next phase)
+- Vite + TypeScript
+- Three.js low-resolution pixel/PS1 rendering
+- Capacitor Android/iOS shells
+- Cloudflare Worker + D1 account and verification service
+- Google Mobile Ads rewarded ads with signed server-side verification
+- Google Play Billing with server verification and a durable transaction ledger
+- Google Play Games / Game Center leaderboard adapters
 
-Higgsfield MCP (hosted, OAuth: `https://mcp.higgsfield.ai/mcp`) generates the
-2D discipline-meme character sprites and cosmetic art. Slots are already wired:
-`char_og`, `char_mentality`, `char_blockhead`, `char_easyface`, `char_merc`,
-`char_metro`, `char_cowboy`, `char_demon`, `char_sigma`, `char_discipline`,
-plus 40 rotating `char_gen_*` slots for procedural opponents.
-
-## Devlog
-
-Screenshots and recordings of development milestones live in `devlog/`.
+Store listing copy, Data Safety notes, privacy deployment notes, and the
+release checklist are in `docs/` and `SHIPPING.md`.
