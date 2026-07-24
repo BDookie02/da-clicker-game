@@ -1,14 +1,15 @@
 import { BOOSTERS, COSMETICS, CREW, LAB, UPGRADES, type BoosterDef } from './config';
 import { fmt, PRESTIGE_STEP, type Game } from './state';
-import { sfx } from './audio';
-import { fetchBoardRemote, getWorldList, type LbEntry, type LeaderboardProvider } from './leaderboard';
+import { music, sfx } from './audio';
+import { fetchBoardRemote, getWorldList, type BoardResult, type LeaderboardProvider } from './leaderboard';
 import { API_URL } from './config';
-import { RENAME_COST, USERNAME_RE, type UsernameService } from './username';
+import { RENAME_COST, validateUsername, type UsernameService } from './username';
+import type { AccountService } from './account';
 
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
-import { PlaceholderAdProvider, withMusicPause, type AdProvider } from './ads';
-import { AD_M_REWARD, M_PACKS, PlaceholderPurchases, type PurchaseProvider } from './purchases';
+import { AD_CONFIG, PlaceholderAdProvider, showAdPrivacyOptions, withMusicPause, type AdProvider, type AdResult } from './ads';
+import { AD_M_REWARD, M_PACKS, UnavailablePurchases, queuePendingPurchase, removePendingPurchase, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -18,21 +19,36 @@ function el(tag: string, cls?: string, html?: string): HTMLElement {
 }
 
 export class UI {
+  onEyeReset?: () => void;
   root: HTMLElement;
   ads: AdProvider = withMusicPause(new PlaceholderAdProvider());
-  purchases: PurchaseProvider = new PlaceholderPurchases();
+  purchases: PurchaseProvider = new UnavailablePurchases();
+  account: AccountService | null = null;
   private panel: HTMLElement | null = null;
   private bars: Record<string, HTMLElement> = {};
   private fade: HTMLElement;
   private openTab: string | null = null;
   private prestigeArmed = false;
-  private remoteBoard: LbEntry[] | null = null;
+  private remoteBoard: BoardResult | null = null;
+  private remoteBoardLoading = false;
+  private remoteBoardRetryAt = 0;
+  private termsPrompt: Promise<boolean> | null = null;
   private garageSheetOpen = true; // cosmetics list visible over the 3D garage
+  private adInProgress = false;
+  private lastAdStartedAt = 0;
+  private fadeTransition = 0;
+  private readonly scaledFontElements = new Set<HTMLElement>();
+  private readonly fittedFontSizes = new Map<HTMLElement, string>();
+  private readonly textScales = [1, 1.15, 1.3, 1.45] as const;
+  private readonly layoutObserver: ResizeObserver;
+  private lastPanelRenderAt = 0;
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
   /** fired with true when the garage tab opens, false when it closes */
   onGarage?: (open: boolean) => void;
+  onViewSettings?: (fov: number, sensitivity: number, reducedMotion: boolean) => void;
+  onResetView?: () => void;
 
   constructor(private game: Game, private onCosmeticsChanged: () => void) {
     this.root = document.getElementById('app')!;
@@ -42,7 +58,7 @@ export class UI {
         <div class="stat"><span class="k">MENTALITY</span><span class="v gold" id="v-mentality">0</span></div>
         <div class="stat small"><span class="k">/TAP</span><span class="v" id="v-tap">1</span></div>
         <div class="stat small"><span class="k">/SEC</span><span class="v" id="v-rps">0</span></div>
-        <button class="stat mute" id="btn-mute" title="sound">🔊</button>
+        <button class="stat eye" id="btn-eye" title="reset eye contact">&#128065;</button><button class="stat settings" id="btn-settings" title="settings">&#9881;</button>
       </div>
       <div class="boost-pill" id="boost-pill" hidden></div>
       <button class="quick-buy" id="quick-buy" hidden></button>
@@ -58,12 +74,40 @@ export class UI {
         <button data-tab="upgrades">UPGRADES</button>
         <button data-tab="crew">CREW</button>
         <button data-tab="garage">GARAGE</button>
-        <button data-tab="ranks">🏆 RANKS</button>
-        <button data-tab="boosters" class="hot">📺 BOOSTERS</button>
+        <button data-tab="ranks">RANKS</button>
+        <button data-tab="boosters" class="hot">BOOSTERS</button>
       </div>
       <div class="toasts" id="toasts"></div>
       <div class="fade" id="fade"></div>`;
     this.fade = document.getElementById('fade')!;
+    // Reserve the space the rendered HUD/navigation actually consume. This
+    // updates after wrapping, text scaling, rotation, and split-screen resize.
+    this.layoutObserver = new ResizeObserver(() => this.updateLayoutMetrics());
+    this.layoutObserver.observe(this.root.querySelector('.hud-top')!);
+    this.layoutObserver.observe(this.root.querySelector('.menu-row')!);
+    this.applyTextSize();
+    new MutationObserver((records) => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (node instanceof HTMLElement) {
+          this.scaleTextTree(node);
+          this.scheduleTextFit(node);
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+    new MutationObserver(() => {
+      requestAnimationFrame(() => {
+        this.updateLayoutMetrics();
+        requestAnimationFrame(() => this.updateLayoutMetrics());
+      });
+    }).observe(document.body, { attributes: true, attributeFilter: ['class', 'data-text-tier'] });
+    addEventListener('resize', () => {
+      this.updateLayoutMetrics();
+      this.scheduleTextFit(document.body);
+    });
+    requestAnimationFrame(() => {
+      this.updateLayoutMetrics();
+      this.scheduleTextFit(document.body);
+    });
 
     this.root.querySelectorAll('.menu-row button').forEach((b) => {
       b.addEventListener('click', (ev) => {
@@ -84,12 +128,206 @@ export class UI {
       }
     });
 
-    const muteBtn = document.getElementById('btn-mute')!;
-    muteBtn.textContent = sfx.muted ? '🔇' : '🔊';
-    muteBtn.addEventListener('click', (ev) => {
+    const eyeBtn = document.getElementById('btn-eye')!;
+    eyeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); this.onEyeReset?.(); });
+    const settingsBtn = document.getElementById('btn-settings')!;
+    settingsBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      muteBtn.textContent = sfx.toggleMute() ? '🔇' : '🔊';
+      this.toggle('settings');
     });
+  }
+
+  private scaleTextTree(root: HTMLElement) {
+    this.pruneTextCaches();
+    const scale = this.textScales[this.game.s.textSizeTier] ?? 1;
+    const elements = root === document.body
+      ? [root, ...root.querySelectorAll<HTMLElement>('*')]
+      : [root, ...root.querySelectorAll<HTMLElement>('*')];
+    for (const element of elements) {
+      // MutationObserver can report both a newly inserted panel and its
+      // descendants. Never multiply a font that this tier already scaled.
+      if (this.scaledFontElements.has(element)) continue;
+      // Scale each actual text run once. Scaling structural parents and then
+      // their descendants compounded inherited sizes (1.45x became 2.10x).
+      // If a text-owning ancestor already scales this run, descendants inherit.
+      const ownsText = [...element.childNodes].some(node =>
+        node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()))
+        || element.matches('input, textarea, select');
+      if (!ownsText) continue;
+      let parent = element.parentElement;
+      let inheritedFromScaledParent = false;
+      while (parent && parent !== root.parentElement) {
+        if (this.scaledFontElements.has(parent)) { inheritedFromScaledParent = true; break; }
+        parent = parent.parentElement;
+      }
+      if (inheritedFromScaledParent) continue;
+      const base = Number.parseFloat(getComputedStyle(element).fontSize);
+      if (!Number.isFinite(base) || base <= 0) continue;
+      element.style.fontSize = `${Math.round(base * scale * 100) / 100}px`;
+      this.scaledFontElements.add(element);
+    }
+  }
+
+  private pruneTextCaches() {
+    for (const element of this.scaledFontElements) {
+      if (!element.isConnected) this.scaledFontElements.delete(element);
+    }
+    for (const element of this.fittedFontSizes.keys()) {
+      if (!element.isConnected) this.fittedFontSizes.delete(element);
+    }
+  }
+
+  private applyTextSize() {
+    for (const [element, size] of this.fittedFontSizes) element.style.fontSize = size;
+    this.fittedFontSizes.clear();
+    for (const element of this.scaledFontElements) element.style.removeProperty('font-size');
+    this.scaledFontElements.clear();
+    document.body.dataset.textTier = String(this.game.s.textSizeTier);
+    this.scaleTextTree(document.body);
+    this.scheduleTextFit(document.body);
+    requestAnimationFrame(() => this.updateLayoutMetrics());
+  }
+
+  private scheduleTextFit(root: HTMLElement) {
+    requestAnimationFrame(() => {
+      this.fitBorderedLabels(root);
+      // Android WebView can settle fallback/emoji glyph metrics a frame late.
+      requestAnimationFrame(() => this.fitBorderedLabels(root));
+    });
+  }
+
+  /** Keep every UI word intact. Buttons stay single-line; prose may wrap only
+   * between words. Type shrinks only when an unbroken word would cross its
+   * visible container. */
+  private fitBorderedLabels(root: HTMLElement) {
+    this.pruneTextCaches();
+    const selector = 'button, .privacy-policy, .panel-title, .stat .k, .stat .v, .row-name, .row-desc, .panel-note, .setting-name, .setting-value, .setting-check, .name-copy, .ad-copy, .tutorial-copy';
+    const targets = root.matches(selector)
+      ? [root, ...root.querySelectorAll<HTMLElement>(selector)]
+      : [...root.querySelectorAll<HTMLElement>(selector)];
+    for (const element of targets) {
+      const previous = this.fittedFontSizes.get(element);
+      if (previous !== undefined) {
+        element.style.fontSize = previous;
+        this.fittedFontSizes.delete(element);
+      }
+      if (element.clientWidth < 2 || element.clientHeight < 2
+        || (element.scrollWidth <= element.clientWidth + 1 && element.scrollHeight <= element.clientHeight + 1)) continue;
+      const start = Number.parseFloat(getComputedStyle(element).fontSize);
+      if (!Number.isFinite(start) || start <= 0) continue;
+      this.fittedFontSizes.set(element, element.style.fontSize);
+      // Binary-search the largest size that preserves one complete line. This
+      // is stable for emoji/fallback fonts and avoids the multi-pass rounding
+      // errors that previously left a last letter clipped on narrow phones.
+      const fits = () => element.scrollWidth <= element.clientWidth + 1
+        && element.scrollHeight <= element.clientHeight + 1;
+      let low = 4;
+      let high = start;
+      element.style.fontSize = `${low}px`;
+      if (!fits()) continue;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const mid = (low + high) / 2;
+        element.style.fontSize = `${mid}px`;
+        if (fits()) low = mid; else high = mid;
+      }
+      element.style.fontSize = `${Math.floor(low * 100) / 100}px`;
+    }
+  }
+
+  private updateLayoutMetrics() {
+    const hud = this.root.querySelector<HTMLElement>('.hud-top');
+    const nav = this.root.querySelector<HTMLElement>('.menu-row');
+    if (!hud || !nav) return;
+    const hr = hud.getBoundingClientRect();
+    const nr = nav.getBoundingClientRect();
+    const hudBottom = getComputedStyle(hud).display === 'none' ? 8 : Math.ceil(hr.bottom + 8);
+    // Store the navigation's actual occupied lane. CSS adds a separate,
+    // visible panel gutter so the menu and buttons cannot share pixels.
+    const navHeight = getComputedStyle(nav).display === 'none' ? 0 : Math.ceil(innerHeight - nr.top);
+    document.body.style.setProperty('--hud-bottom', `${hudBottom}px`);
+    document.body.style.setProperty('--nav-height', `${navHeight}px`);
+  }
+
+  /** One rewarded request at a time, with a five-second start cooldown. */
+  private async showRewardedAd(fallbackSeconds: number, rewardKind: 'm' | 'boost' | 'offline',
+    bonusRespect = 0): Promise<AdResult | null> {
+    const now = Date.now();
+    const waitMs = 5000 - (now - this.lastAdStartedAt);
+    if (this.adInProgress) {
+      this.toast('An ad is already opening.');
+      return null;
+    }
+    if (waitMs > 0) {
+      this.toast(`Please wait ${Math.ceil(waitMs / 1000)}s before opening another ad.`);
+      return null;
+    }
+    this.adInProgress = true;
+    this.lastAdStartedAt = now;
+    const loading = { current: null as HTMLElement | null };
+    const loadingTimer = window.setTimeout(() => {
+      loading.current = el('div', 'ad-loading', `
+        <div class="ad-loading-box" role="status" aria-live="polite">
+          <div class="ad-loading-spinner" aria-hidden="true"></div>
+          <div>LOADING AD…</div>
+          <small>Waiting for the ad network</small>
+        </div>`);
+      document.body.appendChild(loading.current);
+    }, 450);
+    try {
+      const cap = (window as any).Capacitor;
+      const productionNative = !AD_CONFIG.TESTING && cap?.isNativePlatform?.();
+      if (productionNative && !this.account?.signedIn) {
+        this.toast('Log in before watching a reward ad so the reward can be verified.');
+        return null;
+      }
+      const verification = productionNative
+        ? await this.account!.adVerification(rewardKind)
+        : undefined;
+      // Persist the intent before opening the native ad. If Android terminates
+      // the WebView after AdMob's reward event but before dismissal, the signed
+      // SSV callback can still restore this exact account-scoped reward.
+      if (verification)
+        this.account!.queueAdReward(verification, fallbackSeconds, bonusRespect);
+      let result: AdResult;
+      try {
+        result = await this.ads.show(fallbackSeconds, verification);
+      } catch (error) {
+        if (verification) this.account!.clearPendingAdReward(verification.nonce);
+        throw error;
+      }
+      if (!productionNative || !verification) return result;
+      if (!result.rewarded) {
+        this.account!.clearPendingAdReward(verification.nonce);
+        return result;
+      }
+      // The SDK event proves that the client watched an ad; the signed AdMob
+      // callback proves which authenticated account and nonce earned it.
+      this.account!.queueAdReward(verification, result.watchedSeconds, bonusRespect);
+      if (loading.current) {
+        const label = loading.current.querySelector('.ad-loading-box > div:nth-child(2)');
+        if (label) label.textContent = 'VERIFYING REWARD…';
+        const detail = loading.current.querySelector('small');
+        if (detail) detail.textContent = 'Confirming the signed AdMob receipt';
+      } else {
+        loading.current = el('div', 'ad-loading', `
+          <div class="ad-loading-box" role="status" aria-live="polite">
+            <div class="ad-loading-spinner" aria-hidden="true"></div>
+            <div>VERIFYING REWARD…</div>
+            <small>Confirming the signed AdMob receipt</small>
+          </div>`);
+        document.body.appendChild(loading.current);
+      }
+      const status = await this.account!.waitForAdReward(verification.nonce, verification.kind)
+        .catch(() => ({ verified: false }));
+      return status.verified
+        ? { ...result, rewardNonce: verification.nonce }
+        : { ...result, rewarded: false, rewardNonce: verification.nonce, verificationPending: true };
+    }
+    finally {
+      window.clearTimeout(loadingTimer);
+      loading.current?.remove();
+      this.adInProgress = false;
+    }
   }
 
   // ---- HUD refresh ----------------------------------------------------------
@@ -116,7 +354,10 @@ export class UI {
       pill.textContent = `🔥 x${g.s.boostMult} — ${Math.ceil((g.s.boostEndsAt - Date.now()) / 1000)}s`;
     } else pill.hidden = true;
 
-    if (this.openTab) this.refreshPanel();
+    // Settings contains live sliders and a password field. Rebuilding it every
+    // frame resets native controls, closes <details>, and erases typed codes.
+    if (this.openTab && ['upgrades', 'crew', 'garage'].includes(this.openTab)
+        && performance.now() - this.lastPanelRenderAt >= 1000) this.refreshPanel();
   }
 
   toast(msg: string, cls = '') {
@@ -131,6 +372,242 @@ export class UI {
     setTimeout(() => { this.fade.classList.remove('on'); cb?.(); }, 2400);
   }
 
+  /** One Discipline login restores the same save on Android, iOS, and web. */
+  async promptAccount(): Promise<void> {
+    if (!this.account) return;
+    let termsVersion = '';
+    try { termsVersion = (await this.account.legalConfig()).termsVersion; }
+    catch { /* Login remains available; account creation waits for legal config. */ }
+    return new Promise((resolve) => {
+      const overlay = el('div', 'ad-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box name-box account-box">
+          <div class="ad-label">DISCIPLINE ACCOUNT</div>
+          <div class="name-copy">One login keeps your username, progress, inventory, and verified purchases tied to your Discipline account.</div>
+          ${legalControls()}
+          <input class="name-input account-name" maxlength="14" autocomplete="username" placeholder="USERNAME" spellcheck="false" />
+          <input class="name-input account-pass" type="password" maxlength="128" autocomplete="current-password" placeholder="PASSWORD 10+ CHARS" />
+          <label class="terms-check"><input class="account-terms" type="checkbox" ${termsVersion ? '' : 'disabled'}>
+            <span>I agree to the current Terms and Privacy Policy to create a public account.</span>
+          </label>
+          <div class="name-status"></div>
+          <div class="name-actions"><button class="account-login">LOG IN</button><button class="account-create" disabled>CREATE ACCOUNT</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const name = overlay.querySelector('.account-name') as HTMLInputElement;
+      const pass = overlay.querySelector('.account-pass') as HTMLInputElement;
+      const terms = overlay.querySelector('.account-terms') as HTMLInputElement;
+      const createButton = overlay.querySelector('.account-create') as HTMLButtonElement;
+      const status = overlay.querySelector('.name-status') as HTMLElement;
+      if (!termsVersion) status.textContent = 'Connect to load the current Terms before creating an account.';
+      terms.addEventListener('change', () => { createButton.disabled = !terms.checked || !termsVersion; });
+      const submit = async (create: boolean) => {
+        const usernameCheck = validateUsername(name.value.trim());
+        if (!usernameCheck.ok) { status.textContent = usernameCheck.error; return; }
+        if (pass.value.length < 10) { status.textContent = 'Password must be at least 10 characters.'; return; }
+        if (create && (!termsVersion || !terms.checked)) {
+          status.textContent = 'Accept the current Terms and Privacy Policy to create an account.';
+          return;
+        }
+        status.textContent = create ? 'Creating account…' : 'Signing in…';
+        try {
+          if (create) await this.account!.register(name.value.trim(), pass.value, termsVersion);
+          else await this.account!.login(name.value.trim(), pass.value);
+          this.game.s.username = this.account!.username;
+          const source = await this.account!.sync(this.game.s);
+          overlay.remove();
+          if (source === 'reload') location.reload();
+          else {
+            this.game.save();
+            this.toast(`Signed in as ${this.account!.username}`, 'gold');
+            this.refresh();
+            if (!this.account!.termsCurrent) await this.promptTermsAcceptance();
+            resolve();
+          }
+        } catch (e) {
+          const code = e instanceof Error ? e.message : '';
+          status.textContent = code === 'username_taken' ? 'That username is already claimed. Log in or choose another.'
+            : code === 'inappropriate_username' || code === 'reserved_username' ? 'That username is not allowed.'
+            : code === 'invalid_login' ? 'Username or password is incorrect.'
+            : code === 'terms_required' ? 'The Terms changed. Review and accept the current version.'
+              : 'Account service unavailable. Check your connection and retry.';
+        }
+      };
+      overlay.querySelector('.account-login')!.addEventListener('click', () => void submit(false));
+      createButton.addEventListener('click', () => void submit(true));
+      pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') void submit(false); });
+      name.focus();
+    });
+  }
+
+  /** Existing accounts keep ordinary/offline progress when Terms change, but
+   * must explicitly reaccept before returning to the public leaderboard. */
+  promptTermsAcceptance(): Promise<boolean> {
+    if (!this.account?.signedIn || this.account.termsCurrent) return Promise.resolve(true);
+    if (this.termsPrompt) return this.termsPrompt;
+    this.termsPrompt = (async () => {
+      let legal;
+      try { legal = await this.account!.legalConfig(); }
+      catch {
+        this.toast('Connect to review the updated community Terms.');
+        return false;
+      }
+      return new Promise<boolean>((resolve) => {
+        const overlay = el('div', 'ad-overlay terms-overlay');
+        overlay.innerHTML = `
+          <div class="ad-box name-box terms-box">
+            <div class="ad-label">COMMUNITY TERMS UPDATE</div>
+            <div class="name-copy">Your saved progress remains available. Review and accept version ${escapeHtml(legal.termsVersion)} before your username and taps return to the public leaderboard.</div>
+            ${legalControls(legal.termsUrl, legal.privacyUrl)}
+            <label class="terms-check"><input class="terms-accept-check" type="checkbox">
+              <span>I have read and agree to the current Terms and Privacy Policy.</span>
+            </label>
+            <div class="name-status" aria-live="polite"></div>
+            <div class="name-actions"><button class="terms-later">LATER</button><button class="terms-accept" disabled>ACCEPT</button></div>
+          </div>`;
+        document.body.appendChild(overlay);
+        const check = overlay.querySelector('.terms-accept-check') as HTMLInputElement;
+        const accept = overlay.querySelector('.terms-accept') as HTMLButtonElement;
+        const status = overlay.querySelector('.name-status') as HTMLElement;
+        check.addEventListener('change', () => { accept.disabled = !check.checked; });
+        overlay.querySelector('.terms-later')!.addEventListener('click', () => {
+          overlay.remove();
+          resolve(false);
+        });
+        accept.addEventListener('click', async () => {
+          if (!check.checked) return;
+          check.disabled = true; accept.disabled = true;
+          status.textContent = 'Saving acceptance…';
+          try {
+            await this.account!.acceptTerms(legal.termsVersion);
+            this.remoteBoard = null;
+            overlay.remove();
+            this.toast('Community Terms accepted.', 'gold');
+            if (this.openTab === 'ranks') this.refreshPanel();
+            resolve(true);
+          } catch {
+            check.disabled = false;
+            accept.disabled = false;
+            status.textContent = 'Could not save acceptance. Check your connection and retry.';
+          }
+        });
+      });
+    })().finally(() => { this.termsPrompt = null; });
+    return this.termsPrompt;
+  }
+
+  private promptLeaderboardReport(playerRef: string, playerName: string): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.account?.signedIn) { resolve(); return; }
+      const overlay = el('div', 'ad-overlay report-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box name-box report-box">
+          <div class="ad-label">REPORT LEADERBOARD ACCOUNT</div>
+          <div class="name-copy">Report ${escapeHtml(playerName)} for operator review. Reports are private.</div>
+          <label class="report-label">REASON
+            <select class="report-reason">
+              <option value="username">INAPPROPRIATE USERNAME</option>
+              <option value="cheating">SUSPICIOUS SCORE</option>
+              <option value="harassment">HARASSMENT</option>
+              <option value="other">OTHER</option>
+            </select>
+          </label>
+          <label class="report-label">OPTIONAL DETAILS
+            <textarea class="report-details" maxlength="500" rows="3" placeholder="WHAT SHOULD THE REVIEWER KNOW?"></textarea>
+          </label>
+          <div class="name-status" aria-live="polite"></div>
+          <div class="name-actions"><button class="report-cancel">CANCEL</button><button class="report-send">SEND REPORT</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const status = overlay.querySelector('.name-status') as HTMLElement;
+      const send = overlay.querySelector('.report-send') as HTMLButtonElement;
+      const done = () => { overlay.remove(); resolve(); };
+      overlay.querySelector('.report-cancel')!.addEventListener('click', done);
+      send.addEventListener('click', async () => {
+        send.disabled = true;
+        status.textContent = 'Sending report…';
+        const reason = (overlay.querySelector('.report-reason') as HTMLSelectElement).value;
+        const details = (overlay.querySelector('.report-details') as HTMLTextAreaElement).value;
+        try {
+          const created = await this.account!.reportPlayer(playerRef, reason, details);
+          done();
+          this.toast(created ? 'Report sent for review.' : 'You already reported this account.', 'gold');
+        } catch (error) {
+          send.disabled = false;
+          if ((error as Error).message === 'terms_required') {
+            done();
+            await this.promptTermsAcceptance();
+          } else status.textContent = 'Could not send the report. Check your connection and retry.';
+        }
+      });
+    });
+  }
+
+  private async handleCommunityAction(button: HTMLButtonElement) {
+    if (!this.account?.signedIn) return;
+    const action = button.dataset.communityAction;
+    const playerRef = button.dataset.playerRef || '';
+    const playerName = button.dataset.playerName || 'this player';
+    if (!playerRef) return;
+    if (action === 'report') {
+      await this.promptLeaderboardReport(playerRef, playerName);
+      return;
+    }
+    button.disabled = true;
+    try {
+      if (action === 'block') {
+        await this.account.blockPlayer(playerRef);
+        this.toast(`${playerName} hidden.`, 'gold');
+      } else if (action === 'unblock') {
+        await this.account.unblockPlayer(playerRef);
+        this.toast(`${playerName} is visible again.`, 'gold');
+      } else return;
+      this.remoteBoard = null;
+      this.remoteBoardRetryAt = 0;
+      if (this.openTab === 'ranks') this.refreshPanel();
+    } catch (error) {
+      button.disabled = false;
+      if ((error as Error).message === 'terms_required') await this.promptTermsAcceptance();
+      else this.toast('Leaderboard action unavailable. Check your connection.');
+    }
+  }
+
+  /** Policy-required, deliberate account deletion. The typed phrase prevents
+   * an accidental tap from erasing a cross-device save. */
+  promptDeleteAccount(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.account?.signedIn) { resolve(); return; }
+      const overlay = el('div', 'ad-overlay account-delete-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box name-box account-delete-box">
+          <div class="ad-label">DELETE DISCIPLINE ACCOUNT</div>
+          <div class="name-copy">Permanently deletes your username, cloud progress, leaderboard score, inventory, and purchase ledger. This cannot be undone.</div>
+          <input class="name-input delete-confirm" autocomplete="off" spellcheck="false" placeholder="TYPE DELETE" />
+          <div class="name-status">Type DELETE to confirm.</div>
+          <div class="name-actions"><button class="delete-cancel">CANCEL</button><button class="delete-final" disabled>DELETE ACCOUNT</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const input = overlay.querySelector('.delete-confirm') as HTMLInputElement;
+      const status = overlay.querySelector('.name-status') as HTMLElement;
+      const remove = overlay.querySelector('.delete-final') as HTMLButtonElement;
+      const done = () => { overlay.remove(); resolve(); };
+      overlay.querySelector('.delete-cancel')!.addEventListener('click', done);
+      input.addEventListener('input', () => { remove.disabled = input.value.trim().toUpperCase() !== 'DELETE'; });
+      remove.addEventListener('click', async () => {
+        if (input.value.trim().toUpperCase() !== 'DELETE') return;
+        remove.disabled = true; input.disabled = true; status.textContent = 'Deleting account and cloud data…';
+        try {
+          await this.account!.deleteAccount();
+          overlay.remove(); resolve(); location.reload();
+        } catch {
+          input.disabled = false; remove.disabled = false;
+          status.textContent = 'Deletion failed. Check your connection and try again.';
+        }
+      });
+      input.focus();
+    });
+  }
+
   // ---- panels -----------------------------------------------------------------
   /** First-launch claim (free) or paid rename (100K Respect). Resolves once
    *  a unique name is secured; first-launch cannot be dismissed. */
@@ -142,9 +619,9 @@ export class UI {
         <div class="ad-box name-box">
           <div class="ad-label">${firstTime ? 'WELCOME TO THE INTERSECTION' : 'CHANGE USERNAME'}</div>
           <div class="name-copy">${firstTime
-            ? 'Claim your one-of-a-kind username. Nobody else can ever register it.'
+            ? 'Claim your one-of-a-kind username. It stays yours until you rename or delete the account.'
             : `Costs ${fmt(RENAME_COST)} Respect. Your new name must also be unique.`}</div>
-          <input class="name-input" maxlength="14" placeholder="3-14 letters/numbers/_" spellcheck="false" />
+          <input class="name-input" maxlength="14" placeholder="3-14 LETTERS/#/_" spellcheck="false" />
           <div class="name-status"></div>
           <div class="name-actions">
             ${firstTime ? '' : '<button class="name-cancel">CANCEL</button>'}
@@ -158,16 +635,29 @@ export class UI {
       overlay.querySelector('.name-cancel')?.addEventListener('click', done);
       overlay.querySelector('.name-ok')!.addEventListener('click', async () => {
         const name = input.value.trim();
-        if (!USERNAME_RE.test(name)) { status.textContent = '3-14 chars: letters, numbers, _'; return; }
-        if (!this.names) { status.textContent = 'Name service unavailable.'; return; }
+        const usernameCheck = validateUsername(name);
+        if (!usernameCheck.ok) { status.textContent = usernameCheck.error; return; }
+        if (!this.names && !this.account?.signedIn) { status.textContent = 'Name service unavailable.'; return; }
         if (!firstTime && g.s.respect < RENAME_COST) { status.textContent = 'Not enough Respect.'; return; }
         status.textContent = 'Checking availability...';
-        if (!(await this.names.claim(name))) { status.textContent = `"${name}" is taken. Names can't be stolen.`; return; }
         const old = g.s.username;
+        if (this.account?.signedIn) {
+          try { await this.account.rename(name); }
+          catch (e) {
+            const code = e instanceof Error ? e.message : '';
+            status.textContent = code === 'username_taken' ? `"${name}" is taken. Names can't be stolen.`
+              : code === 'inappropriate_username' || code === 'reserved_username' ? 'That username is not allowed.'
+                : 'Name service unavailable. Check your connection and retry.';
+            return;
+          }
+        } else if (!this.names || !(await this.names.claim(name))) {
+          status.textContent = `"${name}" is taken. Names can't be stolen.`; return;
+        }
         if (!firstTime) g.s.respect -= RENAME_COST;
         g.s.username = name;
         g.save();
-        if (old) void this.names.release(old);
+        // Remote rename freed old atomically. The offline provider mirrors it.
+        if (old && this.names) await this.names.release(old);
         sfx.buy();
         this.toast(`Username secured: ${name}`, 'gold');
         done();
@@ -177,22 +667,25 @@ export class UI {
   }
 
   /** The M (Mentality) store: buy premium currency with real money, or watch
-   *  a rewarded ad for a small amount (roughly the ad's worth). */
+   *  a rewarded ad for the fixed amount disclosed before playback. */
   showMShop() {
     const ov = el('div', 'ad-overlay');
-    const packRows = M_PACKS.map(p => `
-      <div class="row">
-        <div class="row-txt"><div class="row-name">💎 ${fmt(p.amount)} M${p.tag ? ` <span class="mtag">${p.tag}</span>` : ''}</div>
-          <div class="row-desc">${p.bonus ? `${p.bonus} bonus` : 'Starter pack'}</div></div>
-        <button data-pack="${p.id}">${p.price}</button>
-      </div>`).join('');
+    const packRows = M_PACKS.map(p => {
+      const price = this.purchases.getPrice(p);
+      return `
+        <div class="row">
+          <div class="row-txt"><div class="row-name">💎 ${fmt(p.amount)} M${p.tag ? ` <span class="mtag">${p.tag}</span>` : ''}</div>
+            <div class="row-desc">${p.bonus ? `${p.bonus} bonus` : 'Starter pack'}</div></div>
+          <button data-pack="${p.id}" ${price ? '' : 'disabled'}>${price ?? 'UNAVAILABLE'}</button>
+        </div>`;
+    }).join('');
     ov.innerHTML = `
       <div class="ad-box mshop">
         <div class="panel-head">GET MORE M<button class="x">✕</button></div>
-        <div class="panel-note">M is premium currency for cosmetics & The Lab. Buy it, or watch an ad for a little.</div>
+        <div class="panel-note">M is premium currency for cosmetics & The Lab. Every completed M ad awards exactly ${AD_M_REWARD} M; closing early or going offline gives no reward.</div>
         <div class="row mshop-ad">
           <div class="row-txt"><div class="row-name">📺 Watch ad → +${AD_M_REWARD} M</div>
-            <div class="row-desc">Free. As much M as the ad is worth.</div></div>
+            <div class="row-desc">Free. Fixed ${AD_M_REWARD} M reward after completion.</div></div>
           <button class="m-ad">WATCH</button>
         </div>
         ${packRows}
@@ -201,25 +694,80 @@ export class UI {
     const close = () => ov.remove();
     ov.querySelector('.x')!.addEventListener('click', close);
     ov.querySelector('.m-ad')!.addEventListener('click', async () => {
-      const watched = await this.ads.show(15);
-      if (watched) {
+      const ad = await this.showRewardedAd(15, 'm');
+      if (!ad) return;
+      if (ad.rewarded) {
         this.game.s.mentality += AD_M_REWARD;
+        if (ad.rewardNonce) this.game.s.appliedAdRewards.push(ad.rewardNonce);
         this.game.save();
+        if (ad.rewardNonce && this.account && await this.account.save(this.game.s))
+          this.account.clearPendingAdReward(ad.rewardNonce);
         sfx.buy();
         this.toast(`+${AD_M_REWARD} M`, 'gold');
         this.refresh();
-      }
+      } else if (ad.verificationPending) {
+        this.toast('Ad complete. Signed reward verification is pending and will restore automatically.');
+      } else this.toast('Ad closed early or unavailable — no M awarded.');
     });
     ov.querySelectorAll('.row button[data-pack]').forEach((b) => {
       b.addEventListener('click', async () => {
         const pack = M_PACKS.find(p => p.id === (b as HTMLElement).dataset.pack)!;
-        const ok = await this.purchases.buy(pack);
-        if (ok) {
-          this.game.s.mentality += pack.amount;
-          this.game.save();
-          sfx.buy();
-          this.toast(`Purchased ${fmt(pack.amount)} M!`, 'gold');
-          this.refresh();
+        if (this.purchases.platform === 'native') {
+          if (!this.account) {
+            this.toast('Purchases are unavailable until the account service is connected.');
+            return;
+          }
+          if (!this.account.signedIn) {
+            close();
+            this.toast('Log in before opening Google Play checkout.', 'gold');
+            await this.promptAccount();
+          }
+          if (!this.account.signedIn || !this.account.cloudReady) {
+            this.toast('Finish account sync before making a purchase.');
+            return;
+          }
+        }
+        const receipt = await this.purchases.buy(pack, this.account?.accountId);
+        if (receipt) {
+          try {
+            if (receipt.platform !== 'web') {
+              // Persist first: a store completion survives a crash, offline
+              // period, or a player choosing to log in only after checkout.
+              queuePendingPurchase(receipt);
+              if (!this.account) {
+                this.toast('Purchase saved. Connect the account service to verify and restore it.');
+                return;
+              }
+              if (!this.account.signedIn) {
+                close();
+                this.toast('Payment saved. Log in now to attach it to your Discipline account.', 'gold');
+                await this.promptAccount();
+              }
+            }
+            const grant = receipt.platform === 'web'
+              ? { amount: pack.amount, transactionId: `web-${Date.now()}` }
+              : await this.account!.verifyPurchase(receipt);
+            const { amount, transactionId } = grant;
+            if (this.game.s.appliedPurchases.includes(transactionId)) {
+              if (await this.account?.save(this.game.s)) removePendingPurchase(receipt);
+              await this.purchases.finish(receipt);
+              this.toast('Purchase was already added to this account.'); return;
+            }
+            if (amount <= 0) {
+              if (await this.account?.save(this.game.s)) removePendingPurchase(receipt);
+              await this.purchases.finish(receipt); this.toast('Purchase was already added to this account.'); return;
+            }
+            this.game.s.mentality += amount;
+            this.game.s.appliedPurchases.push(transactionId);
+            this.game.save();
+            if (await this.account?.save(this.game.s)) removePendingPurchase(receipt);
+            await this.purchases.finish(receipt);
+            sfx.buy();
+            this.toast(`Purchased ${fmt(amount)} M!`, 'gold');
+            this.refresh();
+          } catch {
+            this.toast('Payment completed but verification is pending. No duplicate charge—retry after reconnecting.');
+          }
         }
       });
     });
@@ -265,6 +813,7 @@ export class UI {
     this.panel?.remove();
     this.panel = el('div', tab === 'garage' ? 'panel panel-garage collapsed' : 'panel');
     this.root.appendChild(this.panel);
+    document.body.classList.add('panel-open');
     this.refreshPanel();
     const isGarage = tab === 'garage';
     // Only the actual garage transition gets a scene fade/audio swap.
@@ -285,7 +834,7 @@ export class UI {
         </div>
         <div class="name-actions">
           <button class="off-collect">COLLECT</button>
-          <button class="off-double">📺 COLLECT ×2</button>
+          <button class="off-double" title="Complete the ad. Closing early gives no bonus.">📺 COLLECT ×2</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -295,22 +844,36 @@ export class UI {
     });
     overlay.querySelector('.off-double')!.addEventListener('click', async () => {
       overlay.remove();
-      const watched = await this.ads.show(15);
-      if (watched) {
+      const ad = await this.showRewardedAd(15, 'offline', gain);
+      if (!ad) return;
+      if (ad.rewarded) {
         this.game.s.respect += gain; // second copy of the earnings
+        if (ad.rewardNonce) this.game.s.appliedAdRewards.push(ad.rewardNonce);
+        this.game.save();
+        if (ad.rewardNonce && this.account && await this.account.save(this.game.s))
+          this.account.clearPendingAdReward(ad.rewardNonce);
         sfx.buy();
         this.toast(`DOUBLED: +${fmt(gain)} bonus Respect`, 'gold');
-      }
+      } else if (ad.verificationPending) {
+        this.toast('Ad complete. Signed reward verification is pending and will restore automatically.');
+      } else this.toast('Ad closed early or unavailable — no bonus awarded.');
       this.refresh();
     });
   }
 
   /** fast black dip for scene transitions (garage in/out) */
   quickFade(cb: () => void) {
+    const transition = ++this.fadeTransition;
     this.fade.classList.add('quick', 'on');
-    setTimeout(() => { cb(); }, 180);
-    setTimeout(() => this.fade.classList.remove('on'), 320);
-    setTimeout(() => this.fade.classList.remove('quick'), 650);
+    setTimeout(() => {
+      if (transition === this.fadeTransition) cb();
+    }, 180);
+    setTimeout(() => {
+      if (transition === this.fadeTransition) this.fade.classList.remove('on');
+    }, 320);
+    setTimeout(() => {
+      if (transition === this.fadeTransition) this.fade.classList.remove('quick');
+    }, 650);
   }
 
   close() {
@@ -320,6 +883,7 @@ export class UI {
     this.remoteBoard = null; // refetch live board next open
     this.panel?.remove();
     this.panel = null;
+    document.body.classList.remove('panel-open');
     if (wasGarage) this.onGarage?.(false);
   }
 
@@ -327,8 +891,10 @@ export class UI {
 
   private refreshPanel() {
     if (!this.panel || !this.openTab) return;
+    const previousScroll = this.panel.querySelector<HTMLElement>('.panel-scroll')?.scrollTop ?? 0;
+    this.lastPanelRenderAt = performance.now();
     const g = this.game;
-    const rows: string[] = [`<div class="panel-head">${this.openTab.toUpperCase()}<button class="x">✕</button></div>`];
+    const rows: string[] = [`<div class="panel-head"><span class="panel-title">${this.openTab.toUpperCase()}</span><button class="x">✕</button></div>`];
 
     if (this.openTab === 'upgrades') {
       // New Route (prestige) lives at the top of the upgrades list
@@ -375,9 +941,18 @@ export class UI {
         // premium currency store — buy M or watch an ad for it
         rows.push(row('getm', `💎 Get More M — you have ${fmt(g.s.mentality)}`,
           'Buy premium M, or watch an ad for a little.', 'STORE', true, 'getm'));
+        rows.push(`<div class="dash-grid-label">DASHBOARD · 6 FIXED MOUNTS</div>
+          <div class="dash-slot-grid">${g.s.dashboardSlots.map((id, i) => {
+            const item = id ? COSMETICS.find(c => c.id === id) : null;
+            return `<div class="dash-slot${item ? ' occupied' : ''}" title="${item?.name ?? `Empty slot ${i + 1}`}">
+              <span>${i + 1}</span><b>${item ? item.name.slice(0, 3).toUpperCase() : '—'}</b>
+            </div>`;
+          }).join('')}</div>`);
         for (const c of COSMETICS) {
           const owned = g.s.ownedCosmetics.includes(c.id);
-          const equipped = g.s.equippedCosmetics[c.slot] === c.id;
+          const equipped = c.slot === 'ornament' || c.slot === 'dash'
+            ? g.s.dashboardSlots.includes(c.id)
+            : g.s.equippedCosmetics[c.slot] === c.id;
           rows.push(row(c.id, `${c.name}${equipped ? ' ✓' : ''}`, c.desc,
             owned ? (equipped ? 'UNEQUIP' : 'EQUIP') : `${c.cost} M`,
             true, 'cosmetic')); // always clickable → buy or "need more M" prompt
@@ -392,15 +967,34 @@ export class UI {
       const native = !!this.lb && this.lb.platform !== 'web';
       rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS (raw taps only, boosters don't count)${native
         ? ` · syncing via ${this.lb!.platform === 'gamecenter' ? 'Game Center' : 'Google Play Games'}`
-        : ' · placeholder rivals until store launch (Game Center / Play Games)'}</div>`);
-      // real backend when configured (async: seeded list shows immediately,
-      // live worldwide data patches in when the fetch lands)
-      if (API_URL && g.s.username && this.openTab === 'ranks' && !this.remoteBoard) {
-        void fetchBoardRemote(API_URL, g.s.username).then((b) => {
-          if (b?.length) { this.remoteBoard = b; if (this.openTab === 'ranks') this.refreshPanel(); }
-        });
+        : API_URL ? ' · real Discipline accounts only' : ' · account server not connected'}</div>`);
+      const termsRequired = Boolean(this.account?.signedIn && !this.account.termsCurrent)
+        || this.remoteBoard?.termsRequired === true;
+      if (termsRequired) {
+        rows.push(row('terms', 'Community Terms update',
+          'Offline progress is safe. Accept the current Terms to return to the public board.',
+          'REVIEW', true, 'account'));
       }
-      const list = this.remoteBoard ?? getWorldList(g.s.totalTaps, g.s.username ?? 'YOU');
+      // Live worldwide data patches in when the authenticated fetch lands.
+      if (!termsRequired && API_URL && g.s.username && this.openTab === 'ranks' && !this.remoteBoard
+          && !this.remoteBoardLoading && Date.now() >= this.remoteBoardRetryAt) {
+        this.remoteBoardLoading = true;
+        void fetchBoardRemote(API_URL, g.s.username).then((b) => {
+          if (b) {
+            if (b.termsRequired) this.account?.markTermsOutdated();
+            this.remoteBoard = b;
+            if (this.openTab === 'ranks') this.refreshPanel();
+          } else {
+            this.remoteBoardRetryAt = Date.now() + 10_000;
+          }
+        }).finally(() => { this.remoteBoardLoading = false; });
+      }
+      if (this.remoteBoard?.unavailable) {
+        rows.push('<div class="panel-note">The community board is temporarily unavailable. Your taps and local progress are unaffected.</div>');
+      }
+      const list = this.remoteBoard?.unavailable
+        ? []
+        : this.remoteBoard?.entries ?? getWorldList(g.s.totalTaps, g.s.username ?? 'YOU');
       const yourRank = list.find(e => e.you)?.rank ?? Infinity;
       // Subway-Surfers-style ranked list: top 10, a gap, then your neighborhood
       const shown = list.filter(e => e.rank <= 10 || Math.abs(e.rank - yourRank) <= 2);
@@ -410,11 +1004,20 @@ export class UI {
         prev = e.rank;
         rows.push(`<div class="lb-row${e.you ? ' lb-you' : ''}">
           <span class="lb-rank">${e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : '#' + e.rank}</span>
-          <span class="lb-name">${e.you ? `⭐ ${e.name}` : e.name}</span>
+          <span class="lb-name">${e.you ? '⭐ ' : ''}${escapeHtml(e.name)}</span>
           <span class="lb-score">${fmt(e.taps)}</span>
+          ${this.account?.signedIn && this.account.termsCurrent && !e.you && e.playerRef
+            ? `<span class="lb-actions"><button class="lb-action" data-community-action="report" data-player-ref="${escapeAttr(e.playerRef)}" data-player-name="${escapeAttr(e.name)}">FLAG</button><button class="lb-action" data-community-action="block" data-player-ref="${escapeAttr(e.playerRef)}" data-player-name="${escapeAttr(e.name)}">HIDE</button></span>`
+            : ''}
         </div>`);
       }
-      rows.push(row('rename', `Username: ${g.s.username ?? '—'}`,
+      if (this.remoteBoard?.blocked.length) {
+        rows.push('<div class="lb-blocked-title">HIDDEN PLAYERS</div>');
+        for (const blocked of this.remoteBoard.blocked) {
+          rows.push(`<div class="lb-blocked-row"><span>${escapeHtml(blocked.name)}</span><button class="lb-action" data-community-action="unblock" data-player-ref="${escapeAttr(blocked.playerRef)}" data-player-name="${escapeAttr(blocked.name)}">UNHIDE</button></div>`);
+        }
+      }
+      if (!API_URL) rows.push(row('rename', `Username: ${g.s.username ?? '—'}`,
         `Change costs ${fmt(RENAME_COST)} Respect (one-of-a-kind, can't be stolen)`,
         'CHANGE', g.s.respect >= RENAME_COST, 'name'));
       if (native) {
@@ -422,14 +1025,58 @@ export class UI {
         rows.push(row('signin', 'Account', 'Sign in to submit your taps worldwide', 'SIGN IN', true, 'lb'));
       }
     } else if (this.openTab === 'boosters') {
-      rows.push(`<div class="panel-note">Watch an ad, get a booster. No daily limit — the more the merrier. Ads watched: ${g.s.adsWatched}</div>`);
+      rows.push(`<div class="panel-note">AdMob chooses the ad length. Finish it to receive the matching reward below; closing early or going offline gives no reward. Ads watched: ${g.s.adsWatched}</div>`);
       for (const b of BOOSTERS) {
-        rows.push(row(b.id, `📺 ${b.name}`, b.desc, `WATCH ${b.adSeconds}s`, true, 'booster'));
+        rows.push(row(b.id, `📺 ${b.name}`, b.desc, b.id === 'mid' ? 'WATCH AD' : 'AUTO', b.id === 'mid', b.id === 'mid' ? 'booster' : 'tier'));
+      }
+    } else if (this.openTab === 'settings') {
+      const musicVol = Math.round(Number(localStorage.getItem('discipline-music-volume') ?? '1') * 100);
+      const sfxVol = Math.round(Number(localStorage.getItem('discipline-sfx-volume') ?? '1') * 100);
+      const fov = Number(localStorage.getItem('discipline-fov') ?? '100');
+      const sensitivity = Number(localStorage.getItem('discipline-look-sensitivity') ?? '1.5');
+      const vibration = localStorage.getItem('discipline-vibration') !== '0';
+      const reduced = localStorage.getItem('discipline-reduced-motion') === '1';
+      const textTier = Math.max(0, Math.min(3, this.game.s.textSizeTier ?? 0));
+      rows.push(`<div class="panel-note">Audio and view settings save automatically on this device.</div>
+        <div class="setting text-size-setting"><label><span class="setting-name">Universal text size</span><span class="setting-value text-size-val">${['SMALL', 'MEDIUM', 'LARGE', 'EXTRA LARGE'][textTier]}</span></label>
+          <div class="text-size-choices" role="group" aria-label="Universal text size">${['S', 'M', 'L', 'XL'].map((label, tier) => `<button type="button" data-text-tier="${tier}" class="${tier === textTier ? 'selected' : ''}" aria-pressed="${tier === textTier}">${label}</button>`).join('')}</div>
+        </div>
+        <div class="setting"><label><span class="setting-name">Music</span><span class="setting-value music-val">${musicVol}%</span></label><input class="music-volume" type="range" min="0" max="100" value="${musicVol}"></div>
+        <div class="setting"><label><span class="setting-name">Sound effects</span><span class="setting-value sfx-val">${sfxVol}%</span></label><input class="sfx-volume" type="range" min="0" max="100" value="${sfxVol}"></div>
+        <div class="setting"><label><span class="setting-name">Field of view</span><span class="setting-value fov-val">${fov}%</span></label><input class="fov-setting" type="range" min="70" max="130" value="${fov}"></div>
+        <div class="setting"><label><span class="setting-name">Look sensitivity</span><span class="setting-value sense-val">${sensitivity.toFixed(1)}×</span></label><input class="sense-setting" type="range" min="0.5" max="2" step="0.1" value="${sensitivity}"></div>
+        <label class="setting-check"><input class="vibration-setting" type="checkbox" ${vibration ? 'checked' : ''}> Haptic feedback <span class="setting-hint">subtle taps · strong explosions</span></label>
+        <label class="setting-check"><input class="motion-setting" type="checkbox" ${reduced ? 'checked' : ''}> Reduced motion</label>
+        <button class="reset-view">RESET VIEW TO OPPONENT</button>
+        ${legalControls()}
+        ${this.account?.signedIn && !this.account.termsCurrent
+          ? '<button class="accept-terms">REVIEW COMMUNITY TERMS</button>'
+          : ''}
+        <button class="ad-privacy">AD PRIVACY OPTIONS</button>
+        <details class="cheat-vault"><summary>ENCRYPTED ACCESS</summary>
+          <div class="panel-note">Owner codes are verified by one-way cryptographic hash.</div>
+          <div class="cheat-entry"><input class="cheat-code" type="password" autocomplete="off" spellcheck="false" placeholder="ENTER OWNER CODE"><button class="cheat-submit">UNLOCK</button></div>
+        </details>`);
+      if (this.account?.signedIn) {
+        rows.push(row('logout', `Account: ${this.account.username}`,
+          'Progress is synced across devices.', 'LOG OUT', true, 'account'));
+        rows.push(row('delete', 'Delete account',
+          'Permanently erase this account and associated cloud data.', 'DELETE', true, 'account'));
       }
     }
 
-    this.panel.innerHTML = rows.join('');
+    const collapsedGarage = this.openTab === 'garage' && !this.garageSheetOpen;
+    // Keep the header/close (and GARAGE hide) controls outside the scrolling
+    // content. Scrolling can no longer carry rows underneath those buttons.
+    this.panel.innerHTML = collapsedGarage
+      ? rows.join('')
+      : `${rows[0]}<div class="panel-viewport"><div class="panel-scroll">${rows.slice(1).join('')}</div></div>`;
+    this.pruneTextCaches();
+    const nextScroll = this.panel.querySelector<HTMLElement>('.panel-scroll');
+    if (nextScroll) nextScroll.scrollTop = previousScroll;
+    this.scheduleTextFit(this.panel);
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
+    if (this.openTab === 'settings') this.bindSettings();
     // garage-specific controls
     this.panel.querySelector('.g-exit')?.addEventListener('click', () => this.close());
     this.panel.querySelector('.g-collapse')?.addEventListener('click', () => {
@@ -445,6 +1092,79 @@ export class UI {
         const kind = (btn as HTMLElement).dataset.kind!;
         this.action(kind, id);
       });
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('.lb-action').forEach((button) => {
+      button.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        void this.handleCommunityAction(button);
+      });
+    });
+  }
+
+  private bindSettings() {
+    if (!this.panel) return;
+    const musicInput = this.panel.querySelector('.music-volume') as HTMLInputElement;
+    const sfxInput = this.panel.querySelector('.sfx-volume') as HTMLInputElement;
+    const fovInput = this.panel.querySelector('.fov-setting') as HTMLInputElement;
+    const senseInput = this.panel.querySelector('.sense-setting') as HTMLInputElement;
+    const vibration = this.panel.querySelector('.vibration-setting') as HTMLInputElement;
+    const motion = this.panel.querySelector('.motion-setting') as HTMLInputElement;
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-text-tier]').forEach((button) => {
+      button.addEventListener('click', (ev) => {
+        ev.stopImmediatePropagation();
+        this.game.s.textSizeTier = Number(button.dataset.textTier);
+        this.game.save();
+        this.applyTextSize();
+        this.refreshPanel();
+      });
+    });
+    const applyView = () => {
+      localStorage.setItem('discipline-fov', fovInput.value);
+      localStorage.setItem('discipline-look-sensitivity', senseInput.value);
+      localStorage.setItem('discipline-reduced-motion', motion.checked ? '1' : '0');
+      this.onViewSettings?.(Number(fovInput.value), Number(senseInput.value), motion.checked);
+      (this.panel!.querySelector('.fov-val') as HTMLElement).textContent = `${fovInput.value}%`;
+      (this.panel!.querySelector('.sense-val') as HTMLElement).textContent = `${Number(senseInput.value).toFixed(1)}×`;
+    };
+    musicInput.addEventListener('input', () => {
+      music.setVolume(Number(musicInput.value) / 100);
+      (this.panel!.querySelector('.music-val') as HTMLElement).textContent = `${musicInput.value}%`;
+    });
+    sfxInput.addEventListener('input', () => {
+      sfx.setVolume(Number(sfxInput.value) / 100);
+      (this.panel!.querySelector('.sfx-val') as HTMLElement).textContent = `${sfxInput.value}%`;
+    });
+    fovInput.addEventListener('input', applyView);
+    senseInput.addEventListener('input', applyView);
+    motion.addEventListener('change', applyView);
+    vibration.addEventListener('change', () => localStorage.setItem('discipline-vibration', vibration.checked ? '1' : '0'));
+    this.panel.querySelector('.reset-view')!.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation(); this.onResetView?.(); this.toast('View reset.');
+    });
+    this.panel.querySelector('.accept-terms')?.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation();
+      void this.promptTermsAcceptance();
+    });
+    this.panel.querySelector('.ad-privacy')!.addEventListener('click', async (ev) => {
+      ev.stopImmediatePropagation();
+      const shown = await showAdPrivacyOptions();
+      if (!shown) this.toast('Ad privacy options are unavailable on this build.');
+    });
+    this.panel.querySelector('.cheat-submit')!.addEventListener('click', async (ev) => {
+      ev.stopImmediatePropagation();
+      const input = this.panel!.querySelector('.cheat-code') as HTMLInputElement;
+      const normalized = input.value.trim().toUpperCase();
+      const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
+      const digest = [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
+      if (digest === 'bf0d3de7c4baafabe6d6143f61db643125b855c8a38b959c210509c6ac734674') {
+        this.game.enableInfiniteCurrency();
+        input.value = '';
+        this.toast('OWNER MODE: infinite M and R enabled.', 'gold');
+        this.refresh();
+      } else {
+        input.value = '';
+        this.toast('Invalid owner code.');
+      }
     });
   }
 
@@ -467,7 +1187,9 @@ export class UI {
     else if (kind === 'getm') { this.showMShop(); return; }
     else if (kind === 'cosmetic') {
       const c = COSMETICS.find(x => x.id === id);
-      if (g.s.ownedCosmetics.includes(id)) g.toggleCosmetic(id);
+      if (g.s.ownedCosmetics.includes(id)) {
+        if (!g.toggleCosmetic(id)) { this.toast('Dashboard full — unequip an item first.'); return; }
+      }
       else if (!g.buyCosmetic(id)) {
         if (c && g.s.mentality < c.cost) this.needMoreM(c.cost - g.s.mentality);
         return;
@@ -485,17 +1207,54 @@ export class UI {
     } else if (kind === 'name') {
       this.close();
       await this.promptUsername(false);
+    } else if (kind === 'account' && id === 'logout') {
+      this.account?.logout();
+      this.close();
+      await this.promptAccount();
+    } else if (kind === 'account' && id === 'delete') {
+      this.close();
+      await this.promptDeleteAccount();
+    } else if (kind === 'account' && id === 'terms') {
+      await this.promptTermsAcceptance();
     } else if (kind === 'booster') {
-      const b = BOOSTERS.find(x => x.id === id) as BoosterDef;
       this.close(); // starting an ad closes any open menu — no stacked overlays
-      const watched = await this.ads.show(b.adSeconds);
-      if (watched) {
+      const ad = await this.showRewardedAd(15, 'boost');
+      if (!ad) return;
+      if (ad.rewarded) {
+        const b = ad.watchedSeconds < 10 ? BOOSTERS[0]
+          : ad.watchedSeconds < 25 ? BOOSTERS[1]
+            : BOOSTERS[2];
         g.grantBooster(b);
+        if (ad.rewardNonce) g.s.appliedAdRewards.push(ad.rewardNonce);
+        g.save();
+        if (ad.rewardNonce && this.account && await this.account.save(g.s))
+          this.account.clearPendingAdReward(ad.rewardNonce);
         sfx.boost();
-      }
+        this.toast(`${Math.round(ad.watchedSeconds)}s ad complete — ${b.name} awarded!`, 'gold');
+      } else if (ad.verificationPending) {
+        this.toast('Ad complete. Signed reward verification is pending and will restore automatically.');
+      } else this.toast('Ad closed early or unavailable — no boost awarded.');
     }
+    if (this.openTab && this.openTab !== 'settings') this.refreshPanel();
     this.refresh();
   }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]!);
+}
+
+function escapeAttr(value: string): string {
+  return escapeHtml(value);
+}
+
+function legalControls(termsUrl = `${API_URL}/terms`, privacyUrl = `${API_URL}/privacy`): string {
+  if (!API_URL) {
+    return '<div class="legal-controls"><button class="privacy-policy" type="button" disabled title="Account service is not connected">TERMS UNAVAILABLE</button><button class="privacy-policy" type="button" disabled title="Account service is not connected">PRIVACY UNAVAILABLE</button></div>';
+  }
+  return `<div class="legal-controls"><a class="privacy-policy" href="${escapeAttr(termsUrl)}" target="_blank" rel="noopener noreferrer">TERMS</a><a class="privacy-policy" href="${escapeAttr(privacyUrl)}" target="_blank" rel="noopener noreferrer">PRIVACY</a></div>`;
 }
 
 function row(id: string, name: string, desc: string, action: string, enabled: boolean, kind?: string): string {

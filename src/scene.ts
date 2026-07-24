@@ -38,6 +38,10 @@ function psxify(mat: THREE.Material, res: THREE.Vector2) {
 // Fullscreen composite: 15-bit color crush + 4x4 Bayer dither, like the PSX GPU.
 const COMPOSITE_FRAG = /* glsl */ `
   uniform sampler2D tScene;
+  uniform sampler2D tCosmetics;
+  uniform sampler2D tSceneDepth;
+  uniform sampler2D tCosmeticDepth;
+  uniform float uNoir;
   varying vec2 vUv;
   const mat4 bayer = mat4(
      0.0,  8.0,  2.0, 10.0,
@@ -46,11 +50,23 @@ const COMPOSITE_FRAG = /* glsl */ `
     15.0,  7.0, 13.0,  5.0
   );
   void main() {
-    vec3 c = texture2D(tScene, vUv).rgb;
+    vec4 base = texture2D(tScene, vUv);
+    vec4 cosmetic = texture2D(tCosmetics, vUv);
+    // The coarse cosmetic pass has its own color/depth buffer. Reject pixels
+    // behind the normal scene so dashboard props stay inside the windshield
+    // and the roof sign cannot bleed through the cabin in first person.
+    float sceneDepth = texture2D(tSceneDepth, vUv).r;
+    float cosmeticDepth = texture2D(tCosmeticDepth, vUv).r;
+    cosmetic.a *= step(cosmeticDepth, sceneDepth + 0.00015);
+    vec3 c = mix(base.rgb, cosmetic.rgb, cosmetic.a);
     c = pow(c, vec3(0.4545));                 // linear RT -> sRGB out
     ivec2 p = ivec2(mod(gl_FragCoord.xy, 4.0));
     float d = (bayer[p.x][p.y] / 16.0 - 0.5) / 32.0;
     c = floor((c + d) * 31.0 + 0.5) / 31.0;   // 5 bits per channel
+    if (uNoir > 0.5) {
+      float gray = dot(c, vec3(0.299, 0.587, 0.114));
+      c = vec3(gray);
+    }
     gl_FragColor = vec4(c, 1.0);
   }
 `;
@@ -86,9 +102,18 @@ export class GameScene {
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
   private rt: THREE.WebGLRenderTarget;
+  private cosmeticRT: THREE.WebGLRenderTarget;
   private compScene = new THREE.Scene();
   private compCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private psxRes = new THREE.Vector2(320, 240);
+  private cosmeticRes = new THREE.Vector2(160, 120);
+  private cosmeticLoader = new GLTFLoader();
+  private cosmeticSources = new Map<string, Promise<THREE.Object3D>>();
+  private compositeMaterial!: THREE.ShaderMaterial;
+  private dashboardLoadVersion = 0;
+  private danglerLoadVersion = 0;
+  private garageLoadVersion = 0;
+  private hornLoadVersion = 0;
 
   private static readonly SPACING = 60;       // distance between red lights
   // vertical world-height the eye-contact view frames at the opponent's
@@ -111,7 +136,10 @@ export class GameScene {
   private spritePos = new THREE.Vector3();
   private lampMats: THREE.MeshBasicMaterial[] = [];
   private dashDecal: THREE.Mesh | null = null;
-  private ornament: THREE.Mesh | null = null;
+  private ornament: THREE.Group | null = null;
+  private dangler: THREE.Group | null = null;
+  private hornVisual: THREE.Object3D | null = null;
+  private cockpitMirror: THREE.Group | null = null;
   private hemi: THREE.HemisphereLight;
   private sun!: THREE.DirectionalLight;
   private skyMesh: THREE.Mesh;
@@ -125,8 +153,54 @@ export class GameScene {
   private time = 0;
   private cockpit!: THREE.Group;
   private gaze: 'opponent' | 'road' = 'opponent';
+  private freeLook = false;
+  private lookYaw = 0;
+  private lookPitch = 0;
+  private lookTargetYaw = 0;
+  private lookTargetPitch = 0;
+  private lookDragYaw = 0;
+  private lookDragPitch = 0;
+  private lookSensitivity = Number(localStorage.getItem('discipline-look-sensitivity') ?? '1.5');
+  private fovScale = Number(localStorage.getItem('discipline-fov') ?? '100') / 100;
+  private reducedMotion = localStorage.getItem('discipline-reduced-motion') === '1';
   // must be a Camera: Camera.lookAt aims -z (view direction), Object3D aims +z
   private gazeHelper = new THREE.PerspectiveCamera();
+
+  /** Start a new absolute drag gesture from the view currently on screen. */
+  beginTapLook() {
+    if (!this.freeLook) {
+      const dir = new THREE.Vector3();
+      this.camera.getWorldDirection(dir);
+      this.lookYaw = Math.atan2(dir.x, -dir.z);
+      this.lookPitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+      this.lookTargetYaw = this.lookYaw;
+      this.lookTargetPitch = this.lookPitch;
+      this.freeLook = true;
+    }
+    this.lookDragYaw = this.lookTargetYaw;
+    this.lookDragPitch = this.lookTargetPitch;
+  }
+
+  /** Apply total drag displacement. The rendered scene follows the finger,
+   * matching direct-manipulation scrolling: right moves content right and
+   * down moves content down. */
+  tapLook(totalDx: number, totalDy: number) {
+    if (!this.freeLook) this.beginTapLook();
+    const s = this.lookSensitivity;
+    this.lookTargetYaw = this.lookDragYaw - totalDx * 0.0065 * s;
+    this.lookTargetPitch = THREE.MathUtils.clamp(this.lookDragPitch + totalDy * 0.0052 * s, -0.75, 0.75);
+  }
+
+  setViewSettings(fovPercent: number, lookSensitivity: number, reducedMotion: boolean) {
+    this.fovScale = THREE.MathUtils.clamp(fovPercent / 100, 0.7, 1.3);
+    this.lookSensitivity = THREE.MathUtils.clamp(lookSensitivity, 0.5, 3);
+    this.reducedMotion = reducedMotion;
+    this.reframe();
+  }
+
+  resetTapLook() { this.freeLook = false; }
+  streetSwipe(dx: number, dy: number) { this.tapLook(dx, dy); }
+  resetLook() { this.resetTapLook(); }
 
   constructor(canvas: HTMLCanvasElement) {
     // preserveDrawingBuffer lets us grab devlog screenshots off the canvas
@@ -138,13 +212,15 @@ export class GameScene {
     // lane (x=+2), opponent in the adjacent lane (x=-2) — parallel, side by
     // side, both stopped at the light. The camera (your head) turns: toward
     // the opponent while the light is red, back to the road when it's green.
-    this.camera.position.set(1.55, 1.25, 0); // left (driver's) seat of the lane-2 car
+    this.camera.position.set(1.55, 1.25, 0); // Tap scene faces -z; car-local x=-.45 is its left seat
     this.camera.lookAt(-2.45, 1.3, -0.55);   // straight across at the neighbor
 
     this.scene.fog = new THREE.Fog(SKIES.day.fog, 10, 55);
     this.hemi = new THREE.HemisphereLight(0xffffff, 0x556677, 2.0);
+    this.hemi.layers.enable(1);
     this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xfff2d8, SKIES.day.sun);
+    this.sun.layers.enable(1);
     this.sun.position.set(4, 8, 2);
     this.scene.add(this.sun);
 
@@ -153,12 +229,30 @@ export class GameScene {
       minFilter: THREE.NearestFilter,
       depthBuffer: true,
     });
+    this.rt.depthTexture = new THREE.DepthTexture(320, PSX_H, THREE.UnsignedShortType);
+    // Cosmetic models render at half the game's native PSX resolution. When
+    // nearest-upscaled into the compositor each cosmetic pixel is exactly 2x
+    // the regular scene pixel, matching the approved visual checkpoint.
+    this.cosmeticRT = new THREE.WebGLRenderTarget(160, PSX_H / 2, {
+      magFilter: THREE.NearestFilter,
+      minFilter: THREE.NearestFilter,
+      depthBuffer: true,
+      format: THREE.RGBAFormat,
+    });
+    this.cosmeticRT.depthTexture = new THREE.DepthTexture(160, PSX_H / 2, THREE.UnsignedShortType);
     const compMat = new THREE.ShaderMaterial({
-      uniforms: { tScene: { value: this.rt.texture } },
+      uniforms: {
+        tScene: { value: this.rt.texture },
+        tCosmetics: { value: this.cosmeticRT.texture },
+        tSceneDepth: { value: this.rt.depthTexture },
+        tCosmeticDepth: { value: this.cosmeticRT.depthTexture },
+        uNoir: { value: 0 },
+      },
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: COMPOSITE_FRAG,
       depthTest: false,
     });
+    this.compositeMaterial = compMat;
     this.compScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), compMat));
 
     this.skyMesh = this.buildSky();
@@ -188,6 +282,477 @@ export class GameScene {
     const m = new THREE.MeshLambertMaterial({ color, flatShading: true, ...opts } as THREE.MeshLambertMaterialParameters);
     psxify(m, this.psxRes);
     return m;
+  }
+
+  private cosmeticSource(id: string): Promise<THREE.Object3D> {
+    const cached = this.cosmeticSources.get(id);
+    if (cached) return cached;
+    // These two ultra-thin/rounded Blender exports lost their silhouettes in
+    // the 160×120 cosmetic pass. Author their readable geometry explicitly.
+    if (id === 'orn_napkin' || id === 'orn_monk' || id === 'horn_air' || id === 'horn_sad') {
+      const authored = Promise.resolve(id === 'orn_napkin' ? this.makeReadableNapkin()
+        : id === 'orn_monk' ? this.makeReadableBuddha()
+          : id === 'horn_air' ? this.makeReadableAirhorn()
+            : this.makeReadableViolin());
+      this.cosmeticSources.set(id, authored);
+      return authored;
+    }
+    const pending = this.cosmeticLoader.loadAsync(`/assets/cosmetics/${id}.glb`).then(({ scene }) => {
+      scene.traverse((node) => {
+        node.layers.set(1);
+        if (!(node instanceof THREE.Mesh)) return;
+        // Preserve the original fuzzy-dice model and all of its authored pips.
+        // Only recolor it: lavender plush, dark readable counter dots, dark cord.
+        if (id === 'dangle_dice') {
+          const name = node.name.toLowerCase();
+          const recolor = (material: THREE.Material) => {
+            const copy = material.clone() as THREE.MeshStandardMaterial;
+            copy.map = null;
+            copy.color?.setHex(name.includes('pip') ? 0x24132d
+              : (name.includes('cord') || name.includes('knot')) ? 0x746979
+                : 0xb98ad8);
+            if ('roughness' in copy) copy.roughness = 0.9;
+            return copy;
+          };
+          node.material = Array.isArray(node.material)
+            ? node.material.map(recolor)
+            : recolor(node.material);
+        } else if (id === 'dangle_testing_coals') {
+          // The accepted Comfy mesh stores its marled magenta finish directly
+          // in COLOR_0. Use those exact colors without scene-light blackouts;
+          // the game's pixel pass supplies the intended PSX-style treatment.
+          node.material = new THREE.MeshBasicMaterial({
+            color: 0xd07aa0,
+            vertexColors: Boolean(node.geometry.getAttribute('color')),
+            side: THREE.DoubleSide,
+          });
+        } else if (id === 'dangle_beads' && /bead cord/i.test(node.name)) {
+          const recolor = (material: THREE.Material) => {
+            const copy = material.clone() as THREE.MeshStandardMaterial;
+            copy.map = null;
+            copy.color?.setHex(0x746979);
+            if ('roughness' in copy) copy.roughness = 0.9;
+            return copy;
+          };
+          node.material = Array.isArray(node.material)
+            ? node.material.map(recolor)
+            : recolor(node.material);
+        }
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        for (const material of materials) {
+          if ('flatShading' in material) (material as THREE.MeshStandardMaterial).flatShading = true;
+          const map = (material as THREE.MeshStandardMaterial).map;
+          if (map) {
+            map.magFilter = THREE.NearestFilter;
+            map.minFilter = THREE.NearestFilter;
+            map.generateMipmaps = false;
+          }
+          psxify(material, this.cosmeticRes);
+          material.needsUpdate = true;
+        }
+      });
+      return scene;
+    });
+    this.cosmeticSources.set(id, pending);
+    return pending;
+  }
+
+  private makeReadableNapkin(): THREE.Object3D {
+    const g = new THREE.Group();
+    const paper = this.mat(0xf4f0e8);
+    const shade = this.mat(0xc9c3b8);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.06, 0.82), paper);
+    base.position.y = 0.03; base.rotation.y = 0.18; g.add(base);
+    const fold = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.045, 0.36), this.mat(0xffffff));
+    fold.position.set(0.12, 0.075, -0.08); fold.rotation.y = -0.20; g.add(fold);
+    const crease = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.025, 0.045), shade);
+    crease.position.set(-0.05, 0.102, 0.02); crease.rotation.y = 0.65; g.add(crease);
+    return g;
+  }
+
+  private makeReadableBuddha(): THREE.Object3D {
+    const g = new THREE.Group();
+    const gold = this.mat(0xd8a72f), robe = this.mat(0xe7c34b), dark = this.mat(0x302118);
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z = 0) => {
+      const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); g.add(m); return m;
+    };
+    // Wide crossed legs and round belly make the seated Buddha silhouette.
+    const l = add(new THREE.CapsuleGeometry(.28, .34, 3, 8), gold, -.20, .17); l.rotation.z = Math.PI / 2;
+    const r = add(new THREE.CapsuleGeometry(.28, .34, 3, 8), gold, .20, .17); r.rotation.z = Math.PI / 2;
+    add(new THREE.SphereGeometry(.39, 10, 7), robe, 0, .55);
+    add(new THREE.SphereGeometry(.24, 10, 7), gold, 0, .94);
+    add(new THREE.SphereGeometry(.07, 7, 5), gold, -.23, .95);
+    add(new THREE.SphereGeometry(.07, 7, 5), gold, .23, .95);
+    add(new THREE.SphereGeometry(.10, 8, 5), dark, 0, 1.18);
+    add(new THREE.BoxGeometry(.09, .025, .035), dark, -.08, .98, .22);
+    add(new THREE.BoxGeometry(.09, .025, .035), dark, .08, .98, .22);
+    const smile = add(new THREE.TorusGeometry(.065, .015, 4, 8, Math.PI), dark, 0, .86, .23);
+    smile.rotation.z = Math.PI;
+    return g;
+  }
+
+  private makeReadableAirhorn(): THREE.Object3D {
+    const g = new THREE.Group();
+    const chrome = this.mat(0xe9eef0), shade = this.mat(0x77838a);
+    const dark = this.mat(0x171b20), red = this.mat(0xb93128);
+
+    // A continuous long trumpet profile gives the item the unmistakable
+    // vehicle-air-horn silhouette: narrow throat, long pipe and a wide,
+    // visibly hollow bell. The old tank-first silhouette read like a raygun.
+    const trumpet = new THREE.Group();
+    const profile = [
+      new THREE.Vector2(.10, 0), new THREE.Vector2(.09, .18),
+      new THREE.Vector2(.085, .82), new THREE.Vector2(.12, 1.10),
+      new THREE.Vector2(.22, 1.38), new THREE.Vector2(.43, 1.67),
+    ];
+    const shell = new THREE.Mesh(new THREE.LatheGeometry(profile, 12), chrome);
+    trumpet.add(shell);
+    const bellInterior = new THREE.Mesh(new THREE.CylinderGeometry(.39, .39, .025, 12), dark);
+    bellInterior.position.y = 1.675; trumpet.add(bellInterior);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(.43, .035, 5, 12), shade);
+    rim.rotation.x = Math.PI / 2; rim.position.y = 1.69; trumpet.add(rim);
+    trumpet.rotation.z = -Math.PI / 2;
+    trumpet.position.set(-.72, .56, 0);
+    g.add(trumpet);
+
+    // Compact compressor sits below and behind the trumpet instead of forming
+    // its main body, matching real single-trumpet 12 V air-horn assemblies.
+    const compressor = new THREE.Mesh(new THREE.CylinderGeometry(.20, .20, .48, 10), red);
+    compressor.position.set(-.55, .25, .24); g.add(compressor);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(.16, .18, .08, 10), dark);
+    cap.position.set(-.55, .53, .24); g.add(cap);
+    for (const x of [-.38, .42]) {
+      const foot = new THREE.Mesh(new THREE.BoxGeometry(.12, .12, .34), shade);
+      foot.position.set(x, .06, 0); g.add(foot);
+    }
+    return g;
+  }
+
+  private makeReadableViolin(): THREE.Object3D {
+    const g = new THREE.Group();
+    const wood = this.mat(0xb85b25), dark = this.mat(0x382017), string = this.mat(0xe8d8a8);
+    const lower = new THREE.Mesh(new THREE.SphereGeometry(.34, 10, 7), wood);
+    lower.scale.set(1, 1.15, .32); lower.position.y = .34; g.add(lower);
+    const upper = new THREE.Mesh(new THREE.SphereGeometry(.25, 10, 7), wood);
+    upper.scale.set(1, 1.05, .32); upper.position.y = .78; g.add(upper);
+    const waist = new THREE.Mesh(new THREE.BoxGeometry(.30, .28, .16), wood);
+    waist.position.y = .58; g.add(waist);
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(.10, .58, .10), dark);
+    neck.position.y = 1.18; g.add(neck);
+    const peg = new THREE.Mesh(new THREE.BoxGeometry(.20, .18, .12), dark);
+    peg.position.y = 1.52; g.add(peg);
+    for (const x of [-.025, .025]) {
+      const s = new THREE.Mesh(new THREE.BoxGeometry(.012, 1.12, .018), string);
+      s.position.set(x, .83, .13); g.add(s);
+    }
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(.30, .06, .12), string);
+    bridge.position.set(0, .57, .13); g.add(bridge);
+    return g;
+  }
+
+  /** Clone and normalize a Blender cosmetic into a physical mount.
+   * Dashboard/roof items sit with their lowest vertex on y=0; danglers put
+   * their highest vertex at y=0 so their own hanger touches the mirror. */
+  private async cosmeticModel(id: string, targetMax: number, hanging = false): Promise<THREE.Group> {
+    const content = (await this.cosmeticSource(id)).clone(true);
+    // Keep the original authored dice, but make the tiny export gap survive
+    // the 160x120 cosmetic pass so the pair cannot read as one wide block.
+    if (id === 'dangle_dice') {
+      content.traverse((node) => {
+        if (node.name.startsWith('Left_')) node.position.x -= 0.22;
+        else if (node.name.startsWith('Right_')) node.position.x += 0.22;
+      });
+    }
+    const box = new THREE.Box3().setFromObject(content);
+    const size = box.getSize(new THREE.Vector3());
+    const longest = Math.max(size.x, size.y, size.z, 0.0001);
+    // Preserve any authoring/export scale on the GLTF root. Replacing the
+    // scale outright makes models exported with a non-unit root wildly large.
+    content.scale.multiplyScalar(targetMax / longest);
+    const fitted = new THREE.Box3().setFromObject(content);
+    const center = fitted.getCenter(new THREE.Vector3());
+    content.position.x -= center.x;
+    content.position.z -= center.z;
+    content.position.y -= hanging ? fitted.max.y : fitted.min.y;
+    content.traverse((node) => node.layers.set(1));
+
+    // Move this wrapper at placement time. Keeping the fitted offsets on its
+    // child prevents a later position.set(...) from erasing normalization and
+    // sinking or floating models according to their Blender origin.
+    const mount = new THREE.Group();
+    mount.name = `cosmetic:${id}`;
+    mount.layers.set(1);
+    mount.userData.cosmeticContent = content;
+    mount.userData.cosmeticId = id;
+    mount.userData.hanging = hanging;
+    mount.add(content);
+    return mount;
+  }
+
+  /** Derive six equal dashboard cells and the exact top surface from the real
+   * mesh instead of hand-entered coordinates. */
+  private dashboardMounts(parent: THREE.Group) {
+    const dashboard = parent.getObjectByName('dashboard-surface');
+    if (!(dashboard instanceof THREE.Mesh))
+      throw new Error('dashboard-surface mesh is missing');
+    dashboard.geometry.computeBoundingBox();
+    const box = dashboard.geometry.boundingBox;
+    if (!box) throw new Error('dashboard-surface has no geometry bounds');
+    const minX = dashboard.position.x + box.min.x * dashboard.scale.x;
+    const maxX = dashboard.position.x + box.max.x * dashboard.scale.x;
+    const minZ = dashboard.position.z + box.min.z * dashboard.scale.z;
+    const maxZ = dashboard.position.z + box.max.z * dashboard.scale.z;
+    const cellWidth = (maxX - minX) / 6;
+    return {
+      xs: Array.from({ length: 6 }, (_, index) => minX + cellWidth * (index + 0.5)),
+      y: dashboard.position.y + box.max.y * dashboard.scale.y,
+      z: dashboard.position.z,
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+      cellWidth,
+    };
+  }
+
+  /** Fit a dashboard accessory to the actual surface after applying its
+   * requested orientation. This keeps large accessories passenger-side while
+   * preventing any edge from hanging beyond the dashboard. */
+  private mountDashboardAccessory(
+    parent: THREE.Group,
+    item: THREE.Group,
+    dashboard: ReturnType<GameScene['dashboardMounts']>,
+    preferredX: number,
+    rotationY = 0,
+  ) {
+    item.rotation.y = rotationY;
+    item.updateWorldMatrix(true, true);
+    const localBounds = new THREE.Box3().setFromObject(item);
+    const clamp = (value: number, min: number, max: number) =>
+      min <= max ? THREE.MathUtils.clamp(value, min, max) : (min + max) * 0.5;
+    const x = clamp(
+      preferredX,
+      dashboard.minX - localBounds.min.x,
+      dashboard.maxX - localBounds.max.x,
+    );
+    const z = clamp(
+      dashboard.z,
+      dashboard.minZ - localBounds.min.z,
+      dashboard.maxZ - localBounds.max.z,
+    );
+    item.position.set(x, dashboard.y, z);
+    parent.add(item);
+  }
+
+  private danglingBodyBounds(item: THREE.Object3D): THREE.Box3 {
+    item.updateWorldMatrix(true, true);
+    const itemWorldInverse = item.matrixWorld.clone().invert();
+    const body = new THREE.Box3();
+    const point = new THREE.Vector3();
+    item.traverse((node) => {
+      if (!(node instanceof THREE.Mesh) || !node.visible) return;
+      // Connector geometry is normalized independently below. Including dark
+      // Blender cords, knots, or hanger rings here would align those invisible
+      // pixels instead of the recognizable body.
+      if (/cord|hanger|knot/i.test(node.name) || node.name === 'pixel-censor-filter') return;
+      node.geometry.computeBoundingBox();
+      const bounds = node.geometry.boundingBox;
+      if (!bounds) return;
+      for (const x of [bounds.min.x, bounds.max.x])
+        for (const y of [bounds.min.y, bounds.max.y])
+          for (const z of [bounds.min.z, bounds.max.z]) {
+            point.set(x, y, z)
+              .applyMatrix4(node.matrixWorld)
+              .applyMatrix4(itemWorldInverse);
+            body.expandByPoint(point);
+          }
+    });
+    if (body.isEmpty()) throw new Error('mirror dangler has no visible body bounds');
+    return body;
+  }
+
+  /** Replace origin-dependent, nearly invisible GLB top cords with one short,
+   * readable physical attachment. The visible body—not an invisible cord—now
+   * determines where every accessory hangs. */
+  private compactDanglerToMirror(item: THREE.Group) {
+    const content = item.userData.cosmeticContent as THREE.Object3D | undefined;
+    if (!content) throw new Error('fitted mirror dangler content is missing');
+    item.traverse((node) => {
+      if (/cord|hanger|knot/i.test(node.name)) node.visible = false;
+    });
+    const body = this.danglingBodyBounds(item);
+    const center = body.getCenter(new THREE.Vector3());
+    const shortDrop = 0.026;
+    content.position.x -= center.x;
+    content.position.z -= center.z;
+    content.position.y += -shortDrop - body.max.y;
+
+    // Six pixels wide in the cosmetic pass at the normal mirror distance:
+    // dark enough to read as a cord, light enough not to disappear on the
+    // garage wall. Its top is exactly the mirror's bottom-center anchor.
+    const cord = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0065, 0.0065, shortDrop, 5),
+      this.mat(0x746979),
+    );
+    cord.name = 'Short Mirror Cord';
+    cord.position.y = -shortDrop * 0.5;
+    cord.layers.set(1);
+    item.add(cord);
+    item.userData.visibleBodyTop = -shortDrop;
+  }
+
+  private danglerTargetMax(style: string): number {
+    // The bead strand attaches with its own two top beads and intentionally
+    // gets no central cord. Its former .20 height projected onto the dash.
+    return style === 'beads' ? 0.14
+      : style === 'testing_coals' ? 0.16
+        : style === 'dice' ? 0.22 : 0.20;
+  }
+
+  /** Tap FPV and Garage use the same bottom-center mirror attachment path. */
+  private mountDangler(mirror: THREE.Group, item: THREE.Group, style: string) {
+    const anchor = mirror.getObjectByName('dangler-anchor');
+    if (!(anchor instanceof THREE.Group))
+      throw new Error('rear-view mirror dangler anchor is missing');
+    if (style === 'testing_coals') {
+      const content = item.userData.cosmeticContent as THREE.Object3D | undefined;
+      if (!content) throw new Error('Testing Coals fitted content is missing');
+      // The source OBJ is Z-up. Convert it once to the game's Y-up cabin,
+      // then present the accepted 135-degree reference side toward the driver
+      // in each of the two oppositely oriented cockpits.
+      const driverFacingYaw = mirror.userData.facing < 0
+        ? -1.42244334
+        : 1.92914931;
+      content.rotation.set(-Math.PI / 2, driverFacingYaw, 0, 'YXZ');
+    }
+    // These authored faces point along +z; turn their readable face toward the
+    // driver-facing mirror anchor without changing the geometry.
+    if (style === 'dice' || style === 'yinyang' || style === 'fire')
+      item.rotation.y = mirror.userData.facing < 0 ? Math.PI : 0;
+    if (style !== 'beads') this.compactDanglerToMirror(item);
+    // Real mirror accessories attach behind the shell. This inset hides the
+    // mounting tip and, in the driver's actual projection, leaves visible air
+    // between the accessory and the dashboard instead of a false contact.
+    item.position.y = style === 'beads' ? 0.024
+      : style === 'testing_coals' ? 0.060 : 0.040;
+    item.userData.mirrorShellInset = item.position.y;
+    if (style === 'censored') this.addCensorFilter(item);
+    anchor.add(item);
+    return item;
+  }
+
+  private dashboardAsset(value: string): { id: string; size: number } | null {
+    return ({
+      '#e8e4d8': { id: 'orn_napkin', size: 0.26 },
+      '#7a4a9e': { id: 'orn_cowboy', size: 0.24 },
+      '#e8862a': { id: 'orn_cone', size: 0.20 },
+      '#e8c84a': { id: 'orn_monk', size: 0.24 },
+    } as Record<string, { id: string; size: number }>)[value] ?? null;
+  }
+
+  private danglerAsset(style: string): string | null {
+    return ({
+      dice: 'dangle_dice', beads: 'dangle_beads', yinyang: 'dangle_yinyang',
+      fire: 'dangle_fire', censored: 'dangle_censored',
+      testing_coals: 'dangle_testing_coals', goop: 'dangle_goop',
+    } as Record<string, string>)[style] ?? null;
+  }
+
+  /** Camera-facing mosaic limited to the novelty body (not its mirror cord). */
+  private addCensorFilter(item: THREE.Object3D) {
+    // Keep the novelty and its filter in one pass so the model cannot be
+    // composited over the censor afterward. The high renderOrder below then
+    // guarantees only a muted silhouette remains visible through the mosaic.
+    const body = new THREE.Box3();
+    item.updateWorldMatrix(true, true);
+    const itemWorldInverse = item.matrixWorld.clone().invert();
+    item.traverse((node) => {
+      node.layers.set(0);
+      if (!(node instanceof THREE.Mesh)) return;
+      const materialNames = (Array.isArray(node.material) ? node.material : [node.material])
+        .map((material) => material.name.toLowerCase());
+      const filterSkin = /filter.skin/i.test(node.name)
+        || materialNames.some((name) => name.includes('censor filter'));
+      if (filterSkin) {
+        // Use one neutral video-style filter, not the old pink body-hugging
+        // skins plus a second square over the top.
+        node.visible = false;
+        return;
+      }
+      if (/cord|hanger|hanging.ring/i.test(node.name)) return;
+      node.geometry.computeBoundingBox();
+      const bounds = node.geometry.boundingBox;
+      if (!bounds) return;
+      for (const x of [bounds.min.x, bounds.max.x])
+        for (const y of [bounds.min.y, bounds.max.y])
+          for (const z of [bounds.min.z, bounds.max.z]) {
+            const point = new THREE.Vector3(x, y, z)
+              .applyMatrix4(node.matrixWorld)
+              .applyMatrix4(itemWorldInverse);
+            body.expandByPoint(point);
+          }
+    });
+    if (body.isEmpty()) {
+      const worldBody = new THREE.Box3().setFromObject(item);
+      for (const x of [worldBody.min.x, worldBody.max.x])
+        for (const y of [worldBody.min.y, worldBody.max.y])
+          for (const z of [worldBody.min.z, worldBody.max.z])
+            body.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(itemWorldInverse));
+    }
+    const bodySize = body.getSize(new THREE.Vector3());
+    const bodyCenter = body.getCenter(new THREE.Vector3());
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 8;
+    const ctx = canvas.getContext('2d')!;
+    const colors = ['#17191d', '#30343a', '#50555d', '#747981', '#24272c'];
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+      ctx.fillStyle = colors[(x * 3 + y * 5 + (x ^ y)) % colors.length];
+      ctx.fillRect(x, y, 1, 1);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.magFilter = texture.minFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    const material = new THREE.SpriteMaterial({
+      map: texture, transparent: true, opacity: 0.52,
+      // The cosmetic compositor uses its depth texture as a visibility mask;
+      // writing depth preserves the requested square instead of clipping the
+      // mosaic back to the novelty model's silhouette.
+      depthTest: false, depthWrite: true,
+    });
+    const filter = new THREE.Sprite(material);
+    filter.name = 'pixel-censor-filter';
+    // Authored body bounds are about 2.26 × 2.92 before normalization. A 3.0
+    // square covers the item closely while leaving the hanging cord visible.
+    const square = Math.max(bodySize.x, bodySize.y, bodySize.z) * 1.08;
+    filter.scale.set(square, square, 1);
+    filter.position.copy(bodyCenter);
+    filter.renderOrder = 50;
+    // Render this one deliberate video-style overlay in the main pass. The
+    // cosmetic pass rejects pixels outside the underlying model's depth,
+    // which would collapse this square back into the uncensored silhouette.
+    filter.layers.set(0);
+    item.add(filter);
+  }
+
+  setHornVisual(style?: string) {
+    const version = ++this.hornLoadVersion;
+    if (this.hornVisual) { this.hornVisual.parent?.remove(this.hornVisual); this.hornVisual = null; }
+    const asset = style === 'violin' ? 'horn_sad' : style === 'airhorn' ? 'horn_air' : null;
+    if (!asset) return;
+    void this.cosmeticModel(asset, style === 'violin' ? 0.34 : 0.30).then((item) => {
+      if (version !== this.hornLoadVersion) return;
+      // Horn equipment has its own passenger-side dashboard mount so it never
+      // displaces one of the player's six ornament slots.
+      const dashboard = this.dashboardMounts(this.cockpit);
+      this.mountDashboardAccessory(
+        this.cockpit,
+        item,
+        dashboard,
+        dashboard.xs[5],
+        style === 'airhorn' ? Math.PI : 0,
+      );
+      this.hornVisual = item;
+    }).catch((error) => console.error(`Unable to load cosmetic ${asset}`, error));
   }
 
   // ---- world ---------------------------------------------------------------
@@ -342,6 +907,22 @@ export class GameScene {
   }
 
   // ---- player cockpit --------------------------------------------------------
+  private makeSteeringWheel(radius = 0.09) {
+    const steering = new THREE.Group();
+    const steeringMat = this.mat(0x26262e);
+    steering.add(new THREE.Mesh(new THREE.TorusGeometry(radius, 0.03, 8, 16), steeringMat));
+    for (const angle of [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3]) {
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(radius * 0.86, 0.022, 0.022), steeringMat);
+      spoke.position.x = radius * 0.43;
+      spoke.rotation.z = angle;
+      steering.add(spoke);
+    }
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.045, 8), steeringMat);
+    hub.rotation.x = Math.PI / 2;
+    steering.add(hub);
+    return steering;
+  }
+
   private buildCockpit() {
     const g = new THREE.Group();
     // hood
@@ -352,6 +933,7 @@ export class GameScene {
     // dash
     const dash = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.3, 0.5), this.mat(0x1c1c22));
     dash.position.set(0, 0.82, -0.75);
+    dash.name = 'dashboard-surface';
     g.add(dash);
     // A-pillars at the windshield line — clear of the left side-window view
     for (const side of [-1, 1]) {
@@ -360,11 +942,22 @@ export class GameScene {
       pillar.rotation.x = -0.35;
       g.add(pillar);
     }
-    // wheel in front of the driver's (left) seat
-    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.045, 6, 12), this.mat(0x26262e));
-    wheel.position.set(-0.45, 0.95, -0.62);
-    wheel.rotation.x = -1.15;
-    g.add(wheel);
+    // Steering assembly in front of the driver's (left) seat. Keep the rim
+    // completely above and behind the dash: the old wheel was centered inside
+    // the dashboard and tilted almost flat, which turned it into huge clipped
+    // slabs in the low-resolution first-person render.
+    const steering = this.makeSteeringWheel();
+    const steeringMat = this.mat(0x26262e);
+    steering.position.set(-0.45, 1.10, -0.68);
+    steering.rotation.x = -0.28;
+    g.add(steering);
+
+    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.34, 8), steeringMat);
+    column.position.set(-0.45, 1.02, -0.55);
+    column.rotation.x = Math.PI / 2 - 0.28;
+    g.add(column);
+    // Centered at the top of the windshield, above the driver's sight line.
+    this.cockpitMirror = this.addRearViewMirror(g, 0, 1.63, -1.08);
     g.name = 'cockpit';
     // fixed to the CAR, not the head — the dash stays put when you look left
     g.position.set(2, 0, 0);
@@ -394,16 +987,300 @@ export class GameScene {
     this.dashDecal = m;
   }
 
-  setOrnament(colorHex?: string) {
-    if (this.ornament) { this.cockpit.remove(this.ornament); this.ornament = null; }
-    if (!colorHex) return;
-    const m = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.06, 0),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(colorHex) })
+  /** Create a deliberately readable, low-poly fuzzy cube.  Image-to-3D
+   * reconstruction was rejected for these items because it rounded the dice
+   * into blobs; the cube silhouette, pips, and mount are authored explicitly
+   * so the same object reads identically in tap FPV and the garage. */
+  private makeFuzzyDice(scale = 1, color = 0xb785d6) {
+    const g = new THREE.Group();
+    const cubeSize = 0.105 * scale;
+    const cube = new THREE.Mesh(new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize), this.mat(color));
+    g.add(cube);
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(cube.geometry),
+      new THREE.LineBasicMaterial({ color: 0x7a0d58, transparent: true, opacity: 0.9 })
     );
-    m.position.set(-0.5, 1.0, -0.72); // on the dash, car-space
-    this.cockpit.add(m);
-    this.ornament = m;
+    g.add(edge);
+    const pip = (x: number, y: number, z: number) => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.010 * scale, 6, 4), this.mat(0x24112f));
+      m.position.set(x, y, z); g.add(m);
+    };
+    const p = cubeSize * 0.24;
+    // Top face: five pips. Front face: three pips. They stay visible from the
+    // driver's seat while keeping the object unmistakably cubic.
+    for (const [x, z] of [[-p, -p], [p, -p], [0, 0], [-p, p], [p, p]]) pip(x, cubeSize / 2 + 0.002, z);
+    for (const [x, y] of [[-p, p], [0, 0], [p, -p]]) pip(x, y, cubeSize / 2 + 0.002);
+    for (const [y, z] of [[p, -p], [-p, p]]) pip(cubeSize / 2 + 0.002, y, z);
+    // A sparse fringe of deterministic fibers softens the silhouette without
+    // changing the hard cube volume or creating an organic/blob-like shape.
+    const fibers: number[] = [];
+    for (let i = 0; i < 48; i++) {
+      const t = ((i * 37) % 101) / 100 - 0.5;
+      const u = ((i * 61) % 101) / 100 - 0.5;
+      const face = i % 6;
+      const h = cubeSize / 2 + 0.004;
+      if (face === 0) fibers.push(t * cubeSize, h, u * cubeSize);
+      else if (face === 1) fibers.push(t * cubeSize, -h, u * cubeSize);
+      else if (face === 2) fibers.push(-h, t * cubeSize, u * cubeSize);
+      else if (face === 3) fibers.push(h, t * cubeSize, u * cubeSize);
+      else if (face === 4) fibers.push(t * cubeSize, u * cubeSize, h);
+      else fibers.push(t * cubeSize, u * cubeSize, -h);
+    }
+    const fiberGeo = new THREE.BufferGeometry();
+    fiberGeo.setAttribute('position', new THREE.Float32BufferAttribute(fibers, 3));
+    g.add(new THREE.Points(fiberGeo, new THREE.PointsMaterial({ color: 0xd8b6ec, size: 0.006 * scale, sizeAttenuation: true })));
+    return g;
+  }
+
+  /** Each item is built upward from y=0 so its mount always rests on the dash. */
+  private makeDashboardItem(value: string, size: number) {
+    const g = new THREE.Group();
+    const add = (geometry: THREE.BufferGeometry, color: number, x: number, y: number, z = 0) => {
+      const m = new THREE.Mesh(geometry, this.mat(color));
+      m.position.set(x, y, z); g.add(m); return m;
+    };
+    const s = size / 0.06;
+    if (value === '#e8e4d8') { // First Napkin Ornament
+      const napkin = add(new THREE.BoxGeometry(.13 * s, .014 * s, .11 * s), 0xe8e4d8, 0, .007 * s);
+      napkin.rotation.y = .22;
+      const fold = add(new THREE.BoxGeometry(.105 * s, .009 * s, .015 * s), 0xb8b1a8, 0, .017 * s, .018 * s);
+      fold.rotation.y = .22;
+      const corner = add(new THREE.BoxGeometry(.075 * s, .008 * s, .012 * s), 0xffffff, -.018 * s, .020 * s, -.020 * s);
+      corner.rotation.y = -.22;
+    } else if (value === '#7a4a9e') { // Tiny Steel Cowboy bobblehead
+      // Wider brim, tall crown, bandana, moustache, and a squared western
+      // jaw keep this unmistakably a cowboy instead of a generic bobblehead.
+      add(new THREE.CylinderGeometry(.035 * s, .045 * s, .06 * s, 6), 0x68717e, 0, .03 * s);
+      add(new THREE.CylinderGeometry(.045 * s, .05 * s, .045 * s, 7), 0x8e3f46, 0, .075 * s);
+      add(new THREE.BoxGeometry(.058 * s, .018 * s, .045 * s), 0x7a4a9e, 0, .098 * s, .036 * s);
+      add(new THREE.SphereGeometry(.042 * s, 8, 6), 0xc08a62, 0, .125 * s);
+      add(new THREE.SphereGeometry(.006 * s, 5, 4), 0x17171c, -.014 * s, .130 * s, .038 * s);
+      add(new THREE.SphereGeometry(.006 * s, 5, 4), 0x17171c, .014 * s, .130 * s, .038 * s);
+      add(new THREE.BoxGeometry(.025 * s, .009 * s, .012 * s), 0x3a1d16, 0, .113 * s, .040 * s);
+      add(new THREE.CylinderGeometry(.073 * s, .073 * s, .018 * s, 8), 0x30323a, 0, .164 * s);
+      add(new THREE.CylinderGeometry(.042 * s, .068 * s, .042 * s, 8), 0x30323a, 0, .190 * s);
+      add(new THREE.BoxGeometry(.072 * s, .010 * s, .014 * s), 0x7a4a9e, 0, .183 * s, .040 * s);
+    } else if (value === '#e8862a') { // Tiny Traffic Cone
+      add(new THREE.CylinderGeometry(.022 * s, .065 * s, .13 * s, 8), 0xe8862a, 0, .065 * s);
+      add(new THREE.CylinderGeometry(.075 * s, .075 * s, .012 * s, 8), 0x2b2b30, 0, .006 * s);
+      add(new THREE.CylinderGeometry(.049 * s, .052 * s, .015 * s, 8), 0xf2f0e8, 0, .057 * s);
+      add(new THREE.CylinderGeometry(.037 * s, .041 * s, .014 * s, 8), 0xf2f0e8, 0, .092 * s);
+    } else { // Dashboard Monk
+      add(new THREE.CylinderGeometry(.05 * s, .065 * s, .035 * s, 8), 0x7c3f22, 0, .018 * s);
+      add(new THREE.CylinderGeometry(.035 * s, .05 * s, .055 * s, 8), 0xe8c84a, 0, .06 * s);
+      add(new THREE.BoxGeometry(.07 * s, .012 * s, .018 * s), 0xd39e32, 0, .072 * s, .036 * s);
+      add(new THREE.SphereGeometry(.035 * s, 8, 6), 0xc98c58, 0, .112 * s);
+      add(new THREE.SphereGeometry(.006 * s, 5, 4), 0x17171c, -.012 * s, .114 * s, .032 * s);
+      add(new THREE.SphereGeometry(.006 * s, 5, 4), 0x17171c, .012 * s, .114 * s, .032 * s);
+      add(new THREE.CylinderGeometry(.045 * s, .045 * s, .012 * s, 8), 0x7c3f22, 0, .147 * s);
+      add(new THREE.ConeGeometry(.018 * s, .035 * s, 7), 0x7c3f22, 0, .170 * s);
+    }
+    return g;
+  }
+
+  setDashboardItems(values: (string | null)[]) {
+    const version = ++this.dashboardLoadVersion;
+    if (this.ornament) { this.cockpit.remove(this.ornament); this.ornament = null; }
+    const rail = new THREE.Group();
+    const dashboard = this.dashboardMounts(this.cockpit);
+    values.slice(0, 6).forEach((value, i) => {
+      if (!value) return;
+      const asset = this.dashboardAsset(value);
+      if (!asset) return;
+      void this.cosmeticModel(asset.id, asset.size).then((item) => {
+        if (version !== this.dashboardLoadVersion || this.ornament !== rail) return;
+        // Dashboard top is y=.97; normalized items originate at their exact
+        // lowest vertex, so every prop physically meets the six-slot rail.
+        item.position.set(dashboard.xs[i], dashboard.y, dashboard.z);
+        rail.add(item);
+      }).catch((error) => console.error(`Unable to load cosmetic ${asset.id}`, error));
+    });
+    this.cockpit.add(rail);
+    this.ornament = rail;
+  }
+
+  private addRearViewMirror(parent: THREE.Group, x: number, y: number, z: number, facing = 1, scale = 1) {
+    const mirror = new THREE.Group();
+    const stem = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.16, 0.055), this.mat(0x202026));
+    stem.name = 'mirror-stem';
+    stem.position.y = 0.12;
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.16, 0.055), this.mat(0x101014));
+    shell.name = 'mirror-shell';
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.455, 0.105),
+      new THREE.MeshBasicMaterial({ color: 0xa9c0c8, side: THREE.DoubleSide }));
+    glass.name = 'mirror-glass';
+    glass.position.z = 0.029 * facing;
+    mirror.rotation.x = -0.08;
+    mirror.scale.setScalar(scale);
+    mirror.add(stem, shell, glass);
+    mirror.userData.facing = facing;
+    const danglerAnchor = new THREE.Group();
+    danglerAnchor.name = 'dangler-anchor';
+    // Shell bottom is y=-.08. Following the glass sign puts the attachment on
+    // the driver-facing side in both oppositely oriented vehicle scenes.
+    danglerAnchor.position.set(0, -0.078, 0.06 * facing);
+    mirror.add(danglerAnchor);
+    mirror.position.set(x, y, z);
+    parent.add(mirror);
+    return mirror;
+  }
+
+  private makeDangler(style: string): THREE.Group {
+    const g = new THREE.Group();
+    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.28, 5), this.mat(0x202026));
+    cord.position.y = -0.14; g.add(cord);
+    const add = (geometry: THREE.BufferGeometry, color: number, x: number, y: number, z = 0) => {
+      const m = new THREE.Mesh(geometry, this.mat(color));
+      m.position.set(x, y, z); g.add(m); return m;
+    };
+    if (style === 'dice') {
+      const dice = new THREE.Group();
+      const left = this.makeFuzzyDice(0.72);
+      const right = this.makeFuzzyDice(0.72);
+      left.position.set(-0.075, -0.32, 0);
+      right.position.set(0.075, -0.32, 0);
+      dice.add(left, right);
+      g.add(dice);
+    } else if (style === 'beads') {
+      const colors = [0xe84a4a, 0xe8c84a, 0x4ae08a, 0x4a8ae0, 0xb04ae0];
+      for (let i = 0; i < 7; i++) add(new THREE.SphereGeometry(0.040, 7, 5), colors[i % colors.length], 0, -0.31 - i * 0.055);
+    } else if (style === 'yinyang') {
+      // A front-facing medallion reads as yin-yang from the driver's seat;
+      // the previous hemispheres looked like a white bowl from the side.
+      const r = 0.12;
+      const disk = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.018, 20),
+        new THREE.MeshBasicMaterial({ color: 0xf2f0e8, side: THREE.DoubleSide }));
+      disk.rotation.x = Math.PI / 2; disk.position.set(0, -0.39, 0.012); g.add(disk);
+      const black = new THREE.Mesh(new THREE.CircleGeometry(r * .995, 20, Math.PI, Math.PI),
+        new THREE.MeshBasicMaterial({ color: 0x16161a, side: THREE.DoubleSide }));
+      black.position.set(0, -0.39, 0.024); g.add(black);
+      add(new THREE.SphereGeometry(0.022, 7, 5), 0x16161a, 0, -0.45, 0.032);
+      add(new THREE.SphereGeometry(0.022, 7, 5), 0xf2f0e8, 0, -0.33, 0.032);
+    } else if (style === 'fire') {
+      add(new THREE.SphereGeometry(0.085, 10, 7), 0xff5a18, 0, -0.38);
+      const flame = add(new THREE.ConeGeometry(0.075, 0.19, 7), 0xffc21c, 0, -0.22);
+      flame.rotation.z = 0.14;
+      const lick = add(new THREE.ConeGeometry(0.040, 0.12, 6), 0xff8a18, -0.045, -0.20, 0.01);
+      lick.rotation.z = -0.25;
+      const inner = add(new THREE.ConeGeometry(0.032, 0.10, 6), 0xfff28a, 0.018, -0.15, 0.02);
+      inner.rotation.z = -0.10;
+    } else if (style === 'censored') {
+      // Pink novelty silhouette with a deliberately oversized censor bar.
+      add(new THREE.CylinderGeometry(0.040, 0.052, 0.18, 8), 0xf06aa7, 0, -0.37, 0);
+      add(new THREE.SphereGeometry(0.070, 8, 6), 0xf06aa7, -0.075, -0.46);
+      add(new THREE.SphereGeometry(0.070, 8, 6), 0xf06aa7, 0.075, -0.46);
+      add(new THREE.BoxGeometry(0.25, 0.075, 0.14), 0x202026, 0, -0.34, 0.075);
+      add(new THREE.BoxGeometry(0.20, 0.018, 0.012), 0x8b315d, 0, -0.30, 0.15);
+    } else if (style === 'testing_coals') {
+      // Recreate the accepted first-generation Comfy render: two rough,
+      // magenta coals stacked vertically with a loose dark loop emerging
+      // between them. The procedural texture is deterministic and remains
+      // readable after the game's low-resolution cosmetic pass.
+      const texSize = 32;
+      const pixels = new Uint8Array(texSize * texSize * 4);
+      let noiseSeed = 0x51a7c0;
+      for (let i = 0; i < texSize * texSize; i++) {
+        noiseSeed = (noiseSeed * 1664525 + 1013904223) >>> 0;
+        const grain = (noiseSeed >>> 24) / 255;
+        const dark = grain < 0.34;
+        const highlight = grain > 0.88;
+        pixels[i * 4] = dark ? 54 : highlight ? 235 : 183 + Math.round(grain * 28);
+        pixels[i * 4 + 1] = dark ? 25 : highlight ? 87 : 24 + Math.round(grain * 22);
+        pixels[i * 4 + 2] = dark ? 48 : highlight ? 151 : 91 + Math.round(grain * 31);
+        pixels[i * 4 + 3] = 255;
+      }
+      const coalTexture = new THREE.DataTexture(pixels, texSize, texSize, THREE.RGBAFormat);
+      coalTexture.wrapS = coalTexture.wrapT = THREE.RepeatWrapping;
+      coalTexture.repeat.set(2.2, 1.8);
+      coalTexture.magFilter = THREE.NearestFilter;
+      coalTexture.minFilter = THREE.NearestFilter;
+      coalTexture.generateMipmaps = false;
+      coalTexture.needsUpdate = true;
+      const coalMaterial = new THREE.MeshLambertMaterial({
+        map: coalTexture,
+        color: 0xf06aa7,
+        flatShading: true,
+      });
+      psxify(coalMaterial, this.cosmeticRes);
+      const coalGeometry = (phase: number) => {
+        const geometry = new THREE.IcosahedronGeometry(1, 2);
+        const positions = geometry.getAttribute('position');
+        const vertex = new THREE.Vector3();
+        for (let i = 0; i < positions.count; i++) {
+          vertex.fromBufferAttribute(positions, i);
+          const wobble = 1
+            + 0.055 * Math.sin(vertex.x * 11.3 + vertex.y * 7.1 + phase)
+            + 0.035 * Math.sin(vertex.z * 15.7 - vertex.x * 5.3 + phase * 1.7);
+          vertex.multiplyScalar(wobble);
+          positions.setXYZ(i, vertex.x, vertex.y, vertex.z);
+        }
+        positions.needsUpdate = true;
+        geometry.computeVertexNormals();
+        return geometry;
+      };
+      const topCoal = new THREE.Mesh(coalGeometry(0.7), coalMaterial);
+      topCoal.name = 'Testing Coal Top';
+      topCoal.scale.set(0.125, 0.145, 0.115);
+      topCoal.position.set(0.018, -0.36, 0);
+      topCoal.rotation.set(0.10, -0.18, -0.10);
+      g.add(topCoal);
+      const lowerCoal = new THREE.Mesh(coalGeometry(2.4), coalMaterial.clone());
+      lowerCoal.name = 'Testing Coal Bottom';
+      lowerCoal.scale.set(0.108, 0.122, 0.105);
+      lowerCoal.position.set(0.026, -0.605, 0.002);
+      lowerCoal.rotation.set(-0.14, 0.20, 0.12);
+      g.add(lowerCoal);
+      const looseLoop = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-0.065, -0.43, 0.018),
+        new THREE.Vector3(-0.15, -0.50, 0.020),
+        new THREE.Vector3(-0.27, -0.545, 0.022),
+        new THREE.Vector3(-0.31, -0.59, 0.020),
+        new THREE.Vector3(-0.25, -0.62, 0.018),
+        new THREE.Vector3(-0.17, -0.58, 0.018),
+        new THREE.Vector3(-0.07, -0.555, 0.016),
+      ]);
+      const loopMesh = new THREE.Mesh(
+        new THREE.TubeGeometry(looseLoop, 18, 0.011, 5, false),
+        this.mat(0x424047),
+      );
+      loopMesh.name = 'Testing Coals Loose Loop';
+      g.add(loopMesh);
+      const join = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.012, 0.012, 0.10, 5),
+        this.mat(0x424047),
+      );
+      join.name = 'Testing Coals Short Join';
+      join.position.set(-0.052, -0.505, 0.016);
+      join.rotation.z = -0.12;
+      g.add(join);
+    } else {
+      // Explosion goop: an irregular splat cluster with several hanging drips,
+      // matching the blobs left on defeated opponent cars.
+      add(new THREE.SphereGeometry(0.12, 9, 7), 0x75d13b, -0.045, -0.35);
+      add(new THREE.SphereGeometry(0.095, 8, 6), 0x67bf32, 0.070, -0.37);
+      add(new THREE.SphereGeometry(0.075, 8, 6), 0x4a9e28, -0.11, -0.40);
+      add(new THREE.ConeGeometry(0.034, 0.16, 6), 0x4a9e28, -0.05, -0.53);
+      add(new THREE.ConeGeometry(0.027, 0.13, 6), 0x67bf32, 0.08, -0.51);
+      add(new THREE.ConeGeometry(0.022, 0.10, 6), 0x75d13b, 0.15, -0.48);
+    }
+    // One shared scale keeps every mirror accessory readable without letting
+    // the flame/goop variants dominate the windshield view.
+    g.scale.setScalar(0.65);
+    return g;
+  }
+
+  setDangler(style?: string) {
+    const version = ++this.danglerLoadVersion;
+    if (this.dangler) { this.dangler.parent?.remove(this.dangler); this.dangler = null; }
+    if (!style) return;
+    const asset = this.danglerAsset(style);
+    if (!asset) return;
+    void this.cosmeticModel(asset, this.danglerTargetMax(style), true).then((item) => {
+      if (version !== this.danglerLoadVersion) return;
+      const mirror = this.cockpitMirror;
+      if (!mirror) throw new Error('Tap rear-view mirror is unavailable');
+      this.dangler = this.mountDangler(mirror, item, style);
+    }).catch((error) => console.error(`Unable to load cosmetic ${asset}`, error));
   }
 
   setSky(key?: string) {
@@ -414,6 +1291,9 @@ export class GameScene {
     (this.scene.fog as THREE.Fog).color.setHex(sky.fog);
     this.hemi.color.setHex(sky.ambient);
     this.sun.intensity = sky.sun;
+    const noir = key === 'noir';
+    this.compositeMaterial.uniforms.uNoir.value = noir ? 1 : 0;
+    document.body.classList.toggle('film-noir', noir);
   }
 
   // ---- opponent cars -----------------------------------------------------------
@@ -478,7 +1358,7 @@ export class GameScene {
     this.opponentGroup.add(car, this.goopGroup);
     this.opponentGroup.position.set(0, 0, 0);
     // Empty billboard mount at the driver's window — 2D character art goes here
-    // later (Higgsfield pipeline), keyed by def.spriteSlot.
+    // later by the character-art pipeline, keyed by def.spriteSlot.
     // Driver's seat (car local +x = far lane side, like the meme: he's in his
     // seat, head turned, staring at you through the glass). The 2D character
     // billboard mounts here and always faces the player camera.
@@ -507,23 +1387,18 @@ export class GameScene {
     this.spriteAnger = a;
     const slot = this.spriteSlot;
 
-    // apply custom art to a sprite: per-tier <slot>_a<tier>.png if present,
-    // else single <slot>.png with a per-tier red tint. Sets spriteHasCustom
-    // so future tier changes reuse this sprite instead of flashing procedural.
+    // All shipped drivers use one real sprite per character. Apply the anger
+    // tint in-material instead of probing nonexistent _a0.._a4 files on every
+    // tier change (those 404s were especially noisy in the Android WebView).
     const applyCustom = (sprite: THREE.Sprite) => {
-      loadCustomSprite(`${slot}_a${a}`, (tex) => {
-        if (this.spriteSlot !== slot || this.spriteAnger !== a || sprite !== this.sprite) return;
-        const m = sprite.material as THREE.SpriteMaterial;
-        m.map = tex; m.color.setHex(0xffffff); m.needsUpdate = true;
-        this.spriteHasCustom = true;
-      }, () => loadCustomSprite(slot, (tex) => {
+      loadCustomSprite(slot, (tex) => {
         if (this.spriteSlot !== slot || sprite !== this.sprite) return;
         const m = sprite.material as THREE.SpriteMaterial;
         m.map = tex;
         m.color.setHex([0xffffff, 0xffd8cc, 0xffb4a0, 0xff8a70, 0xff5a44][a]);
         m.needsUpdate = true;
         this.spriteHasCustom = true;
-      }));
+      });
     };
 
     // custom face already showing → just update it in place (no flash)
@@ -584,10 +1459,10 @@ export class GameScene {
     const lights = (noseY: number, tailY: number) => {
       const hl = new THREE.MeshBasicMaterial({ color: 0xfff2c8 });
       const tl = new THREE.MeshBasicMaterial({ color: 0xd83a2a });
-      add(new THREE.BoxGeometry(0.34, 0.14, 0.08), hl, -0.6, noseY, long / 2 - 0.02);
-      add(new THREE.BoxGeometry(0.34, 0.14, 0.08), hl, 0.6, noseY, long / 2 - 0.02);
-      add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, -0.6, tailY, -long / 2 + 0.02);
-      add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, 0.6, tailY, -long / 2 + 0.02);
+      add(new THREE.BoxGeometry(0.34, 0.14, 0.08), hl, -0.6, noseY, long / 2 + 0.08);
+      add(new THREE.BoxGeometry(0.34, 0.14, 0.08), hl, 0.6, noseY, long / 2 + 0.08);
+      add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, -0.6, tailY, -long / 2 - 0.08);
+      add(new THREE.BoxGeometry(0.34, 0.12, 0.08), tl, 0.6, tailY, -long / 2 - 0.08);
     };
     // The cabin is deliberately open so the driver reads through the glass, but
     // the hood, trunk/tailgate, and bumpers are real exterior panels. Keep
@@ -598,8 +1473,21 @@ export class GameScene {
       return mesh;
     };
     const bumpers = (frontY: number, rearY: number) => {
-      exterior(new THREE.BoxGeometry(2.04, 0.22, 0.18), trim, 0, frontY, long / 2 - 0.06);
-      exterior(new THREE.BoxGeometry(2.04, 0.22, 0.18), trim, 0, rearY, -long / 2 + 0.06);
+      const metal = this.mat(0x60656e);
+      const highlight = this.mat(0x969aa2);
+      const darkMetal = this.mat(0x353941);
+      const makeEnd = (z: number, facing: number, y: number) => {
+        exterior(new THREE.BoxGeometry(2.12, 0.12, 0.16), metal, 0, y, z);
+        exterior(new THREE.BoxGeometry(1.84, 0.035, 0.18), highlight, 0, y + 0.055, z + facing * 0.01);
+        // Two vertical overriders and darker rubber corner caps make this read
+        // as a physical bumper rather than another body-colored light strip.
+        exterior(new THREE.BoxGeometry(0.08, 0.18, 0.20), darkMetal, -0.76, y + 0.025, z + facing * 0.02);
+        exterior(new THREE.BoxGeometry(0.08, 0.18, 0.20), darkMetal, 0.76, y + 0.025, z + facing * 0.02);
+        exterior(new THREE.BoxGeometry(0.10, 0.12, 0.19), darkMetal, -1.06, y, z);
+        exterior(new THREE.BoxGeometry(0.10, 0.12, 0.19), darkMetal, 1.06, y, z);
+      };
+      makeEnd(long / 2 + 0.14, 1, frontY);
+      makeEnd(-long / 2 - 0.14, -1, rearY);
     };
     // a real cabin interior: two seats, a dashboard, and a steering wheel in
     // front of the driver — all sized to the window so they read through glass
@@ -615,17 +1503,13 @@ export class GameScene {
       }
       // steering wheel top sits just BELOW the driver's nose; dash below it
       const wy = (dp.y - GameScene.bodyDrop(s)) - 0.06; // just under the nose (local)
-      add(new THREE.BoxGeometry(1.66, 0.16, 0.26), dashM, 0, wy - 0.16, cab.z + 0.52); // dashboard
+      const dashboard = add(new THREE.BoxGeometry(1.66, 0.16, 0.26), dashM,
+        0, wy - 0.16, cab.z + 0.52);
+      dashboard.name = 'dashboard-surface';
       // steering wheel: a proper ring the driver faces (tilted back toward
       // him), with spokes, mounted in front of the driver against the dash.
-      const wheel = new THREE.Group();
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.03, 8, 16), dashM);
-      wheel.add(rim);
-      for (const rz of [0, Math.PI / 2, Math.PI]) {
-        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.025, 0.025), dashM);
-        spoke.rotation.z = rz;
-        wheel.add(spoke);
-      }
+      const wheel = this.makeSteeringWheel();
+      wheel.name = 'steering-wheel';
       wheel.position.set(0.45, wy - 0.1, cab.z + 0.28);
       // recline the wheel back and up so its face points toward the driver
       // (who sits above/behind it), like a real steering column — the camera,
@@ -717,7 +1601,8 @@ export class GameScene {
     add(new THREE.BoxGeometry(1.74, 0.16, long * 0.96), body, 0, 0.4, 0); // floor pan
     interior();
     P(gls, 1.78, glass);
-    P([[roofSpan[0], gls[1][1]], [roofSpan[0], gls[1][1] + 0.1], [roofSpan[1], gls[1][1] + 0.1], [roofSpan[1], gls[1][1]]], 1.84, body); // roof (kept)
+    const roof = P([[roofSpan[0], gls[1][1]], [roofSpan[0], gls[1][1] + 0.1], [roofSpan[1], gls[1][1] + 0.1], [roofSpan[1], gls[1][1]]], 1.84, body); // roof (kept)
+    roof.name = 'roof-surface';
     add(new THREE.BoxGeometry(2.02, 0.14, long * 0.96), trim, 0, 0.3, 0);
 
     // Close the body ahead of and behind the greenhouse. These panels give
@@ -733,6 +1618,15 @@ export class GameScene {
     const hoodLen = Math.max(0.12, frontTop[0] - frontGlass[0]);
     exterior(new THREE.BoxGeometry(1.74, 0.12, hoodLen), body, 0,
       (frontGlass[1] + frontTop[1]) / 2 + 0.01, (frontGlass[0] + frontTop[0]) / 2);
+    // Seal the previously hollow nose and tail. These are body-colour end walls,
+    // not replacement bumpers; lamps sit just outside them and remain visible.
+    const shellBottom = Math.min(low[0][1], low[low.length - 1][1]);
+    const rearWallHeight = Math.max(0.12, rearTop[1] - shellBottom);
+    const frontWallHeight = Math.max(0.12, frontTop[1] - shellBottom);
+    exterior(new THREE.BoxGeometry(1.9, rearWallHeight, 0.14), body, 0,
+      shellBottom + rearWallHeight / 2, -long / 2);
+    exterior(new THREE.BoxGeometry(1.9, frontWallHeight, 0.14), body, 0,
+      shellBottom + frontWallHeight / 2, long / 2);
     bumpers(s === 'wedge' ? 0.42 : 0.5, s === 'wedge' ? 0.42 : 0.5);
     wheels(s === 'wedge' ? 0.32 : 0.36);
     lights(s === 'wedge' ? 0.42 : 0.78, s === 'wedge' ? 0.5 : 0.78);
@@ -756,8 +1650,6 @@ export class GameScene {
       halo.userData.keep = true; // survives fleet-mesh swap
       g.add(halo);
     }
-    // upgrade to a Higgsfield mesh when/if the asset exists (silent fallback)
-    this.attachFleetMesh(g, def);
     return g;
   }
 
@@ -772,15 +1664,27 @@ export class GameScene {
   private garageCar: THREE.Group | null = null;
   private garageYaw = 0.8;
   private garagePitch = 0.3;
+  private garageTargetYaw = 0.8;
+  private garageTargetPitch = 0.3;
+  private garageDragYaw = 0.8;
+  private garageDragPitch = 0.3;
   private garageFP = false;
   private fpYaw = 0;          // first-person head yaw (0 = windshield)
   private fpPitch = -0.08;    // slight natural downward gaze at the dash
+  private fpTargetYaw = 0;
+  private fpTargetPitch = -0.08;
+  private fpDragYaw = 0;
+  private fpDragPitch = -0.08;
   private fpZoom = 1;         // first-person zoom (FOV scale)
   private garageDist = 5.6;   // third-person orbit radius
   private garageLaptop: THREE.Object3D | null = null; // tap it to open the shop
   onGarageShop?: () => void;  // fired when the garage laptop is tapped
   private garageDecal: THREE.Mesh | null = null;
-  private garageOrn: THREE.Mesh | null = null;
+  private garageOrn: THREE.Group | null = null;
+  private garageDangler: THREE.Group | null = null;
+  private garageMirror: THREE.Group | null = null;
+  private garageRoofSign: THREE.Object3D | null = null;
+  private garageHornVisual: THREE.Object3D | null = null;
   private garageGoopTop: THREE.MeshLambertMaterial | null = null;
   private static readonly GO = new THREE.Vector3(0, -200, 0);
 
@@ -883,106 +1787,19 @@ export class GameScene {
       carColor: 0x8e2222, carAccent: 0x26262e, carStyle: 'sedan',
       mentalityReward: 0, spriteSlot: '',
     });
+    // Main Tap FPV is the left seat; Garage FPV and its wheel must match.
+    const garageWheel = this.garageCar.getObjectByName('steering-wheel');
+    if (garageWheel) garageWheel.position.x = 0.45;
     // interior kit so first-person has a real driver's seat view
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.16, 0.34), this.mat(0x1c1c22));
-    dash.position.set(0, 1.02, 0.66);
-    this.garageCar.add(dash);
-    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.04, 6, 12), this.mat(0x26262e));
-    wheel.position.set(0.42, 1.02, 0.48);
-    wheel.rotation.x = -1.2;
-    this.garageCar.add(wheel);
+    // Sedan roof spans z=-.66..46 at y=1.46. Keep the mirror just behind that
+    // front edge, with its scaled stem meeting the roof and no exterior overlap.
+    // A rear-view mirror belongs on the vehicle centerline, independently of
+    // the left-hand driver's seating position.
+    this.garageMirror = this.addRearViewMirror(this.garageCar, 0, 1.37, 0.36, -1, 1);
     this.garageCar.position.copy(GO);
     this.scene.add(this.garageCar);
     // NOTE: the procedural car is the customizable one — cosmetics (paint,
-    // decal, ornament, goop) apply to it. No Higgsfield mesh overlay here.
-  }
-
-  /** Load a GLB, normalize it to ~4-unit length sitting on the floor, apply
-   *  the PSX vertex-snap + flat shading, and hand back the prepared group. */
-  private loadCarMesh(url: string, onReady: (m: THREE.Group) => void, tint?: number, onFail?: () => void) {
-    new GLTFLoader().load(url, (gltf) => {
-      const root = gltf.scene;
-      const box = new THREE.Box3().setFromObject(root);
-      const size = new THREE.Vector3(); box.getSize(size);
-      const center = new THREE.Vector3(); box.getCenter(center);
-      const targetLen = 4.2;
-      const scale = targetLen / Math.max(size.x, size.z);
-      const g = new THREE.Group();
-      root.position.sub(center);            // center at origin
-      root.scale.setScalar(scale);
-      root.position.multiplyScalar(scale);
-      root.position.y += (size.y * scale) / 2; // sit on the floor
-      // orient: image_to_3d faces +Z toward camera; our cars face -Z (forward)
-      root.rotation.y = Math.PI;
-      // largest mesh = the body; tint it toward the car's paint color
-      let biggest: THREE.Mesh | null = null; let bMax = 0;
-      root.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        const mb = new THREE.Box3().setFromObject(m); const ms = new THREE.Vector3(); mb.getSize(ms);
-        const vol = ms.x * ms.y * ms.z; if (vol > bMax) { bMax = vol; biggest = m; }
-        const mat = m.material as THREE.MeshStandardMaterial;
-        if (mat) { mat.flatShading = true; psxify(mat, this.psxRes); mat.needsUpdate = true; }
-      });
-      if (tint !== undefined && biggest) {
-        const bm = (biggest as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        bm.color.setHex(tint);
-        if (bm.map) bm.map = null; // drop pale baked texture so the tint reads
-      }
-      g.add(root);
-      onReady(g);
-    }, undefined, () => { onFail?.(); /* load failed — procedural car stays */ });
-  }
-
-  // ---- Higgsfield fleet meshes ------------------------------------------------
-  // ONE neutral-white PS1 mesh covers the whole sedan family: the white baked
-  // texture multiplies with each opponent's paint color, and scale variants
-  // produce hatch/compact/lowrider/limo silhouettes.
-  private static carMeshCache = new Map<string, Promise<THREE.Group | null>>();
-
-  private static meshFor(style: OpponentDef['carStyle']): { url: string; scale: [number, number, number] } | null {
-    const S: Partial<Record<OpponentDef['carStyle'], [number, number, number]>> = {
-      sedan: [1, 1, 1], taxi: [1, 1, 1], divine: [1, 1, 1],
-      hatch: [1, 1.04, 0.9], compact: [0.94, 0.97, 0.88],
-      lowrider: [1.02, 0.84, 1], limo: [1, 0.96, 1.52],
-    };
-    const sc = S[style];
-    return sc ? { url: 'models/car_sedan_white.glb', scale: sc } : null;
-  }
-
-  private carMeshMaster(url: string): Promise<THREE.Group | null> {
-    let p = GameScene.carMeshCache.get(url);
-    if (!p) {
-      p = new Promise<THREE.Group | null>((res) =>
-        this.loadCarMesh(url, (m) => res(m), undefined, () => res(null)));
-      GameScene.carMeshCache.set(url, p);
-    }
-    return p;
-  }
-
-  /** swap a procedural car for a tinted Higgsfield mesh when it's available */
-  private attachFleetMesh(g: THREE.Group, def: OpponentDef) {
-    const src = GameScene.meshFor(def.carStyle);
-    if (!src) return; // style keeps its procedural body (cube stays the joke)
-    void this.carMeshMaster(src.url).then((master) => {
-      if (!master || !g.parent) return;
-      const inst = master.clone(true);
-      inst.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        const mat = (m.material as THREE.MeshStandardMaterial).clone();
-        mat.flatShading = true;
-        mat.color.setHex(def.carColor); // white texture x paint = opponent color
-        psxify(mat, this.psxRes);       // clone drops onBeforeCompile — reapply
-        mat.needsUpdate = true;
-        m.material = mat;
-      });
-      inst.scale.set(src.scale[0], src.scale[1], src.scale[2]);
-      for (const c of [...g.children]) {
-        if (!c.userData.keep) c.visible = false; // hide procedural body
-      }
-      g.add(inst);
-    });
+    // decal, ornament, goop) apply to it. It remains the only car mesh.
   }
 
   enterGarage() {
@@ -994,13 +1811,30 @@ export class GameScene {
   exitGarage() { this.garageMode = false; }
 
   /** swipe: third-person orbits the car; first-person looks around the cabin */
-  garageSwipe(dx: number, dy: number) {
+  beginGarageSwipe() {
     if (this.garageFP) {
-      this.fpYaw -= dx * 0.006;
-      this.fpPitch = Math.min(0.7, Math.max(-0.7, this.fpPitch - dy * 0.004));
+      this.fpDragYaw = this.fpTargetYaw;
+      this.fpDragPitch = this.fpTargetPitch;
     } else {
-      this.garageYaw -= dx * 0.008;
-      this.garagePitch = Math.min(0.9, Math.max(0.06, this.garagePitch + dy * 0.004));
+      this.garageDragYaw = this.garageTargetYaw;
+      this.garageDragPitch = this.garageTargetPitch;
+    }
+  }
+
+  garageSwipe(totalDx: number, totalDy: number) {
+    const s = this.lookSensitivity;
+    if (this.garageFP) {
+      // The garage car/camera basis is mirrored relative to the street
+      // cockpit. Android projection QA therefore requires the opposite yaw
+      // sign here for rendered dashboard content to follow the finger.
+      this.fpTargetYaw = this.fpDragYaw + totalDx * 0.0065 * s;
+      this.fpTargetPitch = Math.min(0.75, Math.max(-0.75, this.fpDragPitch + totalDy * 0.0052 * s));
+    } else {
+      // Orbiting a subject reverses the apparent screen motion compared with
+      // turning a first-person camera. Negate the orbit angle so the car and
+      // garage follow the finger exactly like the Tap view does.
+      this.garageTargetYaw = this.garageDragYaw - totalDx * 0.0065 * s;
+      this.garageTargetPitch = Math.min(0.9, Math.max(0.06, this.garageDragPitch - totalDy * 0.0052 * s));
     }
   }
 
@@ -1015,7 +1849,10 @@ export class GameScene {
       if (Math.abs(sx - x) < 46 && Math.abs(sy - y) < 46) { this.onGarageShop?.(); return; }
     }
     this.garageFP = !this.garageFP;
-    if (this.garageFP) { this.fpYaw = 0; this.fpPitch = -0.08; } // face the windshield
+    if (this.garageFP) {
+      this.fpYaw = this.fpTargetYaw = this.fpDragYaw = 0;
+      this.fpPitch = this.fpTargetPitch = this.fpDragPitch = -0.08;
+    } // face the windshield
   }
 
   /** Screen position of the garage laptop (for the "open shop" arrow), or
@@ -1038,36 +1875,138 @@ export class GameScene {
     }
   }
 
-  setGarageCosmetics(decal?: string, ornament?: string, goop?: string) {
+  setGarageCosmetics(decal?: string, dashboardItems: (string | null)[] = [], goop?: string, dangler?: string, roof?: string, horn?: string) {
     if (!this.garageBuilt || !this.garageCar) return;
+    const version = ++this.garageLoadVersion;
     if (this.garageDecal) { this.garageCar.remove(this.garageDecal); this.garageDecal = null; }
     if (decal) {
-      const tex = canvasTex(128, (g, s) => {
+      const tex = canvasTex(256, (g, s) => {
         g.clearRect(0, 0, s, s);
-        g.font = 'bold 18px monospace';
+        // Fill the square texture vertically before mapping it onto a wide,
+        // shallow windshield plane. A 32px glyph occupied only 1/8 of the
+        // texture and collapsed into broken scanline fragments in PSX mode.
+        g.font = 'bold 112px monospace';
         g.textAlign = 'center';
+        g.textBaseline = 'middle';
         g.fillStyle = '#ffffff';
         g.strokeStyle = '#000000';
-        g.lineWidth = 3;
-        g.strokeText(decal, s / 2, s / 2);
-        g.fillText(decal, s / 2, s / 2);
+        g.lineWidth = 12;
+        g.strokeText(decal, s / 2, s / 2, s - 20);
+        g.fillText(decal, s / 2, s / 2, s - 20);
       });
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.62),
-        new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide }));
-      m.position.set(0, 1.24, 0.72);
-      m.rotation.x = -0.73; // lies on the windshield slope, readable both sides
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.18),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide,
+          depthTest: false, depthWrite: false }));
+      // Driver-centred and lifted a hair in front of the windshield. The old
+      // sloped plane intersected the low-poly glass/roof, shredding the text.
+      m.position.set(-0.45, 1.16, 0.755);
+      m.rotation.y = Math.PI; // face the driver; the plane's back side mirrors text
+      m.renderOrder = 4;
       this.garageCar.add(m);
       this.garageDecal = m;
     }
     if (this.garageOrn) { this.garageCar.remove(this.garageOrn); this.garageOrn = null; }
-    if (ornament) {
-      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.08, 0),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(ornament) }));
-      m.position.set(-0.38, 1.06, 0.52); // on the dash, driver's side
-      this.garageCar.add(m);
-      this.garageOrn = m;
-    }
+    const rail = new THREE.Group();
+    const dashboard = this.dashboardMounts(this.garageCar);
+    dashboardItems.slice(0, 6).forEach((value, i) => {
+      if (!value) return;
+      const asset = this.dashboardAsset(value);
+      if (!asset) return;
+      void this.cosmeticModel(asset.id, asset.size).then((item) => {
+        if (version !== this.garageLoadVersion || this.garageOrn !== rail) return;
+        // Same six physical mounts as the sedan interior: the exact lowest
+        // model vertex rests on the dashboard surface at y=.895.
+        // Garage faces the opposite direction from Tap FPV. Reverse the
+        // physical X lookup so slot numbers keep the same left-to-right order
+        // on screen in both views.
+        item.position.set(dashboard.xs[5 - i], dashboard.y, dashboard.z);
+        rail.add(item);
+      }).catch((error) => console.error(`Unable to load cosmetic ${asset.id}`, error));
+    });
+    this.garageCar.add(rail);
+    this.garageOrn = rail;
     if (this.garageGoopTop) this.garageGoopTop.color.set(goop ?? '#f2f0e8');
+    if (this.garageDangler) { this.garageDangler.parent?.remove(this.garageDangler); this.garageDangler = null; }
+    if (dangler) {
+      const asset = this.danglerAsset(dangler);
+      if (asset) void this.cosmeticModel(asset, this.danglerTargetMax(dangler), true).then((item) => {
+        if (version !== this.garageLoadVersion) return;
+        const mirror = this.garageMirror;
+        if (!mirror) throw new Error('Garage rear-view mirror is unavailable');
+        this.garageDangler = this.mountDangler(mirror, item, dangler);
+      }).catch((error) => console.error(`Unable to load cosmetic ${asset}`, error));
+    }
+    if (this.garageRoofSign) { this.garageCar.remove(this.garageRoofSign); this.garageRoofSign = null; }
+    if (roof === 'taxi') {
+      void this.cosmeticModel('roof_taxi', 1.04).then((sign) => {
+        if (version !== this.garageLoadVersion) return;
+        // The sedan greenhouse peaks at y=1.46 and its roof extrusion is
+        // exactly 0.10 high. cosmeticModel normalizes the sign's lowest
+        // vertex to y=0, so 1.56 makes both surfaces flush without overlap.
+        const roof = this.garageCar!.getObjectByName('roof-surface');
+        if (!(roof instanceof THREE.Mesh))
+          throw new Error('Garage roof surface is unavailable');
+        roof.geometry.computeBoundingBox();
+        if (!roof.geometry.boundingBox)
+          throw new Error('Garage roof has no geometry bounds');
+        const roofTop = roof.position.y
+          + roof.geometry.boundingBox.max.y * roof.scale.y;
+        sign.position.set(0, roofTop, 0.08);
+        this.garageCar!.add(sign);
+        this.garageRoofSign = sign;
+      }).catch((error) => console.error('Unable to load cosmetic roof_taxi', error));
+    }
+    if (this.garageHornVisual) { this.garageCar.remove(this.garageHornVisual); this.garageHornVisual = null; }
+    const hornAsset = horn === 'violin' ? 'horn_sad' : horn === 'airhorn' ? 'horn_air' : null;
+    if (hornAsset) {
+      void this.cosmeticModel(hornAsset, horn === 'violin' ? 0.46 : 0.44).then((item) => {
+        if (version !== this.garageLoadVersion) return;
+        // Passenger-side accessory tray is slightly higher than the six-slot
+        // dashboard rail. The former .895 mount buried the entire horn below
+        // the dash when viewed from the driver's seat.
+        this.mountDashboardAccessory(
+          this.garageCar!,
+          item,
+          dashboard,
+          dashboard.xs[0],
+          // Garage FPV views the dashboard from the opposite Z side. Rotate
+          // both models so the violin strings/bridge and horn face remain
+          // player-facing there; Tap uses its own scene-specific orientation.
+          Math.PI,
+        );
+        this.garageHornVisual = item;
+      }).catch((error) => console.error(`Unable to load cosmetic ${hornAsset}`, error));
+    }
+  }
+
+  /** Taps count only while the player's view is aimed at the rival's face. */
+  isMakingEyeContact(): boolean {
+    if (this.garageMode || this.driving) return false;
+    const face = new THREE.Vector3(
+      this.opponentAnchor.position.x - 0.45,
+      this.spritePos.y + 0.05,
+      this.opponentAnchor.position.z - this.spritePos.z,
+    );
+    const toFace = face.sub(this.camera.position).normalize();
+    const view = new THREE.Vector3();
+    this.camera.getWorldDirection(view);
+    return view.dot(toFace) >= 0.9;
+  }
+
+  /** Screen-space center of the exact face point used by the eye-contact gate. */
+  eyeContactScreenPoint(): { x: number; y: number } | null {
+    const point = new THREE.Vector3(
+      this.opponentAnchor.position.x - 0.45,
+      this.spritePos.y + 0.05,
+      this.opponentAnchor.position.z - this.spritePos.z,
+    ).project(this.camera);
+    if (![point.x, point.y, point.z].every(Number.isFinite) || point.z < -1 || point.z > 1)
+      return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return {
+      x: rect.left + (point.x * 0.5 + 0.5) * rect.width,
+      y: rect.top + (-point.y * 0.5 + 0.5) * rect.height,
+    };
   }
 
   // ---- effects ------------------------------------------------------------------
@@ -1131,6 +2070,25 @@ export class GameScene {
   }
 
   // ---- frame ------------------------------------------------------------------
+  private renderPsx(camera: THREE.Camera) {
+    camera.layers.set(0);
+    this.renderer.setClearColor(0x000000, 1);
+    this.renderer.setRenderTarget(this.rt);
+    this.renderer.clear(true, true, true);
+    this.renderer.render(this.scene, camera);
+
+    camera.layers.set(1);
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.setRenderTarget(this.cosmeticRT);
+    this.renderer.clear(true, true, true);
+    this.renderer.render(this.scene, camera);
+
+    camera.layers.set(0);
+    this.renderer.setClearColor(0x000000, 1);
+    this.renderer.setRenderTarget(null);
+    this.renderer.render(this.compScene, this.compCam);
+  }
+
   render(dt: number) {
     this.time += dt;
     this.pulse = Math.max(0, this.pulse - dt * 3.2);
@@ -1138,11 +2096,18 @@ export class GameScene {
     // garage view: orbit or driver's-seat camera, same PSX pipeline
     if (this.garageMode) {
       const GO = GameScene.GO;
+      const ease = 1 - Math.exp(-dt * 30);
+      const easeAngle = (value: number, target: number) =>
+        value + Math.atan2(Math.sin(target - value), Math.cos(target - value)) * ease;
       if (this.garageFP) {
+        this.fpYaw = easeAngle(this.fpYaw, this.fpTargetYaw);
+        this.fpPitch += (this.fpTargetPitch - this.fpPitch) * ease;
         // driver's seat with free look: swipe to look around the cabin
-        this.garageCam.fov = 62 / this.fpZoom;
+        this.garageCam.fov = (62 * this.fovScale) / this.fpZoom;
         this.garageCam.updateProjectionMatrix();
-        const eye = new THREE.Vector3(GO.x + 0.42, GO.y + 1.3, GO.z - 0.12);
+        // Wheel center is z=.38 in the sedan. z=-.30 puts the driver's eye
+        // exactly .68 units behind it, matching Tap FPV's wheel distance.
+        const eye = new THREE.Vector3(GO.x + 0.45, GO.y + 1.25, GO.z - 0.30);
         this.garageCam.position.copy(eye);
         this.garageCam.lookAt(
           eye.x + Math.sin(this.fpYaw) * Math.cos(this.fpPitch),
@@ -1150,7 +2115,10 @@ export class GameScene {
           eye.z + Math.cos(this.fpYaw) * Math.cos(this.fpPitch),
         );
       } else {
-        if (this.garageCam.fov !== 62) { this.garageCam.fov = 62; this.garageCam.updateProjectionMatrix(); }
+        this.garageYaw = easeAngle(this.garageYaw, this.garageTargetYaw);
+        this.garagePitch += (this.garageTargetPitch - this.garagePitch) * ease;
+        const garageFov = 62 * this.fovScale;
+        if (this.garageCam.fov !== garageFov) { this.garageCam.fov = garageFov; this.garageCam.updateProjectionMatrix(); }
         const r = this.garageDist;
         this.garageCam.position.set(
           GO.x + Math.sin(this.garageYaw) * Math.cos(this.garagePitch) * r,
@@ -1159,15 +2127,12 @@ export class GameScene {
         );
         this.garageCam.lookAt(GO.x, GO.y + 0.85, GO.z);
       }
-      this.renderer.setRenderTarget(this.rt);
-      this.renderer.render(this.scene, this.garageCam);
-      this.renderer.setRenderTarget(null);
-      this.renderer.render(this.compScene, this.compCam);
+      this.renderPsx(this.garageCam);
       return;
     }
 
     // opponent shake: tier amplitude + per-tap pulse kick
-    const a = this.shakeAmp * (1 + this.pulse * 2.5);
+    const a = this.reducedMotion ? 0 : this.shakeAmp * (1 + this.pulse * 2.5);
     const t = this.time;
     this.opponentGroup.position.x = Math.sin(t * 31) * a;
     this.opponentGroup.position.y = Math.abs(Math.sin(t * 47)) * a * 0.8;
@@ -1176,17 +2141,32 @@ export class GameScene {
     this.opponentGroup.rotation.x = Math.cos(t * 27) * a * 0.2;
 
     // subtle idle sway on the player cam (engine running)
-    this.camera.position.y = 1.25 + Math.sin(t * 2.1) * 0.008;
+    this.camera.position.y = 1.25 + (this.reducedMotion ? 0 : Math.sin(t * 2.1) * 0.008);
 
     // head turn: smoothly swing between the opponent's window and the road.
     // Eye contact aims at the DRIVER'S actual head height (buses, cube cars
     // and low wedges all differ), not a fixed line.
-    const gazeTarget = this.gaze === 'opponent'
-      ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05, this.opponentAnchor.position.z - this.spritePos.z)
-      : new THREE.Vector3(this.camera.position.x, 1.15, this.camera.position.z - 30);
+    if (this.freeLook) {
+      // The gesture target is already absolute; only the camera quaternion is
+      // eased below. Keeping one smoothing stage prevents a sluggish double lag.
+      this.lookYaw = this.lookTargetYaw;
+      this.lookPitch = this.lookTargetPitch;
+    }
+    const gazeTarget = this.freeLook
+      ? new THREE.Vector3(
+        this.camera.position.x + Math.sin(this.lookYaw) * Math.cos(this.lookPitch),
+        this.camera.position.y + Math.sin(this.lookPitch),
+        this.camera.position.z - Math.cos(this.lookYaw) * Math.cos(this.lookPitch),
+      )
+      : this.gaze === 'opponent'
+        ? new THREE.Vector3(this.opponentAnchor.position.x - 0.45, this.spritePos.y + 0.05, this.opponentAnchor.position.z - this.spritePos.z)
+        : new THREE.Vector3(this.camera.position.x, 1.15, this.camera.position.z - 30);
     this.gazeHelper.position.copy(this.camera.position);
     this.gazeHelper.lookAt(gazeTarget);
-    this.camera.quaternion.slerp(this.gazeHelper.quaternion, Math.min(1, dt * 3.2));
+    // During a user drag the view must track the finger immediately; retain
+    // the eased head-turn only for autonomous eye contact/road framing.
+    if (this.freeLook) this.camera.quaternion.slerp(this.gazeHelper.quaternion, Math.min(1, dt * 28));
+    else this.camera.quaternion.slerp(this.gazeHelper.quaternion, Math.min(1, dt * 3.2));
 
     // splat particles
     for (let i = this.splats.length - 1; i >= 0; i--) {
@@ -1232,10 +2212,7 @@ export class GameScene {
       }
     }
 
-    this.renderer.setRenderTarget(this.rt);
-    this.renderer.render(this.scene, this.camera);
-    this.renderer.setRenderTarget(null);
-    this.renderer.render(this.compScene, this.compCam);
+    this.renderPsx(this.camera);
   }
 
   /** Derive vertical FOV so a fixed world-height frames at the opponent's
@@ -1255,7 +2232,7 @@ export class GameScene {
     // gets a touch more height so a sliver of car reads under the face
     const aspect = this.camera.aspect;
     const h = (headWorld / targetFrac) * (aspect < 1 ? 1 + (1 - aspect) * 0.4 : 1);
-    this.camera.fov = 2 * Math.atan((h / 2) / Math.max(1, dist)) * (180 / Math.PI);
+    this.camera.fov = 2 * Math.atan((h / 2) / Math.max(1, dist)) * (180 / Math.PI) * this.fovScale;
     this.camera.updateProjectionMatrix();
   }
 
@@ -1268,7 +2245,9 @@ export class GameScene {
     this.garageCam.updateProjectionMatrix();
     const rw = Math.round(PSX_H * (w / h));
     this.rt.setSize(rw, PSX_H);
+    this.cosmeticRT.setSize(Math.max(1, Math.ceil(rw / 2)), PSX_H / 2);
     this.psxRes.set(rw, PSX_H);
+    this.cosmeticRes.set(Math.max(1, Math.ceil(rw / 2)), PSX_H / 2);
   }
 }
 
@@ -1612,7 +2591,7 @@ function profileMesh(pts: [number, number][], width: number, mat: THREE.Material
 }
 
 // Custom sprite loader: checks public/sprites/<slot>.png once per session and
-// caches the result. Final art (Higgsfield or hand-made) drops into that
+// caches the result. Final hand-made art drops into that
 // folder and the game uses it with zero code changes; misses fall back to the
 // procedural pixel characters.
 const spriteTexCache = new Map<string, THREE.Texture | null | 'miss'>();

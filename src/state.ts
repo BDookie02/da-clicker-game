@@ -13,6 +13,7 @@ function tieredCost(base: number, growth: number, lv: number): number {
 }
 
 export interface SaveData {
+  economyVersion: number;     // v1: M only comes from its shop (purchase/ad)
   username: string | null;
   prestiges: number;        // completed "New Routes"
   respect: number;
@@ -25,13 +26,20 @@ export interface SaveData {
   ownedCosmetics: string[];
   labOwned: string[];                  // permanent LAB upgrades (survive prestige)
   equippedCosmetics: Partial<Record<string, string>>; // slot -> cosmetic id
+  dashboardSlots: (string | null)[]; // six fixed mounts across the dash
   boostMult: number;
   boostEndsAt: number;                 // epoch ms
   lastSeen: number;                    // epoch ms, for offline earnings
   adsWatched: number;
+  infiniteCurrency: boolean;
+  appliedPurchases: string[];          // crash-safe receipt grants
+  appliedAdRewards: string[];          // crash-safe, server-verified ad grants
+  textSizeTier: number;                // accessibility: 0=current size, 1-3 larger
+  tutorialComplete: boolean;           // first-launch walkthrough completed or skipped
 }
 
-const fresh = (): SaveData => ({
+export const createFreshSave = (): SaveData => ({
+  economyVersion: 1,
   username: null,
   prestiges: 0,
   respect: 0,
@@ -44,16 +52,22 @@ const fresh = (): SaveData => ({
   ownedCosmetics: [],
   labOwned: [],
   equippedCosmetics: {},
+  dashboardSlots: [null, null, null, null, null, null],
   boostMult: 1,
   boostEndsAt: 0,
   lastSeen: Date.now(),
   adsWatched: 0,
+  infiniteCurrency: false,
+  appliedPurchases: [],
+  appliedAdRewards: [],
+  textSizeTier: 0,
+  tutorialComplete: false,
 });
 
 export type GameEvent =
   | { type: 'tap'; gain: number }
   | { type: 'milestone'; tier: number; label: string }
-  | { type: 'defeated'; mentality: number; name: string }
+  | { type: 'defeated'; name: string }
   | { type: 'boost'; mult: number; seconds: number }
   | { type: 'offline'; gain: number; seconds: number }
   | { type: 'prestige'; count: number };
@@ -112,7 +126,8 @@ export class Game {
       add += u.tapAdd * lv;
       if (u.tapMult) mult *= Math.pow(u.tapMult, lv);
     }
-    return Math.round(add * mult * this.activeMult * this.routeMult);
+    const labTapMult = this.hasLab('lab_mental') ? 1.25 : 1;
+    return Math.round(add * mult * labTapMult * this.activeMult * this.routeMult);
   }
 
   get respectPerSec(): number {
@@ -173,6 +188,10 @@ export class Game {
 
   /** idle tick — call with elapsed seconds */
   tick(dt: number) {
+    if (this.s.infiniteCurrency) {
+      this.s.respect = Number.MAX_SAFE_INTEGER;
+      this.s.mentality = Number.MAX_SAFE_INTEGER;
+    }
     const gain = this.respectPerSec * dt;
     if (gain > 0) {
       this.s.respect += gain;
@@ -190,12 +209,10 @@ export class Game {
     }
     if (this.s.opponentProgress >= this.opponent.tapsRequired) {
       const beaten = this.opponent;
-      const reward = Math.round(beaten.mentalityReward * (this.hasLab('lab_mental') ? 1.3 : 1));
-      this.s.mentality += reward;
       this.s.opponentIndex += 1;
       this.s.opponentProgress = 0;
       this.lastTier = 0;
-      this.emit({ type: 'defeated', mentality: reward, name: beaten.name });
+      this.emit({ type: 'defeated', name: beaten.name });
     }
   }
 
@@ -241,15 +258,38 @@ export class Game {
     if (this.s.ownedCosmetics.includes(id) || this.s.mentality < c.cost) return false;
     this.s.mentality -= c.cost;
     this.s.ownedCosmetics.push(id);
-    this.s.equippedCosmetics[c.slot] = id;
+    if (c.slot === 'ornament' || c.slot === 'dash') {
+      const open = this.s.dashboardSlots.findIndex(x => !x);
+      if (open >= 0) this.s.dashboardSlots[open] = id;
+    } else this.s.equippedCosmetics[c.slot] = id;
     return true;
   }
 
-  toggleCosmetic(id: string) {
+  enableInfiniteCurrency() {
+    this.s.infiniteCurrency = true;
+    this.s.respect = Number.MAX_SAFE_INTEGER;
+    this.s.mentality = Number.MAX_SAFE_INTEGER;
+    this.save();
+  }
+
+  toggleCosmetic(id: string): boolean {
     const c = COSMETICS.find(x => x.id === id)!;
-    if (!this.s.ownedCosmetics.includes(id)) return;
+    if (!this.s.ownedCosmetics.includes(id)) return false;
+    if (c.slot === 'ornament' || c.slot === 'dash') {
+      const equipped = this.s.dashboardSlots.indexOf(id);
+      if (equipped >= 0) { this.s.dashboardSlots[equipped] = null; return true; }
+      const open = this.s.dashboardSlots.findIndex(x => !x);
+      if (open < 0) return false;
+      this.s.dashboardSlots[open] = id;
+      return true;
+    }
     this.s.equippedCosmetics[c.slot] =
       this.s.equippedCosmetics[c.slot] === id ? undefined : id;
+    return true;
+  }
+
+  dashboardItems() {
+    return this.s.dashboardSlots.map(id => id ? COSMETICS.find(c => c.id === id)?.value ?? null : null);
   }
 
   equipped(slot: string): string | undefined {
@@ -277,9 +317,40 @@ export class Game {
   private load(): SaveData {
     try {
       const raw = localStorage.getItem(SAVE_KEY);
-      if (raw) return { ...fresh(), ...JSON.parse(raw) };
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Before economy v1, opponent victories accidentally awarded premium
+        // M. The game was still unreleased and purchases were inactive, so
+        // clear that test balance once. From v1 onward only the M shop can add M.
+        if (!parsed.economyVersion) parsed.mentality = 0;
+        const loaded = { ...createFreshSave(), ...parsed, economyVersion: 1 } as SaveData;
+        loaded.textSizeTier = Math.max(0, Math.min(3, Math.trunc(Number(parsed.textSizeTier) || 0)));
+        // Existing players must not be forced into a first-launch tutorial
+        // added after their save was created.
+        loaded.tutorialComplete = parsed.tutorialComplete === undefined
+          ? true : Boolean(parsed.tutorialComplete);
+        loaded.appliedPurchases = Array.isArray(parsed.appliedPurchases) ? parsed.appliedPurchases : [];
+        loaded.appliedAdRewards = Array.isArray(parsed.appliedAdRewards)
+          ? parsed.appliedAdRewards.filter((nonce: unknown) => typeof nonce === 'string').slice(-500)
+          : [];
+        // The old build exposed fuzzy dice as a dashboard ornament.  Keep
+        // existing owners, but migrate that purchase to the real mirror-hung
+        // item so dice can never remain mounted on the dashboard.
+        if (Array.isArray(loaded.ownedCosmetics) && loaded.ownedCosmetics.includes('dash_gd')) {
+          loaded.ownedCosmetics = loaded.ownedCosmetics.filter(id => id !== 'dash_gd');
+          if (!loaded.ownedCosmetics.includes('dangle_dice')) loaded.ownedCosmetics.push('dangle_dice');
+          if (!loaded.equippedCosmetics?.dangler) loaded.equippedCosmetics.dangler = 'dangle_dice';
+        }
+        loaded.dashboardSlots = Array.isArray(parsed.dashboardSlots)
+          ? [...parsed.dashboardSlots.slice(0, 6), null, null, null, null, null, null].slice(0, 6)
+          : [parsed.equippedCosmetics?.ornament ?? parsed.equippedCosmetics?.dash ?? null, null, null, null, null, null];
+        loaded.dashboardSlots = loaded.dashboardSlots.map(id => id === 'dash_gd' ? null : id);
+        loaded.ownedCosmetics = loaded.ownedCosmetics.filter(id => id !== 'decal_bottom');
+        if (loaded.equippedCosmetics?.decal === 'bottom text') delete loaded.equippedCosmetics.decal;
+        return loaded;
+      }
     } catch { /* corrupted save -> start fresh */ }
-    return fresh();
+    return createFreshSave();
   }
 
   save() {
@@ -287,13 +358,16 @@ export class Game {
     localStorage.setItem(SAVE_KEY, JSON.stringify(this.s));
   }
 
-  private applyOffline() {
-    const away = Math.min((Date.now() - this.s.lastSeen) / 1000, 8 * 3600); // cap 8h
+  applyOffline(now = Date.now()) {
+    const away = Math.min(Math.max(0, (now - this.s.lastSeen) / 1000), 8 * 3600); // cap 8h
+    // Advance the anchor even when the window is below the award threshold.
+    // Repeated resume/visibility events can therefore never double-collect.
+    this.s.lastSeen = now;
     if (away > 30) {
       let rps = 0;
       for (const c of CREW) rps += (this.s.crewCounts[c.id] ?? 0) * c.tapsPerSec;
       const rate = this.s.labOwned?.includes('lab_offline') ? 0.8 : 0.5;
-      const gain = Math.round(rps * away * rate);
+      const gain = Math.round(rps * this.routeMult * away * rate);
       if (gain > 0) {
         this.s.respect += gain;
         this.s.opponentProgress += gain;
@@ -308,6 +382,7 @@ export class Game {
 export const BOOSTER_DEFS = BOOSTERS;
 
 export function fmt(n: number): string {
+  if (n >= Number.MAX_SAFE_INTEGER) return '∞';
   if (n < 1000) return Math.floor(n).toString();
   const units = ['K', 'M', 'B', 'T', 'Qa', 'Qi'];
   let u = -1;

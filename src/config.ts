@@ -3,7 +3,7 @@
 // Economy mirrors the classic idle-clicker loop: tap currency (Respect),
 // premium currency (Mentality), tap-power upgrades, idle generators (Crew),
 // staged opponents (the "planets"), cosmetic unlockables, and ad boosters.
-// All art is placeholder — 2D character sprites get mounted later (Higgsfield).
+// Character sprites are mounted by slot when art is available.
 // ---------------------------------------------------------------------------
 
 export interface OpponentDef {
@@ -14,7 +14,7 @@ export interface OpponentDef {
   carColor: number;       // body paint
   carAccent: number;      // trim/roof
   carStyle: 'sedan' | 'hatch' | 'cube' | 'van' | 'lowrider' | 'muscle' | 'metro' | 'limo' | 'compact' | 'divine' | 'pickup' | 'wedge' | 'taxi';
-  mentalityReward: number;
+  mentalityReward: number; // legacy balance data; victories no longer grant premium M
   spriteSlot: string;     // asset key for the future 2D character billboard
 }
 
@@ -197,7 +197,7 @@ export interface CosmeticDef {
   name: string;
   desc: string;
   cost: number;          // Mentality
-  slot: 'ornament' | 'decal' | 'goop' | 'sky' | 'horn' | 'dash';
+  slot: 'ornament' | 'decal' | 'goop' | 'sky' | 'horn' | 'dash' | 'dangler' | 'roof';
   value: string;         // renderer hint (color hex, style key, etc.)
 }
 
@@ -211,9 +211,7 @@ export const COSMETICS: CosmeticDef[] = [
   { id: 'sky_sunset',   name: 'Golden Hour',           desc: 'Cinematic sunset for your edits.',             cost: 125,  slot: 'sky',      value: 'sunset' },
   { id: 'sky_vapor',    name: 'Vaporwave Night',       desc: 'A E S T H E T I C intersection.',              cost: 125,  slot: 'sky',      value: 'vapor' },
   { id: 'horn_sad',     name: 'Sad Violin Horn',       desc: 'Plays when opponents finish.',                 cost: 150,  slot: 'horn',     value: 'violin' },
-  { id: 'dash_gd',      name: 'Difficulty Face Dice',  desc: 'Fuzzy dice, but they judge you.',              cost: 100,  slot: 'dash',     value: 'gd' },
-  { id: 'orn_cowboy',   name: 'Tiny Steel Cowboy',     desc: 'Bobblehead doing a pose on your dash.',        cost: 175,  slot: 'ornament', value: '#7a4a9e' },
-  { id: 'decal_bottom', name: '"bottom text" Decal',   desc: 'The caption completes itself.',                cost: 100,  slot: 'decal',    value: 'bottom text' },
+  { id: 'orn_cowboy',   name: 'Dashboard Hula Girl',   desc: 'A grass-skirt dashboard dancer with island style.', cost: 175, slot: 'ornament', value: '#7a4a9e' },
   { id: 'decal_aura',   name: '"AURA +1000" Decal',    desc: 'Certified aura farming equipment.',            cost: 125,  slot: 'decal',    value: 'AURA +1000' },
   { id: 'decal_engage', name: '"DO NOT ENGAGE" Decal', desc: 'They will engage anyway.',                     cost: 125,  slot: 'decal',    value: 'DO NOT ENGAGE' },
   { id: 'goop_pink',    name: 'Bubblegum Goop',        desc: 'Smells like victory and strawberries.',        cost: 225,  slot: 'goop',     value: '#f0a0c8' },
@@ -224,24 +222,33 @@ export const COSMETICS: CosmeticDef[] = [
   { id: 'sky_toxic',    name: 'Toxic Hour',            desc: 'The air is 40% regret.',                       cost: 150,  slot: 'sky',      value: 'toxic' },
   { id: 'sky_mint',     name: 'Mint Condition',        desc: 'Refreshing. Suspiciously so.',                 cost: 150,  slot: 'sky',      value: 'mint' },
   { id: 'orn_cone',     name: 'Tiny Traffic Cone',     desc: 'A fallen soldier from the Kingpin wars.',      cost: 125,  slot: 'ornament', value: '#e8862a' },
-  { id: 'orn_monk',     name: 'Dashboard Monk',        desc: 'Radiates focus onto your steering wheel.',     cost: 225,  slot: 'ornament', value: '#e8c84a' },
+  { id: 'orn_monk',     name: 'Dashboard Buddha',       desc: 'A golden seated Buddha statue for calm at every red light.', cost: 225, slot: 'ornament', value: '#e8c84a' },
   { id: 'horn_air',     name: 'Freight Airhorn',       desc: 'Startles opponents mid-shake.',                cost: 175,  slot: 'horn',     value: 'airhorn' },
+  { id: 'dangle_dice', name: 'Fuzzy Dice', desc: 'Classic dice hanging from the centered rear-view mirror.', cost: 90, slot: 'dangler', value: 'dice' },
+  { id: 'dangle_beads', name: 'Bead Necklace', desc: 'A long strand of colorful dashboard beads.', cost: 110, slot: 'dangler', value: 'beads' },
+  { id: 'dangle_yinyang', name: 'Yin-Yang Ball', desc: 'Perfectly balanced until the car starts moving.', cost: 140, slot: 'dangler', value: 'yinyang' },
+  { id: 'dangle_fire', name: 'Fire Ball', desc: 'A tiny flaming orb with unreasonable confidence.', cost: 175, slot: 'dangler', value: 'fire' },
+  { id: 'dangle_censored', name: 'Censored D&B', desc: 'The forbidden novelty dangler, safely pixel-censored.', cost: 225, slot: 'dangler', value: 'censored' },
+  { id: 'dangle_testing_coals', name: 'Testing Coals', desc: 'The suspiciously organic first prototype. Preserved for science.', cost: 200, slot: 'dangler', value: 'testing_coals' },
+  { id: 'dangle_goop', name: 'Goop Dangler', desc: 'Drips forever. Never reaches the floor.', cost: 250, slot: 'dangler', value: 'goop' },
+  { id: 'roof_taxi', name: 'Taxi Roof Sign', desc: 'A glowing cab sign for questionable side hustles.', cost: 175, slot: 'roof', value: 'taxi' },
 ];
 
 export interface BoosterDef {
   id: string;
   name: string;
   desc: string;
-  adSeconds: number;     // placeholder ad length (maps to rewarded-ad tiers)
+  fallbackSeconds: number; // web placeholder only; AdMob controls native ad length
   mult: number;          // tap + idle multiplier
   durationSec: number;
 }
 
-// Ad boosters — unlimited watches. Longer ad = fatter multiplier.
+// AdMob chooses the video length. After a verified completion, the game selects
+// the matching reward tier from the measured watch time.
 export const BOOSTERS: BoosterDef[] = [
-  { id: 'quick', name: 'Quick Clip',    desc: 'Watch a 5s ad → 2x everything for 90s.',   adSeconds: 5,  mult: 2,  durationSec: 90 },
-  { id: 'mid',   name: 'Full Ad',       desc: 'Watch a 15s ad → 5x everything for 120s.', adSeconds: 15, mult: 5,  durationSec: 120 },
-  { id: 'mega',  name: 'Director\'s Cut', desc: 'Watch a 30s ad → 10x everything for 90s.', adSeconds: 30, mult: 10, durationSec: 90 },
+  { id: 'quick', name: 'Quick Clip', desc: 'Up to 9s ad → 2x everything for 90s.', fallbackSeconds: 5, mult: 2, durationSec: 90 },
+  { id: 'mid', name: 'Full Ad', desc: '10–24s ad → 5x everything for 120s.', fallbackSeconds: 15, mult: 5, durationSec: 120 },
+  { id: 'mega', name: 'Director\'s Cut', desc: '25s+ ad → 10x everything for 90s.', fallbackSeconds: 30, mult: 10, durationSec: 90 },
 ];
 
 // THE LAB — permanent upgrades bought with Mentality; survive New Route.
@@ -251,7 +258,7 @@ export const LAB: LabDef[] = [
   { id: 'lab_grip',    name: 'Muscle Memory',    desc: 'PERMANENT +50 respect per tap, survives New Route.',      cost: 120 },
   { id: 'lab_offline', name: 'Dream Discipline', desc: 'Offline earnings rate 50% → 80%.',                        cost: 200 },
   { id: 'lab_boost',   name: 'Extended Cut',     desc: 'Ad boosters last 40% longer.',                            cost: 300 },
-  { id: 'lab_mental',  name: 'Aura Compounder',  desc: '+30% Mentality from every defeated opponent.',            cost: 450 },
+  { id: 'lab_mental',  name: 'Tap Compounder',   desc: '+25% Respect from every manual tap.',                     cost: 450 },
 ];
 
 export const SAVE_KEY = 'discipline-clicker-save-v1';
@@ -259,4 +266,4 @@ export const SAVE_KEY = 'discipline-clicker-save-v1';
 // Backend (usernames + worldwide taps board). Empty string = local placeholder
 // providers. After deploying server/worker.js (see file header), set this to
 // the worker URL, e.g. 'https://discipline-api.<account>.workers.dev'
-export const API_URL = '';
+export const API_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');

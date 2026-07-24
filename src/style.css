@@ -14,19 +14,49 @@ html, body {
 }
 
 #game-canvas {
+  touch-action: none;
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   width: 100%;
   height: 100%;
   image-rendering: pixelated;
 }
 
-#app { position: fixed; inset: 0; }
+#app {
+  position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
+  inset: 0;
+  /* The transparent HUD covers the canvas. Android otherwise treats a drag
+     that starts between controls as a browser gesture and cancels it after a
+     few pixels, producing the slow/bursty cabin look controls. */
+  touch-action: none;
+}
+
+body {
+  --nav-clearance: 64px;
+  --hud-clearance: 112px;
+  --hud-bottom: 78px;
+  --nav-height: 64px;
+  --panel-gutter: 24px;
+}
+
+body.film-noir #app,
+body.film-noir .title-screen,
+body.film-noir .tutorial-layer,
+body.film-noir .ad-overlay { filter: grayscale(1); }
+
+/* These surfaces own vertical scrolling; gameplay outside them owns free
+   two-axis dragging. Buttons remain ordinary taps. */
+.panel, .panel-scroll, .ad-box.mshop, .settings-body, .tutorial-scroll {
+  touch-action: pan-y;
+}
 
 /* CRT scanlines over everything */
 #app::after {
   content: '';
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px);
@@ -35,10 +65,13 @@ html, body {
 
 .hud-top {
   position: absolute;
+  top: 8px;
   top: max(8px, env(safe-area-inset-top));
   left: 8px;
   right: 8px;
   display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.35fr) minmax(0, .8fr) minmax(0, .8fr) auto auto;
   gap: 6px;
   z-index: 10;
 }
@@ -48,6 +81,7 @@ html, body {
   padding: 4px 8px;
   flex: 1;
   text-align: center;
+  min-width: 0;
 }
 .stat.small { flex: 0.6; }
 .stat.mute {
@@ -57,9 +91,93 @@ html, body {
   cursor: pointer;
   color: #e8e8f0;
 }
-.stat .k { display: block; font-size: clamp(10px, 2.6vw, 12px); color: #a0a0c8; letter-spacing: 1px; }
-.stat .v { display: block; font-size: clamp(16px, 4.4vw, 20px); text-shadow: 2px 2px 0 #000; }
+.stat.eye, .stat.settings {
+  flex: 0 0 40px;
+  font-size: 17px;
+  font-family: inherit;
+  cursor: pointer;
+  color: #e8e8f0;
+}
+.stat .k { display: block; font-size: 10px; font-size: clamp(10px, 2.6vw, 12px); color: #a0a0c8; letter-spacing: 1px; }
+.stat .v { display: block; font-size: 16px; font-size: clamp(16px, 4.4vw, 20px); text-shadow: 2px 2px 0 #000; }
+.stat .k, .stat .v { white-space: nowrap; overflow: hidden; }
 .stat .v.gold { color: #f2d24a; }
+
+.ad-loading {
+  position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 5, 12, 0.72);
+  pointer-events: all;
+}
+.ad-loading-box {
+  min-width: 210px;
+  padding: 22px 26px;
+  border: 2px solid #e66a2a;
+  background: #11111c;
+  color: #ffd890;
+  text-align: center;
+  box-shadow: 5px 5px 0 #050508;
+}
+.ad-loading-box small {
+  display: block;
+  margin-top: 7px;
+  color: #a0a0c8;
+  font-size: 10px;
+}
+.ad-loading-spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 12px;
+  border: 5px solid #3a3a55;
+  border-top-color: #ff6a2a;
+  border-right-color: #ffd890;
+  border-radius: 50%;
+  animation: ad-loading-spin 0.7s steps(8) infinite;
+}
+@keyframes ad-loading-spin { to { transform: rotate(360deg); } }
+
+.dash-grid-label {
+  margin: 10px 0 5px;
+  color: #a0a0c8;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.dash-slot-grid {
+  display: flex;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.dash-slot-grid > * { flex: 1 1 0; }
+.dash-slot {
+  min-width: 0;
+  padding: 5px 1px;
+  border: 1px solid #3a3a55;
+  background: #10101a;
+  color: #68687f;
+  text-align: center;
+  font-size: 8px;
+}
+.dash-slot span { display: block; font-size: 7px; }
+.dash-slot b { display: block; overflow: hidden; color: inherit; }
+.dash-slot.occupied {
+  border-color: #e66a2a;
+  color: #ffd890;
+  background: #24140d;
+}
+.cheat-vault { margin-top: 14px; border: 1px solid #303044; background: #0d0d16; }
+.cheat-vault summary { padding: 10px; color: #68687f; font-size: 10px; letter-spacing: 1px; cursor: pointer; }
+.cheat-entry { display: flex; display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 0 9px 10px; }
+.cheat-entry input { flex: 1 1 auto; min-width: 0; padding: 9px; border: 1px solid #3a3a55; background: #08080e; color: #ffd890; font: inherit; }
+.cheat-entry button { padding: 8px; }
 
 .quick-buy {
   position: absolute;
@@ -106,14 +224,14 @@ body.in-garage .quick-buy { display: none; }
 
 .opp-bar {
   position: absolute;
-  top: 84px;
+  top: var(--hud-bottom);
   left: 12px;
   right: 12px;
   z-index: 10;
   text-align: center;
 }
-.opp-name { font-size: clamp(15px, 4vw, 19px); letter-spacing: 1px; text-shadow: 2px 2px 0 #000; }
-.opp-blurb { font-size: clamp(12px, 3.2vw, 14px); color: #b4b4d8; margin-top: 4px; text-shadow: 1px 1px 0 #000; line-height: 1.35; }
+.opp-name { font-size: 15px; font-size: clamp(15px, 4vw, 19px); letter-spacing: 1px; text-shadow: 2px 2px 0 #000; }
+.opp-blurb { font-size: 12px; font-size: clamp(12px, 3.2vw, 14px); color: #b4b4d8; margin-top: 4px; text-shadow: 1px 1px 0 #000; line-height: 1.35; }
 .bar {
   position: relative;
   height: 14px;
@@ -131,18 +249,25 @@ body.in-garage .quick-buy { display: none; }
 
 .menu-row {
   position: absolute;
+  bottom: 10px;
   bottom: max(10px, env(safe-area-inset-bottom));
   left: 8px;
   right: 8px;
+  display: flex;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 5px;
-  z-index: 10;
+  z-index: 30;
+  background: #0a0a12;
+  box-shadow: 0 -10px 0 #0a0a12;
+  isolation: isolate;
 }
 /* always-reachable garage exit — fixed, above everything */
 .garage-exit-fixed {
   position: fixed;
+  top: 10px;
   top: max(10px, env(safe-area-inset-top));
+  left: 10px;
   left: max(10px, env(safe-area-inset-left));
   z-index: 100;
   font-family: inherit;
@@ -169,7 +294,26 @@ body.in-garage .quick-buy { display: none; }
 }
 @keyframes arrowbob { from { margin-top: -8px; } to { margin-top: 8px; } }
 /* M store */
-.ad-box.mshop { max-height: 80vh; overflow-y: auto; text-align: left; width: min(94vw, 420px); }
+.ad-box.mshop {
+  /* Chrome 91 on the Android 7/12 test devices predates dynamic viewport
+     units, so keep the vh declaration as the operative fallback. */
+  max-height: 80vh;
+  max-height: min(80vh, calc(100dvh - 12px));
+  overflow-y: auto;
+  text-align: left;
+  width: 94vw;
+  max-width: 420px;
+  width: min(94vw, 420px);
+}
+.ad-box.mshop .panel-head {
+  position: sticky;
+  top: -12px;
+  z-index: 4;
+  margin: -12px -12px 8px;
+  padding: 12px;
+  background: #14141f;
+  border-bottom: 2px solid #4a4a70;
+}
 .mtag { color: #4ae66a; font-size: 9px; border: 1px solid #4ae66a; padding: 1px 4px; letter-spacing: 1px; }
 .mshop-ad { border-bottom: 2px solid #4a4a70; }
 .menu-row button, .panel button, .ad-skip {
@@ -184,16 +328,34 @@ body.in-garage .quick-buy { display: none; }
   flex: 1;
   cursor: pointer;
 }
+/* An open menu owns the entire center region. Remove the opponent copy behind
+   it so no background lettering can peek against a panel edge and resemble a
+   layout collision. The HUD and single-row navigation remain reachable. */
+body.panel-open:not(.in-garage) .opp-bar,
+body.panel-open:not(.in-garage) .boost-pill,
+body.panel-open:not(.in-garage) .quick-buy { visibility: hidden; }
+/* Button captions are atomic UI labels. Accessibility scaling may grow them,
+   but it must never split a word/phrase across lines or create a second row.
+   UI.fitBorderedLabels() reduces only the caption size when a fixed cell is
+   too narrow. */
+button {
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow: hidden;
+  overflow-wrap: normal;
+  hyphens: none;
+  text-wrap: nowrap;
+}
 .menu-row button:active, .panel button:active { transform: translateY(2px); border-bottom-width: 2px; }
 .menu-row button.hot { border-color: #e66a2a; color: #ffd890; }
-/* grid cells: shrink to fit and WRAP labels (never truncate/overlap) */
+/* Fixed-row grid cells keep every label on one line and shrink it to fit. */
 .menu-row button {
+  flex: 1 1 0;
   min-width: 0;
+  font-size: 9px;
   font-size: clamp(9px, 2.6vw, 12px);
   padding: 8px 1px;
   line-height: 1.05;
-  white-space: normal;
-  overflow-wrap: anywhere;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -205,40 +367,118 @@ body.in-garage .quick-buy { display: none; }
   position: absolute;
   left: 8px;
   right: 8px;
-  bottom: 64px;
-  max-height: 58vh;
-  overflow-y: auto;
-  background: rgba(10, 10, 20, 0.96);
+  /* The menu occupies its own center lane. These are real empty gutters—not
+     transparent padding—so neither HUD controls nor bottom navigation can
+     ever share pixels with the scrolling panel. */
+  top: calc(var(--hud-bottom) + var(--panel-gutter));
+  bottom: calc(var(--nav-height) + var(--panel-gutter));
+  max-height: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* Opaque on purpose: opponent copy and playfield controls must never read
+     through a menu as if they were overlapping its labels/buttons. */
+  background: #0a0a14;
   border: 2px solid #4a4a70;
   z-index: 20;
   padding: 8px;
+  contain: layout paint;
 }
 .panel-head {
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 3;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  font-size: 16px;
   font-size: clamp(16px, 4.2vw, 19px);
   letter-spacing: 2px;
   color: #ffd890;
-  margin-bottom: 8px;
+  margin: -2px -2px 8px;
+  padding: 4px 2px 8px;
+  background: #0a0a14;
+  box-shadow: 0 3px 0 #0a0a14;
 }
-.panel-head .x { flex: 0; padding: 2px 10px; }
+.panel-title { min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.15; }
+.panel-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.panel-scroll {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 12px 0;
+}
+/* A scrolled row must never visibly run beneath the fixed header or toward
+   the bottom navigation. Opaque guard bands sit inside the scroll viewport;
+   content continues to scroll normally behind them but cannot look like it
+   is overlapping either control lane. */
+.panel-viewport::before,
+.panel-viewport::after {
+  content: '';
+  position: absolute;
+  z-index: 4;
+  left: 0;
+  right: 0;
+  height: 12px;
+  pointer-events: none;
+  background: #0a0a14;
+}
+.panel-viewport::before { top: 0; }
+.panel-viewport::after { bottom: 0; }
+body[data-text-tier="1"] { --nav-clearance: 70px; }
+body[data-text-tier="2"] { --nav-clearance: 118px; }
+body[data-text-tier="3"] { --nav-clearance: 132px; }
+body[data-text-tier="2"] .panel,
+body[data-text-tier="3"] .panel {
+  max-height: none;
+}
+body[data-text-tier="2"] .hud-top .stat.small,
+body[data-text-tier="3"] .hud-top .stat.small { flex: 1; }
+/* Dense six-cell HUD grows in smaller steps so every value remains readable. */
+body[data-text-tier="2"] .hud-top .stat .k { font-size: 12.5px !important; }
+body[data-text-tier="2"] .hud-top .stat .v { font-size: 20.5px !important; }
+body[data-text-tier="3"] .hud-top .stat .k { font-size: 13px !important; }
+body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px !important; }
+.panel-head .x { flex: 0 0 auto; padding: 2px 10px; margin-left: 8px; }
 
 /* garage: shorter bottom sheet so the 3D car shows above it */
-.panel-garage { max-height: 42vh; bottom: max(10px, env(safe-area-inset-bottom)); }
-.panel-garage.collapsed { max-height: none; background: transparent; border: none; padding: 0; }
-.garage-head { display: flex; align-items: center; justify-content: space-between; }
+.panel-garage { top: 42vh; max-height: none; bottom: 10px; bottom: max(10px, env(safe-area-inset-bottom)); }
+.panel-garage.collapsed {
+  max-height: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  pointer-events: none;
+}
+.panel-garage.collapsed .garage-bar { pointer-events: none; }
+.panel-garage.collapsed .garage-bar button { pointer-events: auto; }
+.garage-head {
+  display: flex;
+  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+.garage-head .g-exit { display: none; }
 .garage-head span { color: #ffd890; letter-spacing: 2px; }
 .garage-head button, .garage-bar button {
   font-family: inherit; font-weight: bold; background: #1c1c2c; color: #ffd890;
   border: 2px solid #4a4a70; border-bottom-width: 3px; padding: 6px 12px; font-size: 11px; cursor: pointer;
 }
 .garage-bar {
-  position: absolute; left: 8px; right: 8px; bottom: max(10px, env(safe-area-inset-bottom));
+  position: absolute; left: 8px; right: 8px; bottom: 10px; bottom: max(10px, env(safe-area-inset-bottom));
   display: flex; gap: 8px; justify-content: space-between;
 }
 .garage-bar button { flex: 1; padding: 12px 8px; }
-.panel-note { font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-bottom: 8px; line-height: 1.55; }
+.panel-note { font-size: 11px; font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-bottom: 8px; line-height: 1.55; }
 .row {
   display: flex;
   align-items: center;
@@ -247,23 +487,34 @@ body.in-garage .quick-buy { display: none; }
   border-bottom: 1px solid #22223a;
 }
 .row-txt { flex: 1; min-width: 0; }
-.row-name { font-size: clamp(13px, 3.4vw, 15px); }
-.row-desc { font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-top: 3px; line-height: 1.4; }
-.row button { flex: 0 0 100px; padding: 10px 4px; font-size: clamp(11px, 3vw, 13px); }
+.row-name { font-size: 13px; font-size: clamp(13px, 3.4vw, 15px); }
+.row-desc { font-size: 11px; font-size: clamp(11px, 3vw, 13px); color: #a0a0c8; margin-top: 3px; line-height: 1.4; }
+.row button { flex: 0 0 100px; padding: 10px 4px; font-size: 11px; font-size: clamp(11px, 3vw, 13px); }
 .row button:disabled { opacity: 0.4; cursor: default; }
 
 /* worldwide leaderboard list */
 .lb-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 6px 8px;
   border-bottom: 1px solid #22223a;
   font-size: 12px;
 }
-.lb-rank { flex: 0 0 44px; color: #8a8ab0; }
-.lb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lb-score { flex: 0 0 auto; color: #e6c84a; }
+.lb-rank { color: #8a8ab0; white-space: nowrap; }
+.lb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-score { color: #e6c84a; white-space: nowrap; }
+.lb-actions { display: flex; flex-wrap: nowrap; gap: 3px; }
+.panel button.lb-action {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 6px 4px;
+  border-width: 1px;
+  border-bottom-width: 2px;
+  font-size: 8px;
+  white-space: nowrap;
+}
 .lb-you {
   background: #2a2440;
   border: 2px solid #e6c84a;
@@ -271,6 +522,25 @@ body.in-garage .quick-buy { display: none; }
 }
 .lb-you .lb-name, .lb-you .lb-rank { color: #ffd890; }
 .lb-gap { text-align: center; color: #4a4a70; padding: 2px 0; font-size: 12px; }
+.lb-blocked-title {
+  margin-top: 12px;
+  color: #8a8ab0;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+.lb-blocked-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #22223a;
+  color: #8a8ab0;
+  font-size: 11px;
+}
+.lb-blocked-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-blocked-row > .lb-action { flex: 0 0 auto; }
 
 .toasts {
   position: absolute;
@@ -288,6 +558,7 @@ body.in-garage .quick-buy { display: none; }
   background: rgba(8, 8, 18, 0.9);
   border: 2px solid #4a4a70;
   padding: 8px 16px;
+  font-size: 13px;
   font-size: clamp(13px, 3.4vw, 15px);
   opacity: 0;
   transform: translateY(-8px);
@@ -302,6 +573,7 @@ body.in-garage .quick-buy { display: none; }
 
 .fade {
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   background: #fff;
   opacity: 0;
@@ -322,9 +594,10 @@ body.in-garage .boost-pill { display: none; }
 /* title card */
 .title-screen {
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   z-index: 70;
-  background: rgba(6, 6, 14, 0.82);
+  background: #06060e;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -335,12 +608,110 @@ body.in-garage .boost-pill { display: none; }
 }
 .title-screen.gone { opacity: 0; pointer-events: none; }
 .title-word {
+  font-size: 34px;
   font-size: clamp(34px, 9vw, 64px);
   letter-spacing: 4px;
   color: #f2f2f2;
   text-shadow: 4px 4px 0 #8e1f1f, 8px 8px 0 #000;
 }
 .title-sub { font-size: 12px; color: #8a8ab0; letter-spacing: 3px; }
+.setting {
+  display: block; display: grid; gap: 7px; padding: 11px 12px; margin: 7px 0;
+  background: #171722; border: 1px solid #39394f; color: #eeeeef;
+}
+.setting label {
+  display: flex;
+  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12px;
+}
+.setting-name,
+.setting-value {
+  min-width: 0;
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+.setting-name { overflow: hidden; }
+.setting-value { justify-self: end; }
+.setting input[type="range"] { width: 100%; accent-color: #e6c84a; }
+.text-size-choices { display: flex; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.text-size-choices button {
+  flex: 1 1 0;
+  min-width: 0; padding: 9px 2px; border: 1px solid #4a4a70;
+  background: #0d0d16; color: #b0b0d0; font-family: inherit; font-weight: bold;
+}
+.garage-head button { min-width: 0; }
+.garage-head .g-collapse { justify-self: stretch; }
+.text-size-choices button.selected { border-color: #e66a2a; background: #35170c; color: #ffd890; }
+.setting-check { display: block; padding: 10px 12px; margin: 7px 0; background: #171722; border: 1px solid #39394f; }
+.setting-check input { accent-color: #e6c84a; margin-right: 8px; }
+.setting-hint { display: block; margin: 5px 0 0 25px; color: #8a8ab0; font-size: 9px; }
+
+/* First-launch guided tour. The spotlight is visual; capture-phase input
+   gating in tutorial.ts makes only the highlighted control interactive. */
+.tutorial-layer { position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 2000; pointer-events: none; }
+.tutorial-skip {
+  pointer-events: auto; position: fixed; top: var(--hud-bottom); left: 12px;
+  z-index: 3; padding: 10px 12px; border: 2px solid #e66a2a; background: #11111c;
+  color: #ffd890; font: bold 11px 'Courier New', monospace;
+}
+.tutorial-focus {
+  position: fixed; border: 3px solid #ffd24a; border-radius: 5px;
+  box-shadow: 0 0 0 9999px rgba(3, 3, 9, .76), 0 0 18px #ffd24a;
+}
+.tutorial-arrow {
+  position: absolute; left: 50%; top: -34px; transform: translateX(-50%);
+  color: #ffd24a; font-size: 28px; text-shadow: 2px 2px #000;
+  animation: arrowbob .55s ease-in-out infinite alternate;
+}
+.tutorial-bubble {
+  pointer-events: auto; position: fixed; left: 18px; right: 18px; bottom: 22px; bottom: max(22px, env(safe-area-inset-bottom));
+  padding: 14px; border: 2px solid #e66a2a; background: rgba(10,10,20,.98); color: #eee;
+  box-shadow: 5px 5px 0 #000; text-align: left; overflow-y: auto;
+  max-height: 55vh; max-height: min(55vh, calc(100vh - 92px));
+}
+.tutorial-step { color: #ffd24a; font-size: 10px; letter-spacing: 2px; margin-bottom: 8px; }
+.tutorial-copy { font-size: 13px; line-height: 1.55; }
+.tutorial-next { width: 100%; margin-top: 12px; padding: 11px; border: 2px solid #e66a2a; background: #35170c; color: #ffd890; font: bold 12px 'Courier New', monospace; }
+.tutorial-active .opp-bar,
+.tutorial-active .boost-pill,
+.tutorial-active .quick-buy { visibility: hidden; }
+/* Eye reset is not part of the first-run path. Keep both utility controls out
+   of the callout's layout lane until SETTINGS is the required target. */
+.tutorial-active .hud-top .stat.eye,
+.tutorial-active:not(.tutorial-target-settings) .hud-top .stat.settings { visibility: hidden; }
+.reset-view,
+.ad-privacy,
+.accept-terms,
+.privacy-policy {
+  display: block;
+  width: 100%;
+  margin: 10px 0 0;
+}
+.privacy-policy {
+  padding: 10px 6px;
+  border: 2px solid #4a4a70;
+  border-bottom-width: 4px;
+  background: #1c1c2c;
+  color: #e8e8f0;
+  font: bold 10px 'Courier New', monospace;
+  text-align: center;
+  text-decoration: none;
+}
+.privacy-policy[disabled] { opacity: .42; }
+.legal-controls {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  width: 100%;
+}
+.legal-controls .privacy-policy { flex: 1; min-width: 0; }
+
 .title-tap {
   margin-top: 34px;
   font-size: 14px;
@@ -353,15 +724,25 @@ body.in-garage .boost-pill { display: none; }
 /* fake rewarded-ad overlay */
 .ad-overlay {
   position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   inset: 0;
   background: rgba(0, 0, 0, 0.92);
-  z-index: 60;
+  /* Blocking flows (account, purchases, rewarded ads) must always sit above
+     the title card so their controls remain readable and tappable. */
+  z-index: 80;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .ad-box {
+  box-sizing: border-box;
+  width: 90vw;
+  max-width: 380px;
   width: min(90vw, 380px);
+  max-height: calc(100vh - 12px);
+  max-height: calc(100dvh - 12px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: #14141f;
   border: 2px solid #4a4a70;
   padding: 12px;
@@ -394,6 +775,170 @@ body.in-garage .boost-pill { display: none; }
   outline: none;
 }
 .name-input:focus { border-color: #e6c84a; }
+.account-box .name-input { margin-top: 8px; text-transform: none; }
+.terms-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0;
+  color: #b0b0d0;
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: left;
+}
+.terms-check input { flex: 0 0 auto; margin-top: 2px; }
+.report-label {
+  display: block;
+  margin-top: 10px;
+  color: #a0a0c8;
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-align: left;
+}
+.report-reason,
+.report-details {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 5px;
+  padding: 9px 7px;
+  border: 2px solid #4a4a70;
+  background: #0a0a12;
+  color: #e8e8f0;
+  font: bold 11px 'Courier New', monospace;
+}
+.report-details { resize: vertical; min-height: 68px; }
 .name-status { font-size: 10px; color: #e66a2a; min-height: 16px; margin: 6px 0; }
-.name-actions { display: flex; gap: 6px; }
-.name-actions button { flex: 1; padding: 10px 6px; font-size: 11px; }
+.name-actions { display: flex; flex-wrap: nowrap; gap: 6px; }
+.name-actions button { flex: 1; min-width: 0; padding: 10px 6px; font-size: 11px; }
+.report-box .name-actions {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  margin: 0 -4px -4px;
+  padding: 8px 4px 4px;
+  background: linear-gradient(to bottom, rgba(20, 20, 31, 0), #14141f 7px);
+}
+@media (max-height: 360px) {
+  .report-box { padding: 8px; }
+  .report-box .name-copy { margin: 5px 0; }
+  .report-box .report-label { margin-top: 6px; }
+  .report-box .report-details { min-height: 52px; }
+  .report-box .name-status { min-height: 10px; margin: 3px 0; }
+}
+.account-delete-box { border-color: #d94b4b; }
+.account-delete-box .ad-label { color: #ff8b8b; }
+.account-delete-box .delete-final { border-color: #d94b4b; background: #3a1118; color: #ffb0b0; }
+.account-delete-box .delete-final:disabled { opacity: .42; }
+.panel button[data-id="delete"] { border-color: #a63c48; color: #ff9a9a; }
+
+/* Large accessibility text needs real horizontal room, not squeezed labels.
+   On phone-width portrait displays, split the HUD into a readable 4+2 grid. */
+@media (max-width: 480px) and (orientation: portrait) {
+  body[data-text-tier="2"], body[data-text-tier="3"] { --hud-clearance: 150px; }
+  body[data-text-tier="2"] .hud-top,
+  body[data-text-tier="3"] .hud-top {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    align-items: stretch;
+  }
+  body[data-text-tier="2"] .hud-top .stat,
+  body[data-text-tier="3"] .hud-top .stat { min-width: 0; }
+  .hud-top > .stat:nth-child(1),
+  .hud-top > .stat:nth-child(2) { grid-column: span 2; }
+  body[data-text-tier="2"] .hud-top .stat.eye,
+  body[data-text-tier="3"] .hud-top .stat.eye { grid-column: 3; }
+  body[data-text-tier="2"] .hud-top .stat.settings,
+  body[data-text-tier="3"] .hud-top .stat.settings { grid-column: 4; }
+  body[data-text-tier="2"] .opp-bar,
+  body[data-text-tier="3"] .opp-bar { top: var(--hud-bottom); }
+  body[data-text-tier="2"] .boost-pill,
+  body[data-text-tier="3"] .boost-pill { top: 102px; }
+  body[data-text-tier="2"] .toasts,
+  body[data-text-tier="3"] .toasts { top: 190px; }
+}
+
+/* Very short landscape screens reserve less decorative headroom so the
+   scrollable panel still has a useful viewport without touching navigation. */
+@media (orientation: landscape) and (max-height: 480px) {
+  body { --hud-clearance: 72px; }
+  body[data-text-tier="2"] { --nav-clearance: 104px; }
+  body[data-text-tier="3"] { --nav-clearance: 116px; }
+  /* The utility-button lane is empty throughout the tour except when the
+     SETTINGS gear itself is highlighted. Reuse that space for SKIP so large
+     explanatory callouts never have to cross it on short displays. */
+  body.tutorial-active:not(.tutorial-target-settings) .tutorial-skip {
+    top: 8px; left: auto; right: 8px;
+  }
+  .panel:not(.panel-garage) {
+    top: calc(var(--hud-bottom) + 10px);
+    bottom: calc(var(--nav-height) + 10px);
+    max-height: none;
+  }
+  .opp-bar { top: var(--hud-bottom); }
+}
+
+/* Short Android landscape screens have very little vertical space between
+   the HUD and navigation. Compact only the tutorial chrome; its copy still
+   follows the selected accessibility tier, and the required action remains
+   fully visible without an internal scroll. */
+@media (orientation: landscape) and (max-height: 320px) {
+  /* Quick Buy is a redundant shortcut to UPGRADES/CREW. On this ultra-short
+     layout it cannot coexist with four-tier accessible opponent copy without
+     obscuring it, so preserve the required HUD and one-row navigation. */
+  .quick-buy { display: none !important; }
+  .tutorial-skip { padding: 5px 8px; font-size: 9px; }
+  .tutorial-bubble { padding: 6px 8px; }
+  .tutorial-step { margin-bottom: 4px; }
+  .tutorial-copy { line-height: 1.25; }
+  .tutorial-next { margin-top: 5px; padding: 5px; }
+}
+
+/* On the narrowest portrait devices, keep SKIP beside the centered eye-contact
+   focus instead of letting the enlarged accessibility label cross into it. */
+@media (orientation: portrait) and (max-width: 320px) {
+  body { --hud-clearance: 150px; }
+  .hud-top {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    align-items: stretch;
+  }
+  .hud-top > .stat:nth-child(1),
+  .hud-top > .stat:nth-child(2) { grid-column: span 2; }
+  .hud-top .stat.eye { grid-column: 3; }
+  .hud-top .stat.settings { grid-column: 4; }
+  .tutorial-skip {
+    left: auto;
+    right: 8px;
+    width: 82px;
+    padding: 6px 3px;
+  }
+  /* Preserve the selected text tier while tightening only tutorial chrome.
+     This keeps the complete copy and action visible between SKIP and the
+     single-row navigation on Android 7-era narrow screens. */
+  .tutorial-bubble { padding: 8px 10px; }
+  .tutorial-step { margin-bottom: 4px; }
+  .tutorial-copy { line-height: 1.3; }
+  .tutorial-next { margin-top: 6px; padding: 6px; }
+}
+
+@media (max-width: 480px) {
+  body[data-text-tier="2"] .text-size-setting label,
+  body[data-text-tier="3"] .text-size-setting label {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+  body[data-text-tier="2"] .text-size-setting .setting-value,
+  body[data-text-tier="3"] .text-size-setting .setting-value { justify-self: start; }
+}
+
+@media (max-width: 260px) {
+  .hud-top { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hud-top > .stat { grid-column: span 1 !important; }
+  .menu-row { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+/* Accessibility HUD rules above must never win while the garage owns the
+   screen. Keep this final so all text tiers and orientations stay car-only. */
+body.in-garage .hud-top,
+body.in-garage .opp-bar,
+body.in-garage .menu-row,
+body.in-garage .boost-pill { display: none; }

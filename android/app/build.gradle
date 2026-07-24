@@ -1,5 +1,28 @@
 apply plugin: 'com.android.application'
 
+def releaseProperties = new Properties()
+def releasePropertiesFile = rootProject.file('private-release.properties')
+if (releasePropertiesFile.exists()) releasePropertiesFile.withInputStream { releaseProperties.load(it) }
+def releaseProperty = { String name -> project.findProperty(name) ?: releaseProperties.getProperty(name) }
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+        && keystoreProperties.getProperty('storeFile')
+        && keystoreProperties.getProperty('storePassword')
+        && keystoreProperties.getProperty('keyAlias')
+        && keystoreProperties.getProperty('keyPassword')
+def releaseAdMobAppId = releaseProperty("ADMOB_ANDROID_APP_ID")?.trim()
+def releasePlayGamesAppId = releaseProperty("PLAY_GAMES_APP_ID")?.trim()
+def releaseVersionCode = releaseProperty("VERSION_CODE")?.trim()
+def releaseVersionName = releaseProperty("VERSION_NAME")?.trim()
+// Android Studio/debug builds stay usable without private release metadata.
+// Every release task is rejected below unless both version fields are explicit.
+def configuredVersionCode = releaseVersionCode ==~ /[1-9]\d*/ ? releaseVersionCode as Integer : 1
+def configuredVersionName = releaseVersionName ?: "0.0.0-debug"
+def googleSampleAdMobPublisher = "3940256099942544"
+
 android {
     namespace = "com.nosiah.discipline"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,19 +30,63 @@ android {
         applicationId "com.nosiah.discipline"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode configuredVersionCode
+        versionName configuredVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // Override for release with -PADMOB_ANDROID_APP_ID=ca-app-pub-...~...
+        manifestPlaceholders.admobAppId = "ca-app-pub-3940256099942544~3347511713"
+        // Numeric Play Games project/app id. The zero value lets local debug
+        // builds run; release:check rejects it for a publishing build.
+        resValue "string", "game_services_project_id", "000000000000"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                storeFile rootProject.file(keystoreProperties.getProperty('storeFile'))
+                storePassword keystoreProperties.getProperty('storePassword')
+                keyAlias keystoreProperties.getProperty('keyAlias')
+                keyPassword keystoreProperties.getProperty('keyPassword')
+            }
+        }
+    }
     buildTypes {
         release {
+            // Release tasks are guarded below. These values intentionally do
+            // not fall back to public test/zero identifiers.
+            manifestPlaceholders.admobAppId = releaseAdMobAppId ?: ""
+            resValue "string", "game_services_project_id", releasePlayGamesAppId ?: ""
+            if (hasReleaseKeystore) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+// A release must never silently become unsigned or inherit the debug service
+// identifiers. Debug builds remain available without private launch files.
+gradle.taskGraph.whenReady { graph ->
+    def buildsRelease = graph.allTasks.any { task ->
+        task.project == project && task.name.toLowerCase().contains("release")
+    }
+    if (buildsRelease) {
+        def failures = []
+        if (!hasReleaseKeystore) failures << "android/keystore.properties is missing or incomplete"
+        if (!(releaseAdMobAppId ==~ /ca-app-pub-\d+~\d+/)
+                || releaseAdMobAppId.startsWith("ca-app-pub-${googleSampleAdMobPublisher}~")) {
+            failures << "ADMOB_ANDROID_APP_ID is missing, invalid, or a Google sample ID"
+        }
+        if (!(releasePlayGamesAppId ==~ /\d{6,}/) || releasePlayGamesAppId ==~ /0+/) failures << "PLAY_GAMES_APP_ID is not configured"
+        if (!(releaseVersionCode ==~ /[1-9]\d*/)) failures << "VERSION_CODE must be explicitly set to a positive integer"
+        if (!(releaseVersionName ==~ /\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?/)) {
+            failures << "VERSION_NAME must be explicitly set to a valid release version"
+        }
+        if (failures) {
+            throw new GradleException("Refusing unsafe release build:\n - " + failures.join("\n - "))
         }
     }
 }

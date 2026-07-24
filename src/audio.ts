@@ -12,6 +12,12 @@ class Sfx {
       return response.arrayBuffer();
     });
   muted = localStorage.getItem('discipline-muted') === '1';
+  volume = Number(localStorage.getItem('discipline-sfx-volume') ?? '1');
+
+  setVolume(value: number) {
+    this.volume = Math.max(0, Math.min(1, value));
+    localStorage.setItem('discipline-sfx-volume', String(this.volume));
+  }
 
   toggleMute(): boolean {
     this.muted = !this.muted;
@@ -45,7 +51,7 @@ class Sfx {
       o.type = type;
       o.frequency.value = freq;
       if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), ctx.currentTime + dur);
-      g.gain.setValueAtTime(vol, ctx.currentTime);
+      g.gain.setValueAtTime(vol * this.volume, ctx.currentTime);
       g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
       o.connect(g).connect(ctx.destination);
       o.start();
@@ -63,7 +69,7 @@ class Sfx {
       const src = ctx.createBufferSource();
       src.buffer = buf;
       const g = ctx.createGain();
-      g.gain.value = vol;
+      g.gain.value = vol * this.volume;
       const f = ctx.createBiquadFilter();
       f.type = 'lowpass';
       f.frequency.value = 900;
@@ -100,7 +106,7 @@ class Sfx {
         const semitones = -6 + Math.random() * 12;
         src.buffer = buffer;
         src.playbackRate.value = Math.pow(2, semitones / 12);
-        gain.gain.value = 0.68;
+        gain.gain.value = 0.68 * this.volume;
         src.connect(gain).connect(ctx.destination);
         src.start(ctx.currentTime);
       };
@@ -147,6 +153,13 @@ class MusicDirector {
   private targetTrack = -1;
   private targetBpm: MusicBpm = 77;
   private readonly baseVolume = 0.55;
+  private userVolume = Number(localStorage.getItem('discipline-music-volume') ?? '1');
+
+  setVolume(value: number) {
+    this.userVolume = Math.max(0, Math.min(1, value));
+    localStorage.setItem('discipline-music-volume', String(this.userVolume));
+    this.applyVolume();
+  }
 
   engage(opponentIndex: number, progress: number) {
     this.engaged = true;
@@ -270,7 +283,7 @@ class MusicDirector {
   private battleTrack(index: number) { return ((index % MUSIC_TRACKS.length) + MUSIC_TRACKS.length) % MUSIC_TRACKS.length; }
   private applyVolume() {
     if (!this.ctx || !this.master) return;
-    const volume = this.muted ? 0 : this.baseVolume * (this.ducked ? 0.5 : 1);
+    const volume = this.muted ? 0 : this.baseVolume * this.userVolume * (this.ducked ? 0.5 : 1);
     this.master.gain.setTargetAtTime(volume, this.ctx.currentTime, 0.02);
   }
 }
