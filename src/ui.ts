@@ -39,6 +39,7 @@ export class UI {
   private fadeTransition = 0;
   private readonly scaledFontElements = new Set<HTMLElement>();
   private readonly fittedFontSizes = new Map<HTMLElement, string>();
+  private readonly boundPanelScrollers = new WeakSet<HTMLElement>();
   private readonly textScales = [1, 1.15, 1.3, 1.45] as const;
   private readonly layoutObserver: ResizeObserver;
   private lastPanelRenderAt = 0;
@@ -191,9 +192,18 @@ export class UI {
   private scheduleTextFit(root: HTMLElement) {
     requestAnimationFrame(() => {
       this.fitBorderedLabels(root);
+      this.preservePinnedPanelBottom();
       // Android WebView can settle fallback/emoji glyph metrics a frame late.
-      requestAnimationFrame(() => this.fitBorderedLabels(root));
+      requestAnimationFrame(() => {
+        this.fitBorderedLabels(root);
+        this.preservePinnedPanelBottom();
+      });
     });
+  }
+
+  private preservePinnedPanelBottom() {
+    const scroller = this.panel?.querySelector<HTMLElement>('.panel-scroll');
+    if (scroller?.dataset.bottomPinned === 'true') scroller.scrollTop = scroller.scrollHeight;
   }
 
   /** Keep every UI word intact. Buttons stay single-line; prose may wrap only
@@ -889,13 +899,90 @@ export class UI {
 
   get isPanelOpen() { return this.openTab !== null; }
 
+  private bindPanelScroller(scroller: HTMLElement) {
+    if (this.boundPanelScrollers.has(scroller)) return;
+    this.boundPanelScrollers.add(scroller);
+
+    let gestureStartY = 0;
+    let trackingTouch = false;
+    let leavingBottom = false;
+    let lastScrollTop = scroller.scrollTop;
+    const remaining = () => scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+    const setPinned = (pinned: boolean) => {
+      scroller.dataset.bottomPinned = pinned ? 'true' : 'false';
+    };
+    const pinExactBottom = () => {
+      if (!scroller.isConnected || leavingBottom) return;
+      if (remaining() <= 8) {
+        setPinned(true);
+        scroller.scrollTop = scroller.scrollHeight;
+        lastScrollTop = scroller.scrollTop;
+      }
+    };
+
+    // A deliberate downward finger drag means "leave the bottom." Native
+    // rebound and post-layout scroll events do not carry that intent, so they
+    // remain pinned instead of pulling the list several pixels upward.
+    scroller.addEventListener('touchstart', (event) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      trackingTouch = true;
+      gestureStartY = touch.clientY;
+      leavingBottom = false;
+    }, { passive: true });
+    scroller.addEventListener('touchmove', (event) => {
+      if (!trackingTouch) return;
+      const touch = event.touches[0];
+      if (!touch) return;
+      leavingBottom = touch.clientY - gestureStartY > 6;
+      if (leavingBottom) setPinned(false);
+    }, { passive: true });
+    const finishTouch = () => {
+      trackingTouch = false;
+      if (!leavingBottom) pinExactBottom();
+      leavingBottom = false;
+    };
+    scroller.addEventListener('touchend', finishTouch, { passive: true });
+    scroller.addEventListener('touchcancel', finishTouch, { passive: true });
+    scroller.addEventListener('wheel', (event) => {
+      leavingBottom = event.deltaY < 0;
+      if (leavingBottom) {
+        setPinned(false);
+        requestAnimationFrame(() => { leavingBottom = false; });
+      }
+      else requestAnimationFrame(pinExactBottom);
+    }, { passive: true });
+    scroller.addEventListener('keydown', (event) => {
+      if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) setPinned(false);
+      else if (event.key === 'End') {
+        leavingBottom = false;
+        requestAnimationFrame(pinExactBottom);
+      }
+    });
+    scroller.addEventListener('scroll', () => {
+      const gap = remaining();
+      const movingTowardBottom = scroller.scrollTop >= lastScrollTop;
+      if (leavingBottom) {
+        setPinned(false);
+      } else if (gap <= 8 && movingTowardBottom) {
+        setPinned(true);
+        scroller.scrollTop = scroller.scrollHeight;
+      } else if (scroller.dataset.bottomPinned === 'true') {
+        if (gap <= 12) scroller.scrollTop = scroller.scrollHeight;
+        else setPinned(false);
+      }
+      lastScrollTop = scroller.scrollTop;
+    }, { passive: true });
+  }
+
   private refreshPanel() {
     if (!this.panel || !this.openTab) return;
     const previousScroller = this.panel.querySelector<HTMLElement>('.panel-scroll');
     const previousScroll = previousScroller?.scrollTop ?? 0;
     const wasAtBottom = Boolean(previousScroller
       && previousScroller.scrollHeight > previousScroller.clientHeight
-      && previousScroller.scrollHeight - previousScroller.clientHeight - previousScroll <= 2);
+      && (previousScroller.dataset.bottomPinned === 'true'
+        || previousScroller.scrollHeight - previousScroller.clientHeight - previousScroll <= 4));
     this.lastPanelRenderAt = performance.now();
     const g = this.game;
     const rows: string[] = [`<div class="panel-head"><span class="panel-title">${this.openTab.toUpperCase()}</span><button class="x">✕</button></div>`];
@@ -1072,21 +1159,37 @@ export class UI {
     const collapsedGarage = this.openTab === 'garage' && !this.garageSheetOpen;
     // Keep the header/close (and GARAGE hide) controls outside the scrolling
     // content. Scrolling can no longer carry rows underneath those buttons.
-    this.panel.innerHTML = collapsedGarage
-      ? rows.join('')
-      : `${rows[0]}<div class="panel-viewport"><div class="panel-scroll">${rows.slice(1).join('')}</div></div>`;
+    const scrollContent = `${rows.slice(1).join('')}<div class="panel-bottom-anchor" aria-hidden="true"></div>`;
+    const previousHead = this.panel.querySelector<HTMLElement>(':scope > .panel-head');
+    let nextScroll: HTMLElement | null = null;
+    if (collapsedGarage) {
+      this.panel.innerHTML = rows.join('');
+    } else if (previousScroller?.isConnected && previousHead) {
+      // Refresh rows without replacing the element that owns an active touch
+      // scroll. Replacing it used to cancel a fling and schedule stale scroll
+      // restoration over the player's newer finger position.
+      previousHead.outerHTML = rows[0];
+      previousScroller.innerHTML = scrollContent;
+      nextScroll = previousScroller;
+    } else {
+      this.panel.innerHTML =
+        `${rows[0]}<div class="panel-viewport"><div class="panel-scroll">${scrollContent}</div></div>`;
+      nextScroll = this.panel.querySelector<HTMLElement>('.panel-scroll');
+    }
     this.pruneTextCaches();
-    const nextScroll = this.panel.querySelector<HTMLElement>('.panel-scroll');
-    const restoreScroll = () => {
-      if (!nextScroll?.isConnected) return;
-      nextScroll.scrollTop = wasAtBottom ? nextScroll.scrollHeight : previousScroll;
-    };
-    restoreScroll();
+    // Apply the current text tier and first fitting pass before restoring the
+    // scroll position. Waiting for the body MutationObserver changed row
+    // heights after the boundary had already been painted.
+    if (nextScroll) {
+      this.scaleTextTree(nextScroll);
+      this.fitBorderedLabels(nextScroll);
+    }
+    if (nextScroll) this.bindPanelScroller(nextScroll);
+    if (nextScroll && wasAtBottom) {
+      nextScroll.dataset.bottomPinned = 'true';
+      nextScroll.scrollTop = nextScroll.scrollHeight;
+    } else if (nextScroll && nextScroll !== previousScroller) nextScroll.scrollTop = previousScroll;
     this.scheduleTextFit(this.panel);
-    // Text fitting completes across two animation frames. Restore once more
-    // after that layout settles so a market action cannot pull a player away
-    // from the bottom of the rebuilt list.
-    requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(restoreScroll)));
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
     if (this.openTab === 'settings') this.bindSettings();
     // garage-specific controls

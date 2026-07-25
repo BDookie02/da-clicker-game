@@ -412,8 +412,16 @@ button {
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior: contain;
+  /* Android's `contain` value still permits the boundary stretch/rebound.
+     `none` keeps a released finger exactly at the real top or bottom. */
+  overscroll-behavior-y: none;
   padding: 12px 0;
+}
+.panel-scroll > :not(.panel-bottom-anchor) { overflow-anchor: none; }
+.panel-scroll > .panel-bottom-anchor {
+  overflow-anchor: auto;
+  height: 1px;
+  pointer-events: none;
 }
 /* A scrolled row must never visibly run beneath the fixed header or toward
    the bottom navigation. Opaque guard bands sit inside the scroll viewport;
