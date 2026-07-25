@@ -42,8 +42,37 @@ export const AD_CONFIG = {
   prodRewardedIos: import.meta.env.VITE_ADMOB_IOS_REWARDED_ID ?? '',
 };
 
+// These bounds stop a bad connection or a wedged SDK callback from leaving the
+// loading overlay on screen indefinitely. A late load remains cached, so the
+// player's next attempt can still use it immediately.
+const AD_LOAD_TIMEOUT_MS = 15_000;
+const AD_SHOW_TIMEOUT_MS = 120_000;
+const AD_CACHE_MAX_AGE_MS = 50 * 60_000;
+
+function deadline<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    promise.then(
+      value => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 class AdMobAdProvider implements AdProvider {
-  private ready = false;
+  private initPromise: Promise<void> | null = null;
+  private preparing: { key: string; promise: Promise<void> } | null = null;
+  private preparedKey = '';
+  private preparedAt = 0;
+  private showInProgress = false;
+  private backgroundEpoch = 0;
+
   constructor(private isIOS: boolean) {}
 
   private unitId(): string {
@@ -51,58 +80,149 @@ class AdMobAdProvider implements AdProvider {
     return this.isIOS ? AD_CONFIG.prodRewardedIos : AD_CONFIG.prodRewardedAndroid;
   }
 
-  private async init() {
-    if (this.ready) return;
-    await AdMob.initialize({ initializeForTesting: AD_CONFIG.TESTING });
-    let consent = await AdMob.requestConsentInfo();
-    if (!consent.canRequestAds && consent.isConsentFormAvailable)
-      consent = await AdMob.showConsentForm();
-    if (!consent.canRequestAds) throw new Error('Ad consent is required');
-    this.ready = true;
+  private init(): Promise<void> {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = (async () => {
+      await AdMob.initialize({ initializeForTesting: AD_CONFIG.TESTING });
+      let consent = await AdMob.requestConsentInfo();
+      if (!consent.canRequestAds && consent.isConsentFormAvailable)
+        consent = await AdMob.showConsentForm();
+      if (!consent.canRequestAds) throw new Error('Ad consent is required');
+    })().catch((error) => {
+      // Initialization failures (including temporary network trouble) must be
+      // retryable on the next foreground or button press.
+      this.initPromise = null;
+      throw error;
+    });
+    return this.initPromise;
+  }
+
+  private preparationKey(verification?: AdVerification): string {
+    return verification
+      ? `${this.unitId()}\n${verification.userId}\n${verification.customData}`
+      : this.unitId();
+  }
+
+  private isPrepared(key: string): boolean {
+    return this.preparedKey === key
+      && Date.now() - this.preparedAt < AD_CACHE_MAX_AGE_MS;
+  }
+
+  private async prepare(verification?: AdVerification): Promise<void> {
+    await this.init();
+    const adId = this.unitId();
+    if (!AD_CONFIG.TESTING && !adId) throw new Error('Missing production AdMob rewarded unit ID');
+    const key = this.preparationKey(verification);
+    if (this.isPrepared(key)) return;
+
+    if (this.preparing) {
+      if (this.preparing.key === key) return this.preparing.promise;
+      await this.preparing.promise.catch(() => undefined);
+      if (this.isPrepared(key)) return;
+    }
+
+    const load = AdMob.prepareRewardVideoAd({
+      adId,
+      isTesting: AD_CONFIG.TESTING,
+      ...(verification ? { ssv: {
+        userId: verification.userId,
+        customData: verification.customData,
+      } } : {}),
+    }).then(() => {
+      this.preparedKey = key;
+      this.preparedAt = Date.now();
+    });
+    const pending = { key, promise: load };
+    this.preparing = pending;
+    load.then(
+      () => { if (this.preparing === pending) this.preparing = null; },
+      () => { if (this.preparing === pending) this.preparing = null; },
+    );
+    return load;
+  }
+
+  /** Starts Mobile Ads/UMP immediately and keeps a test ad warm off the tap path. */
+  async warmup(): Promise<void> {
+    if (document.hidden || this.showInProgress) return;
+    await deadline(this.init(), AD_LOAD_TIMEOUT_MS, 'AdMob initialization');
+    // Production SSV data is unique to a signed-in reward intent, so only a
+    // public test ad can be loaded before the player requests a reward.
+    if (AD_CONFIG.TESTING)
+      await deadline(this.prepare(), AD_LOAD_TIMEOUT_MS, 'Rewarded ad preload');
+  }
+
+  private present(): Promise<AdResult> {
+    return new Promise<AdResult>((resolve) => {
+      let rewarded = false;
+      let shownAt = 0;
+      let rewardedAt = 0;
+      let settled = false;
+      let timeout = 0;
+      const subs: { remove(): Promise<void> }[] = [];
+      const done = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        for (const sub of subs) void sub.remove();
+        const end = rewardedAt || performance.now();
+        resolve({ rewarded: ok, watchedSeconds: shownAt ? Math.max(0, (end - shownAt) / 1000) : 0 });
+      };
+      Promise.all([
+        AdMob.addListener(RewardAdPluginEvents.Showed, () => {
+          shownAt = performance.now();
+        }),
+        AdMob.addListener(RewardAdPluginEvents.Rewarded, () => {
+          rewarded = true;
+          rewardedAt = performance.now();
+        }),
+        AdMob.addListener(RewardAdPluginEvents.Dismissed, () => done(rewarded)),
+        AdMob.addListener(RewardAdPluginEvents.FailedToShow, () => done(false)),
+      ]).then((listeners) => {
+        subs.push(...listeners);
+        timeout = window.setTimeout(() => done(rewarded), AD_SHOW_TIMEOUT_MS);
+        return AdMob.showRewardVideoAd();
+      }).then(() => {
+        // Android resolves this promise from OnUserEarnedRewardListener. Keep
+        // the event as the primary signal and the promise as a safe backup.
+        if (!rewarded) {
+          rewarded = true;
+          rewardedAt = performance.now();
+        }
+      }).catch(() => done(false));
+    });
   }
 
   async show(_fallbackSeconds?: number, verification?: AdVerification): Promise<AdResult> {
+    if (this.showInProgress) return { rewarded: false, watchedSeconds: 0 };
+    this.showInProgress = true;
+    const requestedInEpoch = this.backgroundEpoch;
     try {
-      await this.init();
-      const adId = this.unitId();
-      if (!AD_CONFIG.TESTING && !adId) throw new Error('Missing production AdMob rewarded unit ID');
-      return await new Promise<AdResult>((resolve) => {
-        let rewarded = false;
-        let shownAt = 0;
-        let rewardedAt = 0;
-        let settled = false;
-        const subs: { remove(): void }[] = [];
-        const done = (ok: boolean) => {
-          if (settled) return;
-          settled = true;
-          subs.forEach(s => s.remove());
-          const end = rewardedAt || performance.now();
-          resolve({ rewarded: ok, watchedSeconds: shownAt ? Math.max(0, (end - shownAt) / 1000) : 0 });
-        };
-        Promise.all([
-          AdMob.addListener(RewardAdPluginEvents.Rewarded, () => {
-            rewarded = true;
-            rewardedAt = performance.now();
-          }),
-          AdMob.addListener(RewardAdPluginEvents.Dismissed, () => done(rewarded)),
-          AdMob.addListener(RewardAdPluginEvents.FailedToShow, () => done(false)),
-        ]).then((listeners) => {
-          subs.push(...listeners);
-          return AdMob.prepareRewardVideoAd({
-            adId,
-            ...(verification ? { ssv: {
-              userId: verification.userId,
-              customData: verification.customData,
-            } } : {}),
-          });
-        }).then(() => {
-          shownAt = performance.now();
-          return AdMob.showRewardVideoAd();
-        }).catch(() => done(false));
-      });
+      const key = this.preparationKey(verification);
+      await deadline(this.prepare(verification), AD_LOAD_TIMEOUT_MS, 'Rewarded ad load');
+      // Never launch a full-screen ad after the player left or locked the app.
+      // The completed load remains cached for the next explicit attempt.
+      if (document.hidden || requestedInEpoch !== this.backgroundEpoch || !this.isPrepared(key))
+        return { rewarded: false, watchedSeconds: 0 };
+      this.preparedKey = '';
+      this.preparedAt = 0;
+      return await this.present();
     } catch {
       return { rewarded: false, watchedSeconds: 0 }; // no fill / offline — player just retries
+    } finally {
+      this.showInProgress = false;
+      // Rewarded ads are single-use. Refill the test slot immediately so the
+      // next allowed press normally opens without another network wait.
+      if (AD_CONFIG.TESTING && !document.hidden)
+        void this.warmup().catch(() => undefined);
     }
+  }
+
+  onVisibilityChange(): void {
+    if (document.hidden) {
+      this.backgroundEpoch += 1;
+      return;
+    }
+    void this.warmup().catch(() => undefined);
   }
 }
 
@@ -162,7 +282,12 @@ export async function initAds(): Promise<AdProvider> {
   let provider: AdProvider;
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.()) {
-    provider = new AdMobAdProvider(cap.getPlatform() === 'ios');
+    const nativeProvider = new AdMobAdProvider(cap.getPlatform() === 'ios');
+    // Do not block game startup on the network. Begin initialization/loading
+    // now and retry whenever the native WebView returns to the foreground.
+    void nativeProvider.warmup().catch(() => undefined);
+    document.addEventListener('visibilitychange', () => nativeProvider.onVisibilityChange());
+    provider = nativeProvider;
     return withMusicPause(provider);
   }
   provider = new PlaceholderAdProvider();
