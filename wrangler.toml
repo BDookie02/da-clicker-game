@@ -11,4 +11,5 @@ ADMOB_REWARDED_AD_UNIT_ID = "2001670311"
 [[d1_databases]]
 binding = "DB"
 database_name = "discipline-db"
-database_id = "PASTE_ID_FROM_wrangler_d1_create"
+database_id = "58d64196-499f-42ba-bd7e-a688b8bf64a4"
+migrations_dir = "server/migrations"

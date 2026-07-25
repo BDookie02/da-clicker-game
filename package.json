@@ -16,6 +16,7 @@
     "audit:android:tap-cosmetics": "node scripts/audit-android-tap-cosmetics-cdp.mjs",
     "test": "node --test tests/*.test.mjs",
     "release:check": "node scripts/release-check.mjs",
+    "release:bundle-check": "node scripts/release-check.mjs --bundle",
     "release:local-check": "node scripts/release-check.mjs --local",
     "release:play": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-play-release.ps1",
     "preview": "vite preview",

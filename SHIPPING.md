@@ -2,9 +2,9 @@
 
 ## Verified in this repository
 
-- Android package: `com.nosiah.discipline`; minSdk 24 (Android 7), target/compile SDK 36.
-- Debug runtime tested on Android 12 / API 31. Android 7 / API 24 and API 36
-  must be rerun against each final release candidate.
+- Android package: `com.nosiah.discipline`; minSdk 31 (Android 12), target/compile SDK 36.
+- Debug runtime tested on Android 12 / API 31. API 36 must be rerun against
+  each final release candidate.
 - Rewarded AdMob integration grants only from the SDK reward event. Checked-in defaults are Google test IDs.
 - Seven Google Play one-time product IDs are wired: `m_handful`, `m_stack`, `m_pouch`, `m_crate`, `m_vault`, `m_hoard`, `m_empire`.
 - Purchases are queued before verification, verified server-side with Google/Apple, recorded in a unique transaction ledger, then granted once.
@@ -58,9 +58,10 @@ AAB, and verifies the signature. It does not upload or publish.
 
 ## Backend deployment and secrets
 
-1. Install/authenticate Wrangler: `npm install -g wrangler`, then `wrangler login`.
-2. Run `wrangler d1 create discipline-db` and place the returned ID in `wrangler.toml`.
-3. For a fresh database run `wrangler d1 execute discipline-db --file=server/schema.sql --remote`. For an existing database, apply every unapplied file in `server/migrations/` in numeric order.
+1. Authenticate the pinned Wrangler client: `npx --yes wrangler@4.114.0 login`.
+2. Confirm `wrangler.toml` points at the intended `discipline-db` database.
+3. Apply the tracked schema in order with
+   `npx --yes wrangler@4.114.0 d1 migrations apply discipline-db --remote`.
 4. In Google Cloud/Play Console, create a service account with Android Publisher access and save its JSON as the Worker secret: `wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON`.
 5. Generate a high-entropy moderation secret and save it with `wrangler secret put MODERATION_ADMIN_TOKEN`; follow `docs/MODERATION.md` and assign a real review owner/cadence.
 6. Later for iOS, add `APPLE_ISSUER_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`, and `APPLE_BUNDLE_ID` as Worker secrets.

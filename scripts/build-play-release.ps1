@@ -143,7 +143,7 @@ try {
 
     Invoke-NativeChecked 'Tests failed.' { cmd /c npm test }
     Invoke-NativeChecked 'Dependency security audit failed.' { cmd /c npm audit --audit-level=high }
-    Invoke-NativeChecked 'Release preflight failed.' { cmd /c npm run release:check }
+    Invoke-NativeChecked 'Release bundle preflight failed.' { cmd /c npm run release:bundle-check }
     Invoke-NativeChecked 'Production web build failed.' { cmd /c npm run build }
     Invoke-NativeChecked 'Capacitor Android sync failed.' { cmd /c npx cap sync android }
     Invoke-NativeChecked 'Packaged Android web payload verification failed.' { node scripts/verify-android-release-assets.mjs }
