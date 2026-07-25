@@ -55,6 +55,12 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // A sideloaded tester APK must identify the real Play Games
+            // project too. Keep the value in ignored private-release.properties
+            // and fall back to zero only before Play Games is configured.
+            resValue "string", "game_services_project_id", releasePlayGamesAppId ?: "000000000000"
+        }
         release {
             // Release tasks are guarded below. These values intentionally do
             // not fall back to public test/zero identifiers.

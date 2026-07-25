@@ -11,6 +11,7 @@ import { FirstLaunchTutorial } from './tutorial';
 import { AccountService } from './account';
 import { installCompatibilityFallbacks } from './compat';
 import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 installCompatibilityFallbacks();
@@ -319,6 +320,14 @@ const tutorial = new FirstLaunchTutorial({
   eyeContactPoint: () => scene.eyeContactScreenPoint(),
   finish: () => { game.s.tutorialComplete = true; game.save(); },
 });
+const registerPhysicalTap = () => {
+  if (transitioning) return;
+  sfx.preloadYelp();
+  game.tap();
+  tutorial.recordSuccessfulTap();
+  sfx.tap();
+};
+ui.onQuickBuyTap = registerPhysicalTap;
 if (visualAudit) (window as any).__tutorial = tutorial;
 title.addEventListener('pointerdown', (ev) => {
   ev.stopPropagation();
@@ -351,10 +360,7 @@ const onTap = (ev: Event) => {
     }
     return;
   }
-  sfx.preloadYelp();
-  game.tap();
-  tutorial.recordSuccessfulTap();
-  sfx.tap();
+  registerPhysicalTap();
   ev.preventDefault();
 };
 
@@ -520,7 +526,46 @@ ui.refresh();
 // autosave
 setInterval(() => { game.save(); syncScore(); }, 5000);
 window.addEventListener('beforeunload', () => { game.save(); syncScore(); });
+
+// Android may keep the WebView and its Web Audio contexts alive when Home is
+// pressed or the screen locks. Treat native activity state, page visibility,
+// and window focus as independent gates so no audio leaks into the background.
+let nativeAppActive = true;
+let pageVisible = !document.hidden;
+let windowFocused = true;
+const syncAudioLifecycle = () => {
+  const active = nativeAppActive && pageVisible && windowFocused;
+  music.setAppActive(active);
+  sfx.setAppActive(active);
+};
+syncAudioLifecycle();
+void App.getState().then(({ isActive }) => {
+  nativeAppActive = isActive;
+  syncAudioLifecycle();
+});
+void App.addListener('appStateChange', ({ isActive }) => {
+  nativeAppActive = isActive;
+  syncAudioLifecycle();
+});
+window.addEventListener('blur', () => {
+  windowFocused = false;
+  syncAudioLifecycle();
+});
+window.addEventListener('focus', () => {
+  windowFocused = true;
+  syncAudioLifecycle();
+});
+window.addEventListener('pagehide', () => {
+  pageVisible = false;
+  syncAudioLifecycle();
+});
+window.addEventListener('pageshow', () => {
+  pageVisible = !document.hidden;
+  syncAudioLifecycle();
+});
 document.addEventListener('visibilitychange', () => {
+  pageVisible = !document.hidden;
+  syncAudioLifecycle();
   if (document.hidden) {
     game.save();
     syncScore();

@@ -99,7 +99,6 @@ export interface BoardResult {
   termsRequired: boolean;
   unavailable?: boolean;
 }
-
 /** Fetch the real worldwide board: top 10 + the caller's neighborhood. */
 export async function fetchBoardRemote(apiUrl: string, name: string): Promise<BoardResult | null> {
   try {
@@ -129,11 +128,4 @@ export async function fetchBoardRemote(apiUrl: string, name: string): Promise<Bo
       : [];
     return { entries, blocked, termsRequired: false };
   } catch { return null; }
-}
-
-/** Ranked worldwide list with the player's row inserted and highlighted. */
-export function getWorldList(playerTaps: number, playerName = 'YOU'): LbEntry[] {
-  // Never fabricate competitors. Until the authenticated backend responds,
-  // show only the local player as preview data.
-  return [{ rank: 1, name: playerName, taps: Math.floor(playerTaps), you: true }];
 }

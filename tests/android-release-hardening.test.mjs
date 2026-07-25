@@ -16,9 +16,11 @@ test('Android release variants require explicit versions and reject Google sampl
 
 test('Play Games is auto-discovered once and splash resources cover Android 12+', () => {
   const activity = read('android/app/src/main/java/com/nosiah/discipline/MainActivity.java');
+  const gradle = read('android/app/build.gradle');
   const styles = read('android/app/src/main/res/values/styles.xml');
   assert.doesNotMatch(activity, /registerPlugin\s*\(\s*CapacitorGameConnectPlugin/);
   assert.doesNotMatch(activity, /import com\.openforge\.capacitorgameconnect/);
+  assert.match(gradle, /debug\s*\{[\s\S]*game_services_project_id", releasePlayGamesAppId/);
   assert.match(activity, /SplashScreen\.installSplashScreen\(this\)/);
   assert.match(styles, /windowSplashScreenBackground/);
   assert.match(styles, /windowSplashScreenAnimatedIcon">@mipmap\/ic_launcher<\/item>/);

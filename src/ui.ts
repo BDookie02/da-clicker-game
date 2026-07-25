@@ -1,7 +1,7 @@
 import { BOOSTERS, COSMETICS, CREW, LAB, UPGRADES, type BoosterDef } from './config';
 import { fmt, PRESTIGE_STEP, type Game } from './state';
 import { music, sfx } from './audio';
-import { fetchBoardRemote, getWorldList, type BoardResult, type LeaderboardProvider } from './leaderboard';
+import { fetchBoardRemote, type BoardResult, type LeaderboardProvider } from './leaderboard';
 import { API_URL } from './config';
 import { RENAME_COST, validateUsername, type UsernameService } from './username';
 import type { AccountService } from './account';
@@ -50,6 +50,8 @@ export class UI {
   onGarage?: (open: boolean) => void;
   onViewSettings?: (fov: number, sensitivity: number, reducedMotion: boolean) => void;
   onResetView?: () => void;
+  /** The play screen owns the complete physical-tap effects and bookkeeping. */
+  onQuickBuyTap?: () => void;
 
   constructor(private game: Game, private onCosmeticsChanged: () => void) {
     this.root = document.getElementById('app')!;
@@ -122,7 +124,11 @@ export class UI {
     document.getElementById('quick-buy')!.addEventListener('click', (ev) => {
       ev.stopPropagation();
       const best = this.game.cheapestAffordable();
-      if (!best) return;
+      // This is still a physical player press: award exactly one ordinary tap
+      // before carrying out the same purchase the button advertised.
+      if (this.onQuickBuyTap) this.onQuickBuyTap();
+      else this.game.tap();
+      if (!best) { this.refresh(); return; }
       if (best.kind === 'upgrades' ? this.game.buyUpgrade(best.id) : this.game.buyCrew(best.id)) {
         sfx.buy();
         this.refresh();
@@ -447,6 +453,45 @@ export class UI {
       createButton.addEventListener('click', () => void submit(true));
       pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') void submit(false); });
       name.focus();
+    });
+  }
+
+  /** Explain the platform login only after the player asks for it, then hand
+   * off to the native Google Play Games / Game Center sign-in flow. */
+  private promptLeaderboardSignIn(): Promise<void> {
+    const provider = this.lb;
+    if (!provider || provider.platform === 'web') {
+      this.toast('Platform leaderboard sign-in is unavailable here.');
+      return Promise.resolve();
+    }
+    const platformName = provider.platform === 'gamecenter' ? 'Game Center' : 'Google Play Games';
+    return new Promise((resolve) => {
+      const overlay = el('div', 'ad-overlay leaderboard-signin-overlay');
+      overlay.innerHTML = `
+        <div class="ad-box name-box leaderboard-signin-box">
+          <div class="ad-label">${platformName.toUpperCase()} LOGIN</div>
+          <div class="name-copy">${platformName} connects this device to the official All-Time Taps board and submits your raw tap count. Your Discipline username and cloud save remain separate.</div>
+          <div class="name-status" aria-live="polite"></div>
+          <div class="name-actions"><button class="leaderboard-signin-cancel">CANCEL</button><button class="leaderboard-signin-confirm">SIGN IN</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const confirm = overlay.querySelector('.leaderboard-signin-confirm') as HTMLButtonElement;
+      const status = overlay.querySelector('.name-status') as HTMLElement;
+      const done = () => { overlay.remove(); resolve(); };
+      overlay.querySelector('.leaderboard-signin-cancel')!.addEventListener('click', done);
+      confirm.addEventListener('click', async () => {
+        confirm.disabled = true;
+        status.textContent = `Opening ${platformName}…`;
+        const signedIn = await provider.signIn();
+        if (!signedIn) {
+          confirm.disabled = false;
+          status.textContent = `${platformName} sign-in is unavailable. Check the connection and try again.`;
+          return;
+        }
+        await provider.submit(this.game.s.totalTaps);
+        done();
+        this.toast(`Signed in to ${platformName}.`, 'gold');
+      });
     });
   }
 
@@ -1066,6 +1111,10 @@ export class UI {
           'Offline progress is safe. Accept the current Terms to return to the public board.',
           'REVIEW', true, 'account'));
       }
+      rows.push(`<div class="ranks-controls${native ? '' : ' ranks-controls-single'}">
+        <button data-id="rename" data-kind="name">CHANGE USERNAME</button>
+        ${native ? '<button data-id="signin" data-kind="lb">LOGIN</button>' : ''}
+      </div>`);
       // Live worldwide data patches in when the authenticated fetch lands.
       if (!termsRequired && API_URL && g.s.username && this.openTab === 'ranks' && !this.remoteBoard
           && !this.remoteBoardLoading && Date.now() >= this.remoteBoardRetryAt) {
@@ -1085,15 +1134,14 @@ export class UI {
       }
       const list = this.remoteBoard?.unavailable
         ? []
-        : this.remoteBoard?.entries ?? getWorldList(g.s.totalTaps, g.s.username ?? 'YOU');
-      const yourRank = list.find(e => e.you)?.rank ?? Infinity;
-      // Subway-Surfers-style ranked list: top 10, a gap, then your neighborhood
-      const shown = list.filter(e => e.rank <= 10 || Math.abs(e.rank - yourRank) <= 2);
+        : this.remoteBoard?.entries ?? [];
+      const shown = [...list].sort((a, b) => a.rank - b.rank);
+      const leaderboardRows: string[] = [];
       let prev = 0;
       for (const e of shown) {
-        if (e.rank > prev + 1) rows.push(`<div class="lb-gap">···</div>`);
+        if (e.rank > prev + 1) leaderboardRows.push(`<div class="lb-gap">···</div>`);
         prev = e.rank;
-        rows.push(`<div class="lb-row${e.you ? ' lb-you' : ''}">
+        leaderboardRows.push(`<div class="lb-row${e.you ? ' lb-you' : ''}">
           <span class="lb-rank">${e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : '#' + e.rank}</span>
           <span class="lb-name">${e.you ? '⭐ ' : ''}${escapeHtml(e.name)}</span>
           <span class="lb-score">${fmt(e.taps)}</span>
@@ -1102,18 +1150,15 @@ export class UI {
             : ''}
         </div>`);
       }
+      rows.push(`<div class="lb-table" role="table" aria-label="Worldwide all-time taps leaderboard">
+        <div class="lb-head" role="row"><span>RANK</span><span>USERNAME</span><span>TAPS</span><span aria-hidden="true"></span></div>
+        ${leaderboardRows.join('')}
+      </div>`);
       if (this.remoteBoard?.blocked.length) {
         rows.push('<div class="lb-blocked-title">HIDDEN PLAYERS</div>');
         for (const blocked of this.remoteBoard.blocked) {
           rows.push(`<div class="lb-blocked-row"><span>${escapeHtml(blocked.name)}</span><button class="lb-action" data-community-action="unblock" data-player-ref="${escapeAttr(blocked.playerRef)}" data-player-name="${escapeAttr(blocked.name)}">UNHIDE</button></div>`);
         }
-      }
-      if (!API_URL) rows.push(row('rename', `Username: ${g.s.username ?? '—'}`,
-        `Change costs ${fmt(RENAME_COST)} Respect (one-of-a-kind, can't be stolen)`,
-        'CHANGE', g.s.respect >= RENAME_COST, 'name'));
-      if (native) {
-        rows.push(row('official', 'Official Board', 'Open the platform leaderboard', 'VIEW', true, 'lb'));
-        rows.push(row('signin', 'Account', 'Sign in to submit your taps worldwide', 'SIGN IN', true, 'lb'));
       }
     } else if (this.openTab === 'boosters') {
       rows.push(`<div class="panel-note">AdMob chooses the ad length. Finish it to receive the matching reward below; closing early or going offline gives no reward. Ads watched: ${g.s.adsWatched}</div>`);
@@ -1200,7 +1245,7 @@ export class UI {
     this.panel.querySelector('.g-show')?.addEventListener('click', () => {
       this.garageSheetOpen = true; this.panel!.classList.remove('collapsed'); this.refreshPanel();
     });
-    this.panel.querySelectorAll('.row button').forEach((btn) => {
+    this.panel.querySelectorAll('.row button, .ranks-controls button').forEach((btn) => {
       btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const id = (btn as HTMLElement).dataset.id!;
@@ -1312,13 +1357,8 @@ export class UI {
       sfx.buy();
       this.onCosmeticsChanged();
     } else if (kind === 'lb') {
-      if (!this.lb) return;
-      if (id === 'signin') {
-        const ok = await this.lb.signIn();
-        this.toast(ok ? 'Signed in — taps will sync worldwide.' : 'Sign-in unavailable here.', ok ? 'gold' : '');
-      } else {
-        await this.lb.show();
-      }
+      if (id !== 'signin') return;
+      await this.promptLeaderboardSignIn();
     } else if (kind === 'name') {
       this.close();
       await this.promptUsername(false);
