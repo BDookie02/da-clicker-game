@@ -34,10 +34,10 @@ const UPGRADE_LIMITS = Object.freeze({ focus: 1_000_000, grip: 1_000_000, wrist:
 const CREW_IDS = Object.freeze(['hypeman', 'backseat', 'camera', 'editor', 'coach', 'monk']);
 const LAB_COSTS = Object.freeze({ lab_grip: 120, lab_offline: 200, lab_boost: 300, lab_mental: 450 });
 const COSMETICS = Object.freeze({
-  orn_napkin: [50, 'ornament'], decal_ment: [75, 'decal'], decal_disc: [75, 'decal'],
+  orn_napkin: [50, 'ornament'],
   goop_gold: [200, 'goop'], goop_slime: [200, 'goop'], sky_sunset: [125, 'sky'], sky_vapor: [125, 'sky'],
-  horn_sad: [150, 'horn'], orn_cowboy: [175, 'ornament'], decal_aura: [125, 'decal'],
-  decal_engage: [125, 'decal'], goop_pink: [225, 'goop'], goop_blue: [225, 'goop'], goop_oil: [300, 'goop'],
+  horn_sad: [150, 'horn'], orn_cowboy: [175, 'ornament'],
+  goop_pink: [225, 'goop'], goop_blue: [225, 'goop'], goop_oil: [300, 'goop'],
   sky_storm: [150, 'sky'], sky_noir: [150, 'sky'], sky_toxic: [150, 'sky'], sky_mint: [150, 'sky'],
   orn_cone: [125, 'ornament'], orn_monk: [225, 'ornament'], horn_air: [175, 'horn'],
   dangle_dice: [90, 'dangler'], dangle_beads: [110, 'dangler'], dangle_yinyang: [140, 'dangler'],

@@ -18,22 +18,6 @@
       "value": "#e8e4d8"
     },
     {
-      "id": "decal_ment",
-      "name": "\"MENTALITY\" Decal",
-      "desc": "Top text for your windshield.",
-      "cost": 75,
-      "slot": "decal",
-      "value": "MENTALITY"
-    },
-    {
-      "id": "decal_disc",
-      "name": "\"discipline\" Decal",
-      "desc": "Bottom text. Lowercase. Powerful.",
-      "cost": 75,
-      "slot": "decal",
-      "value": "discipline"
-    },
-    {
       "id": "goop_gold",
       "name": "Golden Goop",
       "desc": "The finish of champions.",
@@ -80,30 +64,6 @@
       "cost": 175,
       "slot": "ornament",
       "value": "#7a4a9e"
-    },
-    {
-      "id": "decal_bottom",
-      "name": "\"bottom text\" Decal",
-      "desc": "The caption completes itself.",
-      "cost": 100,
-      "slot": "decal",
-      "value": "bottom text"
-    },
-    {
-      "id": "decal_aura",
-      "name": "\"AURA +1000\" Decal",
-      "desc": "Certified aura farming equipment.",
-      "cost": 125,
-      "slot": "decal",
-      "value": "AURA +1000"
-    },
-    {
-      "id": "decal_engage",
-      "name": "\"DO NOT ENGAGE\" Decal",
-      "desc": "They will engage anyway.",
-      "cost": 125,
-      "slot": "decal",
-      "value": "DO NOT ENGAGE"
     },
     {
       "id": "goop_pink",

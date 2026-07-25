@@ -345,8 +345,10 @@ export class Game {
           ? [...parsed.dashboardSlots.slice(0, 6), null, null, null, null, null, null].slice(0, 6)
           : [parsed.equippedCosmetics?.ornament ?? parsed.equippedCosmetics?.dash ?? null, null, null, null, null, null];
         loaded.dashboardSlots = loaded.dashboardSlots.map(id => id === 'dash_gd' ? null : id);
-        loaded.ownedCosmetics = loaded.ownedCosmetics.filter(id => id !== 'decal_bottom');
-        if (loaded.equippedCosmetics?.decal === 'bottom text') delete loaded.equippedCosmetics.decal;
+        loaded.ownedCosmetics = loaded.ownedCosmetics.filter(id => ![
+          'decal_ment', 'decal_disc', 'decal_bottom', 'decal_aura', 'decal_engage',
+        ].includes(id));
+        delete loaded.equippedCosmetics.decal;
         return loaded;
       }
     } catch { /* corrupted save -> start fresh */ }

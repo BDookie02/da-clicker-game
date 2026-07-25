@@ -10,8 +10,7 @@ mkdirSync(output, { recursive: true });
 
 const ids = [
   'dangle_beads', 'dangle_censored', 'dangle_dice', 'dangle_fire', 'dangle_goop',
-  'dangle_testing_coals', 'dangle_yinyang', 'decal_aura', 'decal_bottom', 'decal_disc',
-  'decal_engage', 'decal_ment', 'goop_blue', 'goop_gold', 'goop_oil', 'goop_pink',
+  'dangle_testing_coals', 'dangle_yinyang', 'goop_blue', 'goop_gold', 'goop_oil', 'goop_pink',
   'goop_slime', 'horn_air', 'horn_sad', 'orn_cone', 'orn_cowboy', 'orn_monk',
   'orn_napkin', 'roof_taxi', 'sky_mint', 'sky_noir', 'sky_storm', 'sky_sunset',
   'sky_toxic', 'sky_vapor',

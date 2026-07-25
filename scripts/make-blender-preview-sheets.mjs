@@ -13,7 +13,6 @@ const byId = new Map(manifest.items.map((item) => [item.id, item]));
 const groups = {
   physical: ['orn_napkin','horn_sad','orn_cowboy','orn_cone','orn_monk','horn_air','roof_taxi'],
   danglers: ['dangle_dice','dangle_beads','dangle_yinyang','dangle_fire','dangle_censored','dangle_testing_coals','dangle_goop'],
-  decals: ['decal_ment','decal_disc','decal_bottom','decal_aura','decal_engage'],
   goop_finishes: ['goop_gold','goop_slime','goop_pink','goop_blue','goop_oil'],
   environments: ['sky_sunset','sky_vapor','sky_storm','sky_noir','sky_toxic','sky_mint'],
 };

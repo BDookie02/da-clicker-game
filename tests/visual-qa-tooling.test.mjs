@@ -51,7 +51,7 @@ test('cosmetics parser discovers every current market visual and supported conte
   const cosmetics = readCosmeticsFromConfig(join(root, 'src', 'config.ts'));
   assert.equal(
     cosmetics.length,
-    29,
+    25,
     'COSMETICS changed; review and update the exact-emulator audit contract',
   );
   assert.equal(new Set(cosmetics.map(({ id }) => id)).size, cosmetics.length);
@@ -63,7 +63,6 @@ test('cosmetics parser discovers every current market visual and supported conte
     ),
     {
       dangler: 7,
-      decal: 4,
       goop: 5,
       horn: 2,
       ornament: 4,

@@ -891,7 +891,11 @@ export class UI {
 
   private refreshPanel() {
     if (!this.panel || !this.openTab) return;
-    const previousScroll = this.panel.querySelector<HTMLElement>('.panel-scroll')?.scrollTop ?? 0;
+    const previousScroller = this.panel.querySelector<HTMLElement>('.panel-scroll');
+    const previousScroll = previousScroller?.scrollTop ?? 0;
+    const wasAtBottom = Boolean(previousScroller
+      && previousScroller.scrollHeight > previousScroller.clientHeight
+      && previousScroller.scrollHeight - previousScroller.clientHeight - previousScroll <= 2);
     this.lastPanelRenderAt = performance.now();
     const g = this.game;
     const rows: string[] = [`<div class="panel-head"><span class="panel-title">${this.openTab.toUpperCase()}</span><button class="x">✕</button></div>`];
@@ -1073,8 +1077,16 @@ export class UI {
       : `${rows[0]}<div class="panel-viewport"><div class="panel-scroll">${rows.slice(1).join('')}</div></div>`;
     this.pruneTextCaches();
     const nextScroll = this.panel.querySelector<HTMLElement>('.panel-scroll');
-    if (nextScroll) nextScroll.scrollTop = previousScroll;
+    const restoreScroll = () => {
+      if (!nextScroll?.isConnected) return;
+      nextScroll.scrollTop = wasAtBottom ? nextScroll.scrollHeight : previousScroll;
+    };
+    restoreScroll();
     this.scheduleTextFit(this.panel);
+    // Text fitting completes across two animation frames. Restore once more
+    // after that layout settles so a market action cannot pull a player away
+    // from the bottom of the rebuilt list.
+    requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(restoreScroll)));
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
     if (this.openTab === 'settings') this.bindSettings();
     // garage-specific controls

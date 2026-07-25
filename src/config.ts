@@ -204,16 +204,12 @@ export interface CosmeticDef {
 // Aesthetic unlockables (the reskinned "milestone rewards") — all meme-themed.
 export const COSMETICS: CosmeticDef[] = [
   { id: 'orn_napkin',   name: 'First Napkin Ornament', desc: 'A napkin on the dash. Historic.',              cost: 50,  slot: 'ornament', value: '#e8e4d8' },
-  { id: 'decal_ment',   name: '"MENTALITY" Decal',     desc: 'Top text for your windshield.',                cost: 75,  slot: 'decal',    value: 'MENTALITY' },
-  { id: 'decal_disc',   name: '"discipline" Decal',    desc: 'Bottom text. Lowercase. Powerful.',            cost: 75,  slot: 'decal',    value: 'discipline' },
   { id: 'goop_gold',    name: 'Golden Goop',           desc: 'The finish of champions.',                     cost: 200,  slot: 'goop',     value: '#e6c84a' },
   { id: 'goop_slime',   name: 'Toxic Goop',            desc: 'Radioactive green. Unsanitary.',               cost: 200,  slot: 'goop',     value: '#7be04a' },
   { id: 'sky_sunset',   name: 'Golden Hour',           desc: 'Cinematic sunset for your edits.',             cost: 125,  slot: 'sky',      value: 'sunset' },
   { id: 'sky_vapor',    name: 'Vaporwave Night',       desc: 'A E S T H E T I C intersection.',              cost: 125,  slot: 'sky',      value: 'vapor' },
   { id: 'horn_sad',     name: 'Sad Violin Horn',       desc: 'Plays when opponents finish.',                 cost: 150,  slot: 'horn',     value: 'violin' },
   { id: 'orn_cowboy',   name: 'Dashboard Hula Girl',   desc: 'A grass-skirt dashboard dancer with island style.', cost: 175, slot: 'ornament', value: '#7a4a9e' },
-  { id: 'decal_aura',   name: '"AURA +1000" Decal',    desc: 'Certified aura farming equipment.',            cost: 125,  slot: 'decal',    value: 'AURA +1000' },
-  { id: 'decal_engage', name: '"DO NOT ENGAGE" Decal', desc: 'They will engage anyway.',                     cost: 125,  slot: 'decal',    value: 'DO NOT ENGAGE' },
   { id: 'goop_pink',    name: 'Bubblegum Goop',        desc: 'Smells like victory and strawberries.',        cost: 225,  slot: 'goop',     value: '#f0a0c8' },
   { id: 'goop_blue',    name: 'Wiper Fluid Goop',      desc: 'Technically car-related.',                     cost: 225,  slot: 'goop',     value: '#4a9ae0' },
   { id: 'goop_oil',     name: 'Crude Oil Goop',        desc: 'Environmentally devastating finish.',          cost: 300,  slot: 'goop',     value: '#1c1c22' },
