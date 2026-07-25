@@ -10,6 +10,8 @@ import { initPurchases, removePendingPurchase } from './purchases';
 import { FirstLaunchTutorial } from './tutorial';
 import { AccountService } from './account';
 import { installCompatibilityFallbacks } from './compat';
+import { Capacitor } from '@capacitor/core';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 installCompatibilityFallbacks();
 
@@ -87,8 +89,25 @@ scene.setViewSettings(
   Number(localStorage.getItem('discipline-look-sensitivity') ?? '1.5'),
   localStorage.getItem('discipline-reduced-motion') === '1',
 );
-const vibrate = (pattern: number | number[]) => {
-  if (localStorage.getItem('discipline-vibration') !== '0') navigator.vibrate?.(pattern);
+type HapticCue = 'tap' | 'milestone' | 'explosion';
+const haptic = (cue: HapticCue, tier = 0) => {
+  if (localStorage.getItem('discipline-vibration') === '0') return;
+  const fallback = () => navigator.vibrate?.(
+    cue === 'tap' ? 8
+      : cue === 'milestone' ? (tier >= 3 ? [45, 25, 75] : 25 + tier * 15)
+        : [70, 35, 130, 45, 220],
+  );
+  if (!Capacitor.isNativePlatform()) {
+    fallback();
+    return;
+  }
+  const nativeEffect = cue === 'tap'
+    ? Haptics.impact({ style: ImpactStyle.Light })
+    : cue === 'milestone'
+      ? Haptics.impact({ style: tier >= 3 ? ImpactStyle.Heavy : ImpactStyle.Medium })
+      : Haptics.impact({ style: ImpactStyle.Heavy })
+        .then(() => Haptics.vibrate({ duration: 450 }));
+  void nativeEffect.catch(fallback);
 };
 
 // Worldwide leaderboards: Game Center / Play Games on device, local bests on web
@@ -236,13 +255,13 @@ game.on((e) => {
     // Input-driven update means speed changes never wait for tapping to pause.
     if (!transitioning) music.updateBattle(game.s.opponentIndex, game.progress01);
     scene.tapPulse();
-    vibrate(8);
+    haptic('tap');
   } else if (e.type === 'milestone') {
     scene.setShakeAmp(game.shakeAmp);
     scene.setDriverAnger(e.tier); // face gets angrier and redder each tier
     ui.toast(e.label, 'warn');
     sfx.milestone();
-    vibrate(e.tier >= 3 ? [45, 25, 75] : 25 + e.tier * 15);
+    haptic('milestone', e.tier);
   } else if (e.type === 'defeated') {
     transitioning = true;
     music.stopForDefeat();
@@ -254,7 +273,7 @@ game.on((e) => {
     scene.setShakeAmp(0);
     sfx.goop();
     sfx.horn(game.equipped('horn'));
-    vibrate([70, 35, 130, 45, 220]);
+    haptic('explosion');
     ui.toast(`${beatenName} is FINISHED.`, 'gold');
     setTimeout(() => {
       sfx.green();

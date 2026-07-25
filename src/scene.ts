@@ -632,6 +632,13 @@ export class GameScene {
         ? -1.42244334
         : 1.92914931;
       content.rotation.set(-Math.PI / 2, driverFacingYaw, 0, 'YXZ');
+      // Roll only the visible body, not its mirror cord. Reverse the world
+      // roll between the two opposing cockpits so it reads as a 90° clockwise
+      // turn from the driver's view in both Tap FPV and Garage FPV.
+      content.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        -Math.PI / 2 * mirror.userData.facing,
+      ));
     }
     // These authored faces point along +z; turn their readable face toward the
     // driver-facing mirror anchor without changing the geometry.
