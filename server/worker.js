@@ -134,45 +134,69 @@ export function isAdmobCallbackTester(params, now = Date.now()) {
     && Number.isFinite(timestamp)
     && Math.abs(now - timestamp) <= 5 * 60 * 1000;
 }
+export function parseAdmobSignedQuery(rawQuery) {
+  if (typeof rawQuery !== 'string') return null;
+  const signatureMarker = '&signature=';
+  const keyMarker = '&key_id=';
+  const signatureAt = rawQuery.indexOf(signatureMarker);
+  if (signatureAt < 1 || signatureAt !== rawQuery.lastIndexOf(signatureMarker)) return null;
+  const keyAt = rawQuery.indexOf(keyMarker, signatureAt + signatureMarker.length);
+  if (keyAt < 0 || keyAt !== rawQuery.lastIndexOf(keyMarker)) return null;
+  const signature = rawQuery.slice(signatureAt + signatureMarker.length, keyAt);
+  const keyId = rawQuery.slice(keyAt + keyMarker.length);
+  if (!signature || !/^\d+$/.test(keyId)) return null;
+
+  const params = new URLSearchParams(rawQuery);
+  const requiredOnce = [
+    'ad_network', 'ad_unit', 'custom_data', 'reward_amount', 'reward_item',
+    'timestamp', 'transaction_id', 'user_id', 'signature', 'key_id',
+  ];
+  if (requiredOnce.some((name) => params.getAll(name).length !== 1)) return null;
+  return {
+    signedContent: rawQuery.slice(0, signatureAt),
+    signature,
+    keyId,
+    params,
+  };
+}
 async function verifyAdmobCallback(req, env) {
-  const url = new URL(req.url);
-  const rawQuery = url.search.slice(1);
-  const signatureAt = rawQuery.indexOf('&signature=');
-  if (signatureAt < 1) return json({ ok: false, error: 'invalid_admob_callback' }, 400);
-  const signedContent = rawQuery.slice(0, signatureAt);
-  const params = url.searchParams;
-  const signature = params.get('signature');
-  const key = (await admobKeys()).get(String(params.get('key_id')));
-  if (!key || !signature) {
+  const queryAt = req.url.indexOf('?');
+  const parsed = parseAdmobSignedQuery(queryAt < 0 ? '' : req.url.slice(queryAt + 1));
+  if (!parsed) return json({ ok: false, error: 'invalid_admob_callback' }, 400);
+  const { signedContent, signature, keyId, params } = parsed;
+  const key = (await admobKeys()).get(keyId);
+  if (!key) {
     console.warn('admob_callback_rejected', 'missing_signature_or_key');
     return json({ ok: false, error: 'invalid_admob_signature' }, 400);
   }
-  const signatureBytes = base64urlBytes(signature);
-  const signedBytes = new TextEncoder().encode(signedContent);
-  let decodedSignedBytes;
+  let valid = false;
   try {
-    decodedSignedBytes = new TextEncoder().encode(decodeURIComponent(signedContent));
+    const signatureBytes = base64urlBytes(signature);
+    const rawSignatureBytes = derEcdsaToRaw(signatureBytes);
+    const signedBytes = new TextEncoder().encode(signedContent);
+    const decodedSignedBytes = new TextEncoder().encode(decodeURIComponent(signedContent));
+    // Google documents its AdMob signature as ASN.1 DER. Standards-compliant
+    // Web Crypto uses IEEE-P1363, while some Workers runtime versions accept
+    // DER directly, so support both representations without changing content.
+    const validDer = await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' }, key, signatureBytes, signedBytes,
+    );
+    const validRaw = validDer || await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' }, key, rawSignatureBytes, signedBytes,
+    );
+    // Google's reference verifier uses java.net.URI#getQuery(), which
+    // percent-decodes custom_data before verification. Check that documented
+    // representation too; the signature still authenticates every parameter.
+    const validDecodedDer = validRaw || await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' }, key, signatureBytes, decodedSignedBytes,
+    );
+    valid = validDecodedDer || await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' }, key, rawSignatureBytes, decodedSignedBytes,
+    );
   } catch {
-    return json({ ok: false, error: 'invalid_admob_callback' }, 400);
+    console.warn('admob_callback_rejected', 'malformed_signature');
+    return json({ ok: false, error: 'invalid_admob_signature' }, 400);
   }
-  // Google documents its AdMob signature as ASN.1 DER. Standards-compliant
-  // Web Crypto uses IEEE-P1363, while some Workers runtime versions accept
-  // DER directly, so support both representations without changing content.
-  const validDer = await crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' }, key, signatureBytes, signedBytes,
-  );
-  const validRaw = validDer || await crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' }, key, derEcdsaToRaw(signatureBytes), signedBytes,
-  );
-  // Google's reference verifier uses java.net.URI#getQuery(), which
-  // percent-decodes custom_data before verification. Check that documented
-  // representation too; the signature still authenticates every parameter.
-  const validDecodedDer = validRaw || await crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' }, key, signatureBytes, decodedSignedBytes,
-  );
-  const valid = validDecodedDer || await crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' }, key, derEcdsaToRaw(signatureBytes), decodedSignedBytes,
-  );
   if (!valid) {
     console.warn('admob_callback_rejected', 'invalid_signature');
     return json({ ok: false, error: 'invalid_admob_signature' }, 400);

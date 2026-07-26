@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { isAdmobCallbackTester } from '../server/worker.js';
+import worker, { isAdmobCallbackTester, parseAdmobSignedQuery } from '../server/worker.js';
 
 class MockStatement {
   constructor(db, sql) {
@@ -86,6 +86,28 @@ test('recognizes only the exact fresh AdMob console callback tester payload', ()
   assert.equal(isAdmobCallbackTester(params, now), false);
   params.set('transaction_id', '123456789');
   assert.equal(isAdmobCallbackTester(params, now + 5 * 60 * 1000 + 1), false);
+});
+
+test('requires signed AdMob fields followed by terminal signature and key ID', () => {
+  const signed = [
+    'ad_network=5450213213286189855',
+    'ad_unit=1234567890',
+    'custom_data=%7B%22v%22%3A1%7D',
+    'reward_amount=1',
+    'reward_item=completed_ad',
+    'timestamp=1785046013637',
+    'transaction_id=123456789',
+    'user_id=test-user',
+  ].join('&');
+  const query = `${signed}&signature=MEUCIQ&key_id=3335741209`;
+  const parsed = parseAdmobSignedQuery(query);
+  assert.ok(parsed);
+  assert.equal(parsed.signedContent, signed);
+  assert.equal(parsed.signature, 'MEUCIQ');
+  assert.equal(parsed.keyId, '3335741209');
+  assert.equal(parseAdmobSignedQuery(`${query}&custom_data=unsigned`), null);
+  assert.equal(parseAdmobSignedQuery(`${signed}&user_id=duplicate&signature=MEUCIQ&key_id=3335741209`), null);
+  assert.equal(parseAdmobSignedQuery(`${signed}&key_id=3335741209&signature=MEUCIQ`), null);
 });
 
 test('reward status is authenticated and scoped to exact account, nonce, and kind', async () => {
