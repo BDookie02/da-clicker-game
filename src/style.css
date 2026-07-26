@@ -450,10 +450,10 @@ body[data-text-tier="3"] .panel {
 body[data-text-tier="2"] .hud-top .stat.small,
 body[data-text-tier="3"] .hud-top .stat.small { flex: 1; }
 /* Dense six-cell HUD grows in smaller steps so every value remains readable. */
-body[data-text-tier="2"] .hud-top .stat .k { font-size: 12.5px !important; }
-body[data-text-tier="2"] .hud-top .stat .v { font-size: 20.5px !important; }
-body[data-text-tier="3"] .hud-top .stat .k { font-size: 13px !important; }
-body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px !important; }
+body[data-text-tier="2"] .hud-top .stat .k { font-size: 12.5px; }
+body[data-text-tier="2"] .hud-top .stat .v { font-size: 20.5px; }
+body[data-text-tier="3"] .hud-top .stat .k { font-size: 13px; }
+body[data-text-tier="3"] .hud-top .stat .v { font-size: 21px; }
 .panel-head .x { flex: 0 0 auto; padding: 2px 10px; margin-left: 8px; }
 
 /* garage: shorter bottom sheet so the 3D car shows above it */
@@ -868,30 +868,14 @@ body.in-garage .boost-pill { display: none; }
 .account-delete-box .delete-final:disabled { opacity: .42; }
 .panel button[data-id="delete"] { border-color: #a63c48; color: #ff9a9a; }
 
-/* Large accessibility text needs real horizontal room, not squeezed labels.
-   On phone-width portrait displays, split the HUD into a readable 4+2 grid. */
+/* The six HUD cells are one permanent control row. On phone-width portrait
+   displays, compact their gutters and let the label fitter shrink only text. */
 @media (max-width: 480px) and (orientation: portrait) {
-  body[data-text-tier="2"], body[data-text-tier="3"] { --hud-clearance: 150px; }
-  body[data-text-tier="2"] .hud-top,
-  body[data-text-tier="3"] .hud-top {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    align-items: stretch;
+  .hud-top {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.5fr) minmax(0, .8fr) minmax(0, .8fr) auto auto;
+    gap: 3px;
   }
-  body[data-text-tier="2"] .hud-top .stat,
-  body[data-text-tier="3"] .hud-top .stat { min-width: 0; }
-  .hud-top > .stat:nth-child(1),
-  .hud-top > .stat:nth-child(2) { grid-column: span 2; }
-  body[data-text-tier="2"] .hud-top .stat.eye,
-  body[data-text-tier="3"] .hud-top .stat.eye { grid-column: 3; }
-  body[data-text-tier="2"] .hud-top .stat.settings,
-  body[data-text-tier="3"] .hud-top .stat.settings { grid-column: 4; }
-  body[data-text-tier="2"] .opp-bar,
-  body[data-text-tier="3"] .opp-bar { top: var(--hud-bottom); }
-  body[data-text-tier="2"] .boost-pill,
-  body[data-text-tier="3"] .boost-pill { top: 102px; }
-  body[data-text-tier="2"] .toasts,
-  body[data-text-tier="3"] .toasts { top: 190px; }
+  .hud-top > .stat { min-width: 0; padding-inline: 2px; }
 }
 
 /* Very short landscape screens reserve less decorative headroom so the
@@ -930,18 +914,10 @@ body.in-garage .boost-pill { display: none; }
   .tutorial-next { margin-top: 5px; padding: 5px; }
 }
 
-/* On the narrowest portrait devices, keep SKIP beside the centered eye-contact
-   focus instead of letting the enlarged accessibility label cross into it. */
+/* On the narrowest portrait devices, keep SKIP clear of the HUD and tutorial
+   copy without changing the permanent one-row control layout. */
 @media (orientation: portrait) and (max-width: 320px) {
-  body { --hud-clearance: 150px; }
-  .hud-top {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    align-items: stretch;
-  }
-  .hud-top > .stat:nth-child(1),
-  .hud-top > .stat:nth-child(2) { grid-column: span 2; }
-  .hud-top .stat.eye { grid-column: 3; }
-  .hud-top .stat.settings { grid-column: 4; }
+  .hud-top .stat .k { letter-spacing: .5px; }
   .tutorial-skip {
     left: auto;
     right: 8px;
@@ -968,8 +944,6 @@ body.in-garage .boost-pill { display: none; }
 }
 
 @media (max-width: 260px) {
-  .hud-top { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .hud-top > .stat { grid-column: span 1 !important; }
   .menu-row { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }
 

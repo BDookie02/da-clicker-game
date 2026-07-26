@@ -19,6 +19,18 @@ const PSX_H = 240; // vertical native res; width follows aspect
 // also prevents the asymmetric/inverted feel the old tuning created.
 const LOOK_RADIANS_PER_CSS_PIXEL = 0.0018;
 
+const PLAYER_CAR_DEF: OpponentDef = {
+  id: 'player',
+  name: 'player',
+  blurb: '',
+  tapsRequired: 0,
+  carColor: 0x8e2222,
+  carAccent: 0x26262e,
+  carStyle: 'sedan',
+  mentalityReward: 0,
+  spriteSlot: '',
+};
+
 const snapChunk = /* glsl */ `
   vec4 snapToGrid(vec4 clip) {
     vec2 grid = uPsxRes / 2.0;
@@ -156,6 +168,7 @@ export class GameScene {
   private onDriveDone: (() => void) | null = null;
   private time = 0;
   private cockpit!: THREE.Group;
+  private playerCarTemplate!: THREE.Group;
   private gaze: 'opponent' | 'road' = 'opponent';
   private freeLook = false;
   private lookYaw = 0;
@@ -266,6 +279,10 @@ export class GameScene {
     this.skyMesh = this.buildSky();
     this.scene.add(this.skyMesh);
     this.buildWorld();
+    // Tap and Garage clone this one pristine sedan. Object3D transforms remain
+    // independent, while every car mesh shares the exact geometry and material
+    // references, so the player's car cannot diverge between the two views.
+    this.playerCarTemplate = this.buildCar(PLAYER_CAR_DEF);
     this.buildCockpit();
 
     // Adjacent lane, truly ABREAST: both front bumpers even at the stop
@@ -763,8 +780,8 @@ export class GameScene {
         this.cockpit,
         item,
         dashboard,
-        dashboard.xs[5],
-        style === 'airhorn' ? Math.PI : 0,
+        dashboard.xs[0],
+        Math.PI,
       );
       this.hornVisual = item;
     }).catch((error) => console.error(`Unable to load cosmetic ${asset}`, error));
@@ -939,43 +956,13 @@ export class GameScene {
   }
 
   private buildCockpit() {
-    const g = new THREE.Group();
-    // hood
-    const hood = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.18, 1.6), this.mat(0x8e2222));
-    hood.position.set(0, 0.72, -1.6);
-    hood.rotation.x = 0.06;
-    g.add(hood);
-    // dash
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.3, 0.5), this.mat(0x1c1c22));
-    dash.position.set(0, 0.82, -0.75);
-    dash.name = 'dashboard-surface';
-    g.add(dash);
-    // A-pillars at the windshield line — clear of the left side-window view
-    for (const side of [-1, 1]) {
-      const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.3, 0.09), this.mat(0x14141a));
-      pillar.position.set(side * 1.18, 1.45, -1.35);
-      pillar.rotation.x = -0.35;
-      g.add(pillar);
-    }
-    // Steering assembly in front of the driver's (left) seat. Keep the rim
-    // completely above and behind the dash: the old wheel was centered inside
-    // the dashboard and tilted almost flat, which turned it into huge clipped
-    // slabs in the low-resolution first-person render.
-    const steering = this.makeSteeringWheel();
-    const steeringMat = this.mat(0x26262e);
-    steering.position.set(-0.45, 1.10, -0.68);
-    steering.rotation.x = -0.28;
-    g.add(steering);
-
-    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.34, 8), steeringMat);
-    column.position.set(-0.45, 1.02, -0.55);
-    column.rotation.x = Math.PI / 2 - 0.28;
-    g.add(column);
-    // Centered at the top of the windshield, above the driver's sight line.
-    this.cockpitMirror = this.addRearViewMirror(g, 0, 1.63, -1.08);
-    g.name = 'cockpit';
-    // fixed to the CAR, not the head — the dash stays put when you look left
-    g.position.set(2, 0, 0);
+    const g = this.playerCarTemplate.clone(true);
+    g.name = 'player-car';
+    // buildCar faces +z. Turn the complete sedan toward the street's -z travel
+    // direction and align its left driver's seat with the existing Tap camera.
+    g.rotation.y = Math.PI;
+    g.position.set(2, 0, -0.30);
+    this.cockpitMirror = this.addRearViewMirror(g, 0, 1.37, 0.36, -1, 1);
     this.cockpit = g;
     this.scene.add(g);
   }
@@ -1106,7 +1093,7 @@ export class GameScene {
         if (version !== this.dashboardLoadVersion || this.ornament !== rail) return;
         // Dashboard top is y=.97; normalized items originate at their exact
         // lowest vertex, so every prop physically meets the six-slot rail.
-        item.position.set(dashboard.xs[i], dashboard.y, dashboard.z);
+        item.position.set(dashboard.xs[5 - i], dashboard.y, dashboard.z);
         rail.add(item);
       }).catch((error) => console.error(`Unable to load cosmetic ${asset.id}`, error));
     });
@@ -1796,15 +1783,10 @@ export class GameScene {
     room.add(goopTop);
     room.position.copy(GO);
     this.scene.add(room);
-    // the player's car (matches the red street cockpit)
-    this.garageCar = this.buildCar({
-      id: 'player', name: 'player', blurb: '', tapsRequired: 0,
-      carColor: 0x8e2222, carAccent: 0x26262e, carStyle: 'sedan',
-      mentalityReward: 0, spriteSlot: '',
-    });
-    // Main Tap FPV is the left seat; Garage FPV and its wheel must match.
-    const garageWheel = this.garageCar.getObjectByName('steering-wheel');
-    if (garageWheel) garageWheel.position.x = 0.45;
+    // This is a transform-only clone of the exact sedan used in Tap mode:
+    // meshes share the template's geometry and materials in both views.
+    this.garageCar = this.playerCarTemplate.clone(true);
+    this.garageCar.name = 'player-car';
     // interior kit so first-person has a real driver's seat view
     // Sedan roof spans z=-.66..46 at y=1.46. Keep the mirror just behind that
     // front edge, with its scaled stem meeting the roof and no exterior overlap.

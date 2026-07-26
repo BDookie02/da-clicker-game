@@ -12,7 +12,10 @@ const root = resolve(import.meta.dirname, '..');
 const out = join(root, 'devlog', screenFilter ? 'responsive-ui-targeted' : 'responsive-ui');
 mkdirSync(out, { recursive: true });
 const pages = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-const page = pages.find(candidate => candidate.type === 'page' && /^https?:/.test(candidate.url)) ?? pages.find(candidate => candidate.type === 'page');
+const page = pages.find(candidate => candidate.type === 'page'
+  && (candidate.title === 'DISCIPLINE.' || /^https:\/\/localhost\/?$/.test(candidate.url)))
+  ?? pages.find(candidate => candidate.type === 'page' && /^https?:/.test(candidate.url))
+  ?? pages.find(candidate => candidate.type === 'page');
 if (!page) throw new Error(`No inspectable game page found on CDP port ${port}`);
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
@@ -230,13 +233,34 @@ for (const viewport of viewports) {
           const tops=buttons.map(button=>Math.round(button.getBoundingClientRect().top));
           return Math.max(...tops)-Math.min(...tops)>2;
         }).map(label);
+        const hud=document.querySelector('.hud-top');
+        const hudStats=hud&&visible(hud)?[...hud.querySelectorAll(':scope > .stat')].filter(visible):[];
+        const hudTops=hudStats.map(stat=>stat.getBoundingClientRect().top);
+        const hudSingleRow=hudStats.length<2
+          || Math.max(...hudTops)-Math.min(...hudTops)<=2;
+        const hudInsideViewport=hudStats.every(stat=>{
+          const box=stat.getBoundingClientRect();
+          return box.left>=-1&&box.top>=-1&&box.right<=innerWidth+1&&box.bottom<=innerHeight+1;
+        });
+        const hudNoCellOverlap=hudStats.every((first,index)=>hudStats.slice(index+1).every(second=>{
+          const a=first.getBoundingClientRect(),b=second.getBoundingClientRect();
+          return Math.min(a.right,b.right)-Math.max(a.left,b.left)<=2
+            || Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)<=2;
+        }));
+        const hudUtilitiesReachable=['#btn-eye','#btn-settings'].every(selector=>{
+          const control=document.querySelector(selector);
+          return !control||!visible(control)||topVisible(control);
+        });
         const panel=document.querySelector('.panel');
         const panelBg=panel?getComputedStyle(panel).backgroundColor:'';
         const panelParts=panelBg.split(',');
         const panelAlpha=panelBg.startsWith('rgba')?Number(panelParts[panelParts.length-1].replace(')','')):1;
         const panelOpaque=!panel||panelAlpha>=.995;
         const garageState=expectedScreen!=='garage'||(document.body.classList.contains('in-garage')&&getComputedStyle(document.querySelector('.hud-top')).display==='none');
-        return { outside, overlaps, occluded, clipped, buttonLabels, multiRowGroups, panelOpaque, garageState, viewport:[innerWidth,innerHeight], panel:panel?.getBoundingClientRect().toJSON?.()||null };
+        return { outside, overlaps, occluded, clipped, buttonLabels, multiRowGroups,
+          hudSingleRow, hudInsideViewport, hudNoCellOverlap, hudUtilitiesReachable,
+          panelOpaque, garageState, viewport:[innerWidth,innerHeight],
+          panel:panel?.getBoundingClientRect().toJSON?.()||null };
       })()`);
       if (captureEnabled && visualViewports.has(viewport.name)) {
         const shot = await call('Page.captureScreenshot', { format: 'png', fromSurface: true });
@@ -433,7 +457,8 @@ const failures = reports.filter(r => {
   ));
   return r.outside.length || r.overlaps.length || r.occluded.length
     || r.clipped.length || r.buttonLabels.length || r.multiRowGroups.length
-    || !r.panelOpaque || !r.garageState || stickyFailed;
+    || !r.hudSingleRow || !r.hudInsideViewport || !r.hudNoCellOverlap
+    || !r.hudUtilitiesReachable || !r.panelOpaque || !r.garageState || stickyFailed;
 });
 writeFileSync(join(out, 'failures.json'), JSON.stringify(failures, null, 2));
 

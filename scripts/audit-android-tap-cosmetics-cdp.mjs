@@ -274,13 +274,18 @@ try {
           objectBounds = bounds(object, cockpit);
           const cellWidth = dashboardBounds
             ? (dashboardBounds.max.x - dashboardBounds.min.x) / 6 : 0;
+          // Tap and Garage now use transform-only clones of the same complete
+          // sedan and therefore share one local dashboard basis. Slot labels
+          // are driver-screen left-to-right, the reverse of local car X.
+          const physicalSlotIndex = 5 - slotIndex;
           const cellMin = dashboardBounds
-            ? dashboardBounds.min.x + cellWidth * slotIndex : NaN;
+            ? dashboardBounds.min.x + cellWidth * physicalSlotIndex : NaN;
           const cellMax = cellMin + cellWidth;
           const expectedX = cellMin + cellWidth / 2;
           evidence.slot = {
             index: slotIndex,
             number: slotIndex + 1,
+            physicalIndex: physicalSlotIndex,
             cellMin,
             cellMax,
             expectedX,
@@ -400,7 +405,9 @@ try {
             && objectBounds.max.x <= dashboardBounds.max.x + 0.002
             && objectBounds.min.z >= dashboardBounds.min.z - 0.002
             && objectBounds.max.z <= dashboardBounds.max.z + 0.002);
-          const expectedRotation = item.id === 'horn_air' ? Math.PI : 0;
+          // Both player views use the exact same local car orientation, so
+          // both dashboard horn models share the Garage-approved facing.
+          const expectedRotation = Math.PI;
           const rotationDelta = object
             ? Math.atan2(
               Math.sin(object.rotation.y - expectedRotation),

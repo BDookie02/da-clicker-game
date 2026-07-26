@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import sharp from 'sharp';
 import {
   numericOption,
   option,
@@ -135,6 +136,34 @@ test('cosmetic placement aligns visible bodies behind shared geometry anchors', 
   );
 });
 
+test('Tap and Garage use the same complete player-car template', () => {
+  assert.match(sceneSource, /const PLAYER_CAR_DEF: OpponentDef/);
+  assert.match(sceneSource, /this\.playerCarTemplate = this\.buildCar\(PLAYER_CAR_DEF\)/);
+  assert.match(sceneSource, /const g = this\.playerCarTemplate\.clone\(true\)/);
+  assert.match(sceneSource, /this\.garageCar = this\.playerCarTemplate\.clone\(true\)/);
+  assert.match(sceneSource, /g\.rotation\.y = Math\.PI/);
+  assert.match(sceneSource, /g\.position\.set\(2, 0, -0\.30\)/);
+});
+
+test('Granny portrait has a transparent matte without losing its foreground', async () => {
+  const { data, info } = await sharp(join(root, 'public', 'sprites', 'char_granny.png'))
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  assert.equal(info.width, 56);
+  assert.equal(info.height, 56);
+  const alphas = Array.from({ length: info.width * info.height }, (_, index) => data[index * 4 + 3]);
+  const corners = [
+    alphas[0],
+    alphas[info.width - 1],
+    alphas[(info.height - 1) * info.width],
+    alphas[alphas.length - 1],
+  ];
+  assert.deepEqual(corners, [0, 0, 0, 0]);
+  assert.ok(alphas.filter(alpha => alpha === 0).length >= 1400);
+  assert.ok(alphas.filter(alpha => alpha >= 128).length >= 1000);
+});
+
 test('responsive UGC audit covers every tier, target viewport, and moderation surface', () => {
   assert.match(ugcScript, /numericOption\('--port', 9222\)/);
   assert.match(ugcScript, /for \(let tier = 0; tier < 4; tier\+\+\)/);
@@ -224,6 +253,8 @@ test('responsive audit restores state and proves persistent controls at scroll b
   assert.match(responsiveScript, /stationary/);
   assert.match(responsiveScript, /hitTestVisible/);
   assert.match(responsiveScript, /hideCaption/);
+  assert.match(responsiveScript, /hudSingleRow/);
+  assert.match(responsiveScript, /hudUtilitiesReachable/);
   assert.match(responsiveScript, /sheet-\$\{screen\}-bottom\.png/);
 });
 
@@ -259,6 +290,7 @@ test('Tap FPV cosmetic audit independently proves every shared cockpit placement
   assert.match(tapCosmeticsScript, /Math\.atan2\(delta\.x, -delta\.z\)/);
   assert.match(tapCosmeticsScript, /Math\.asin/);
   assert.match(tapCosmeticsScript, /exactSixSlotCenter/);
+  assert.match(tapCosmeticsScript, /physicalSlotIndex = 5 - slotIndex/);
   assert.match(tapCosmeticsScript, /surfaceFlush/);
   assert.match(tapCosmeticsScript, /containedInAssignedCell/);
   assert.match(tapCosmeticsScript, /centeredUnderMirror/);
