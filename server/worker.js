@@ -53,6 +53,11 @@ const FINAL_REVERSED_FINANCIAL_STATUSES = Object.freeze([
   'canceled', 'partially_refunded', 'refunded', 'revoked',
 ]);
 let admobKeyCache = { expiresAt: 0, keys: new Map() };
+const ADMOB_CALLBACK_TESTER = Object.freeze({
+  adNetwork: '5450213213286189855',
+  adUnit: '1234567890',
+  transactionId: '123456789',
+});
 
 const bytesToHex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 async function accountToken(accountId) {
@@ -119,6 +124,16 @@ async function admobKeys() {
   admobKeyCache = { expiresAt: Date.now() + 23 * 60 * 60 * 1000, keys };
   return keys;
 }
+export function isAdmobCallbackTester(params, now = Date.now()) {
+  const timestamp = Number(params.get('timestamp'));
+  return params.get('ad_network') === ADMOB_CALLBACK_TESTER.adNetwork
+    && params.get('ad_unit') === ADMOB_CALLBACK_TESTER.adUnit
+    && params.get('transaction_id') === ADMOB_CALLBACK_TESTER.transactionId
+    && Number(params.get('reward_amount')) === ADMOB_REWARD_AMOUNT
+    && params.get('reward_item') === ADMOB_REWARD_ITEM
+    && Number.isFinite(timestamp)
+    && Math.abs(now - timestamp) <= 5 * 60 * 1000;
+}
 async function verifyAdmobCallback(req, env) {
   const url = new URL(req.url);
   const rawQuery = url.search.slice(1);
@@ -128,14 +143,49 @@ async function verifyAdmobCallback(req, env) {
   const params = url.searchParams;
   const signature = params.get('signature');
   const key = (await admobKeys()).get(String(params.get('key_id')));
-  if (!key || !signature) return json({ ok: false, error: 'invalid_admob_signature' }, 400);
-  const valid = await crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' }, key,
-    derEcdsaToRaw(base64urlBytes(signature)), new TextEncoder().encode(signedContent),
+  if (!key || !signature) {
+    console.warn('admob_callback_rejected', 'missing_signature_or_key');
+    return json({ ok: false, error: 'invalid_admob_signature' }, 400);
+  }
+  const signatureBytes = base64urlBytes(signature);
+  const signedBytes = new TextEncoder().encode(signedContent);
+  let decodedSignedBytes;
+  try {
+    decodedSignedBytes = new TextEncoder().encode(decodeURIComponent(signedContent));
+  } catch {
+    return json({ ok: false, error: 'invalid_admob_callback' }, 400);
+  }
+  // Google documents its AdMob signature as ASN.1 DER. Standards-compliant
+  // Web Crypto uses IEEE-P1363, while some Workers runtime versions accept
+  // DER directly, so support both representations without changing content.
+  const validDer = await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' }, key, signatureBytes, signedBytes,
   );
-  if (!valid) return json({ ok: false, error: 'invalid_admob_signature' }, 400);
+  const validRaw = validDer || await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' }, key, derEcdsaToRaw(signatureBytes), signedBytes,
+  );
+  // Google's reference verifier uses java.net.URI#getQuery(), which
+  // percent-decodes custom_data before verification. Check that documented
+  // representation too; the signature still authenticates every parameter.
+  const validDecodedDer = validRaw || await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' }, key, signatureBytes, decodedSignedBytes,
+  );
+  const valid = validDecodedDer || await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' }, key, derEcdsaToRaw(signatureBytes), decodedSignedBytes,
+  );
+  if (!valid) {
+    console.warn('admob_callback_rejected', 'invalid_signature');
+    return json({ ok: false, error: 'invalid_admob_signature' }, 400);
+  }
 
-  const expectedAdUnit = String(env.ADMOB_REWARDED_AD_UNIT_ID || '2001670311');
+  // AdMob's console verifier signs fixed sentinel IDs rather than the real ad
+  // unit. Acknowledge that exact, fresh payload only after signature
+  // verification, and never write it to the reward ledger.
+  if (isAdmobCallbackTester(params)) return json({ ok: true, test: true });
+  if (params.get('ad_unit') === ADMOB_CALLBACK_TESTER.adUnit)
+    console.warn('admob_callback_rejected', 'invalid_callback_tester_payload');
+
+  const expectedAdUnit = String(env.ADMOB_REWARDED_AD_UNIT_ID || '6776690128');
   const timestamp = Number(params.get('timestamp'));
   const transactionId = params.get('transaction_id') || '';
   if (params.get('ad_unit') !== expectedAdUnit

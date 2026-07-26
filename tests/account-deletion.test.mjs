@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import worker from '../server/worker.js';
+import worker, { isAdmobCallbackTester } from '../server/worker.js';
 
 class MockStatement {
   constructor(db, sql) {
@@ -69,6 +69,23 @@ test('rejects unsigned AdMob reward callbacks before touching account data', asy
   const response = await worker.fetch(new Request('https://api.example/v1/admob/reward?transaction_id=fake'), {});
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { ok: false, error: 'invalid_admob_callback' });
+});
+
+test('recognizes only the exact fresh AdMob console callback tester payload', () => {
+  const now = Date.now();
+  const params = new URLSearchParams({
+    ad_network: '5450213213286189855',
+    ad_unit: '1234567890',
+    transaction_id: '123456789',
+    reward_amount: '1',
+    reward_item: 'completed_ad',
+    timestamp: String(now),
+  });
+  assert.equal(isAdmobCallbackTester(params, now), true);
+  params.set('transaction_id', 'real-transaction');
+  assert.equal(isAdmobCallbackTester(params, now), false);
+  params.set('transaction_id', '123456789');
+  assert.equal(isAdmobCallbackTester(params, now + 5 * 60 * 1000 + 1), false);
 });
 
 test('reward status is authenticated and scoped to exact account, nonce, and kind', async () => {

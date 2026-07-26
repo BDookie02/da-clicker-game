@@ -6,7 +6,7 @@ compatibility_date = "2026-07-01"
 crons = ["17 * * * *"]
 
 [vars]
-ADMOB_REWARDED_AD_UNIT_ID = "2001670311"
+ADMOB_REWARDED_AD_UNIT_ID = "6776690128"
 LEGAL_PUBLISHER_NAME = "Nomogames"
 LEGAL_CONTACT_EMAIL = "co.nosiah@gmail.com"
 LEGAL_EFFECTIVE_DATE = "2026-07-26"
