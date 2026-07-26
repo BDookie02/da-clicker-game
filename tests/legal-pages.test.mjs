@@ -87,3 +87,9 @@ test('privacy and web deletion disclose local saves that cannot be erased remote
   assert.match(privacyPage(completeLegalEnv), /cannot remotely erase a local save/i);
   assert.match(deletionPage(completeLegalEnv), /cannot remotely erase a local save/i);
 });
+
+test('privacy copy discloses rewarded and interstitial Google Mobile Ads', () => {
+  const privacy = privacyPage(completeLegalEnv);
+  assert.match(privacy, /provide rewarded and interstitial ads/);
+  assert.match(privacy, /Rewarded and interstitial advertising uses Google Mobile Ads/);
+});

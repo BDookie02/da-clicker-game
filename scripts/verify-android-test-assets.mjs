@@ -92,12 +92,17 @@ if (fs.existsSync(androidWebRoot)) {
     : [];
   const source = scripts.map((name) => fs.readFileSync(path.join(assetsDir, name), 'utf8')).join('\n');
   const expectedTestRewardedId = 'ca-app-pub-3940256099942544/5224354917';
+  const expectedTestInterstitialId = 'ca-app-pub-3940256099942544/1033173712';
   const allowedTestIds = new Set([
     expectedTestRewardedId,
+    expectedTestInterstitialId,
     'ca-app-pub-3940256099942544/1712485313',
+    'ca-app-pub-3940256099942544/4411468910',
   ]);
   if (!source.includes(expectedTestRewardedId))
     failures.push('Android test payload does not contain Google’s official Android rewarded-ad test unit');
+  if (!source.includes(expectedTestInterstitialId))
+    failures.push('Android test payload does not contain Google’s official Android interstitial-ad test unit');
   const embeddedAdMobIds = new Set(source.match(/ca-app-pub-\d+[~/]\d+/g) || []);
   for (const embeddedId of embeddedAdMobIds) {
     if (!allowedTestIds.has(embeddedId))
@@ -113,8 +118,13 @@ if (fs.existsSync(androidWebRoot)) {
     ...parseEnv(path.join(root, '.env.production.local')),
   };
   const productionRewardedId = productionEnv.VITE_ADMOB_ANDROID_REWARDED_ID || '';
+  const productionInterstitialId = productionEnv.VITE_ADMOB_ANDROID_INTERSTITIAL_ID || '';
   if (productionRewardedId && productionRewardedId !== expectedTestRewardedId && source.includes(productionRewardedId))
     failures.push('Android test payload unexpectedly contains the production rewarded-ad unit ID');
+  if (productionInterstitialId
+      && productionInterstitialId !== expectedTestInterstitialId
+      && source.includes(productionInterstitialId))
+    failures.push('Android test payload unexpectedly contains the production interstitial-ad unit ID');
 
   const index = path.join(androidWebRoot, 'index.html');
   if (!fs.existsSync(index) || !fs.readFileSync(index, 'utf8').includes('DISCIPLINE.'))
@@ -131,6 +141,7 @@ const report = {
   visualAudit: true,
   admobTesting: true,
   rewardedAdUnitId: 'ca-app-pub-3940256099942544/5224354917',
+  interstitialAdUnitId: 'ca-app-pub-3940256099942544/1033173712',
   treeSha256: androidDigest.sha256,
   fileCount: androidDigest.fileCount,
 };

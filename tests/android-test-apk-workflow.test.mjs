@@ -19,8 +19,10 @@ test('package scripts preserve native patching and route test APKs through the e
 test('test payload verifier requires byte identity, visual handles, and only Google test ads', () => {
   const verifier = read('scripts/verify-android-test-assets.mjs');
   const testEnv = read('.env.test');
+  const exampleEnv = read('.env.example');
   assert.match(testEnv, /^VITE_VISUAL_AUDIT=true$/m);
   assert.match(testEnv, /^VITE_ADMOB_TESTING=true$/m);
+  assert.match(exampleEnv, /^VITE_ADMOB_ANDROID_INTERSTITIAL_ID=$/m);
   assert.match(verifier, /treeDigest\(distRoot\)/);
   assert.match(verifier, /treeDigest\(androidWebRoot, capacitorBridgePlaceholders\)/);
   assert.match(verifier, /Capacitor bridge placeholder must remain empty/);
@@ -28,6 +30,9 @@ test('test payload verifier requires byte identity, visual handles, and only Goo
   for (const handle of ['__game', '__scene', '__ui'])
     assert.match(verifier, new RegExp(handle));
   assert.match(verifier, /ca-app-pub-3940256099942544\/5224354917/);
+  assert.match(verifier, /ca-app-pub-3940256099942544\/1033173712/);
+  assert.match(verifier, /does not contain Google.*official Android interstitial-ad test unit/);
+  assert.match(verifier, /unexpectedly contains the production interstitial-ad unit ID/);
   assert.match(verifier, /contains a non-test AdMob ID/);
 });
 

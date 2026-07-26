@@ -5,7 +5,7 @@ import { music, sfx } from './audio';
 import { API_URL, BOOSTERS, getDistrict } from './config';
 import { initLeaderboards, type LeaderboardProvider } from './leaderboard';
 import { LocalUsernameService } from './username';
-import { initAds } from './ads';
+import { initAds, type AdProvider } from './ads';
 import { initPurchases, removePendingPurchase } from './purchases';
 import { FirstLaunchTutorial } from './tutorial';
 import { AccountService } from './account';
@@ -118,7 +118,12 @@ initLeaderboards().then((lb) => {
   ui.lb = lb;
   void lb.submit(game.s.totalTaps);
 });
-initAds().then((ads) => { ui.ads = ads; }); // AdMob on device, placeholder on web
+let adProvider: AdProvider | null = null;
+initAds().then((ads) => {
+  adProvider = ads;
+  ui.ads = ads;
+  void ads.preloadInterstitial();
+}); // AdMob on device, placeholder on web
 
 // Discipline accounts—not Play Games/Game Center—own identity and cloud data.
 // The local name provider exists only for offline web development.
@@ -276,9 +281,12 @@ game.on((e) => {
     sfx.horn(game.equipped('horn'));
     haptic('explosion');
     ui.toast(`${beatenName} is FINISHED.`, 'gold');
-    setTimeout(() => {
+    setTimeout(async () => {
       sfx.green();
       ui.toast('GREEN LIGHT. You are free to go.', 'green');
+      // Interstitials are due on foreground play time, but only open here:
+      // the real, input-frozen break between two opponents.
+      await maybeShowDueInterstitial();
       scene.driveToNext(game.opponent, () => {
         scene.setOpponent(game.opponent);
         scene.setShakeAmp(game.shakeAmp);
@@ -320,6 +328,61 @@ const tutorial = new FirstLaunchTutorial({
   eyeContactPoint: () => scene.eyeContactScreenPoint(),
   finish: () => { game.s.tutorialComplete = true; game.save(); },
 });
+const INTERSTITIAL_INTERVAL_MS = 376_800; // 6.28 minutes of active play
+let interstitialElapsedMs = 0;
+let interstitialDue = false;
+let gameplayEngaged = false;
+let lastInterstitialClock = performance.now();
+
+const resetInterstitialClock = () => { lastInterstitialClock = performance.now(); };
+const hasBlockingAdSurface = () =>
+  Boolean(document.querySelector('.ad-overlay, .ad-loading, .tutorial-layer, .title-screen'));
+const canCountInterstitialTime = () =>
+  gameplayEngaged
+  && nativeAppActive
+  && pageVisible
+  && windowFocused
+  && !transitioning
+  && !tutorial.isActive
+  && !ui.isPanelOpen
+  && !hasBlockingAdSurface()
+  && !adProvider?.isFullscreenAdActive();
+const canShowDueInterstitial = () =>
+  interstitialDue
+  && gameplayEngaged
+  && nativeAppActive
+  && pageVisible
+  && windowFocused
+  && !tutorial.isActive
+  && !ui.isPanelOpen
+  && !hasBlockingAdSurface()
+  && Boolean(adProvider)
+  && !adProvider!.isFullscreenAdActive();
+
+async function maybeShowDueInterstitial(): Promise<boolean> {
+  if (!canShowDueInterstitial()) return false;
+  const shown = await adProvider!.showInterstitial();
+  if (shown) {
+    interstitialDue = false;
+    interstitialElapsedMs = 0;
+    resetInterstitialClock();
+    return true;
+  }
+  // No fill or a still-loading slot never stalls the transition. Keep the ad
+  // due, refill off-path, and try again at the next opponent break.
+  void adProvider!.preloadInterstitial();
+  return false;
+}
+
+if (visualAudit) {
+  (window as any).__interstitial = {
+    forceDue: () => {
+      interstitialDue = true;
+      void adProvider?.preloadInterstitial();
+    },
+    status: () => ({ due: interstitialDue, elapsedMs: interstitialElapsedMs }),
+  };
+}
 const registerPhysicalTap = () => {
   if (transitioning) return;
   sfx.preloadYelp();
@@ -331,6 +394,8 @@ ui.onQuickBuyTap = registerPhysicalTap;
 if (visualAudit) (window as any).__tutorial = tutorial;
 title.addEventListener('pointerdown', (ev) => {
   ev.stopPropagation();
+  gameplayEngaged = true;
+  resetInterstitialClock();
   title.classList.add('gone');
   setTimeout(() => title.remove(), 450);
   sfx.preloadYelp();
@@ -505,6 +570,15 @@ menuVolumeObserver.observe(document.body, { childList: true, subtree: true });
 let last = performance.now();
 let uiAccum = 0;
 function frame(now: number) {
+  const interstitialDeltaMs = Math.max(0, now - lastInterstitialClock);
+  lastInterstitialClock = now;
+  if (!interstitialDue && canCountInterstitialTime()) {
+    interstitialElapsedMs += interstitialDeltaMs;
+    if (interstitialElapsedMs >= INTERSTITIAL_INTERVAL_MS) {
+      interstitialDue = true;
+      void adProvider?.preloadInterstitial();
+    }
+  }
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
     // A second idle defeat while the green-light drive is still staging would
@@ -541,30 +615,37 @@ const syncAudioLifecycle = () => {
 syncAudioLifecycle();
 void App.getState().then(({ isActive }) => {
   nativeAppActive = isActive;
+  resetInterstitialClock();
   syncAudioLifecycle();
 });
 void App.addListener('appStateChange', ({ isActive }) => {
   nativeAppActive = isActive;
+  resetInterstitialClock();
   syncAudioLifecycle();
 });
 window.addEventListener('blur', () => {
   windowFocused = false;
+  resetInterstitialClock();
   syncAudioLifecycle();
 });
 window.addEventListener('focus', () => {
   windowFocused = true;
+  resetInterstitialClock();
   syncAudioLifecycle();
 });
 window.addEventListener('pagehide', () => {
   pageVisible = false;
+  resetInterstitialClock();
   syncAudioLifecycle();
 });
 window.addEventListener('pageshow', () => {
   pageVisible = !document.hidden;
+  resetInterstitialClock();
   syncAudioLifecycle();
 });
 document.addEventListener('visibilitychange', () => {
   pageVisible = !document.hidden;
+  resetInterstitialClock();
   syncAudioLifecycle();
   if (document.hidden) {
     game.save();

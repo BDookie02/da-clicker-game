@@ -42,10 +42,21 @@ const env = {
   ...process.env,
 };
 const rewardedId = String(env.VITE_ADMOB_ANDROID_REWARDED_ID || '');
+const interstitialId = String(env.VITE_ADMOB_ANDROID_INTERSTITIAL_ID || '');
 if (!/^ca-app-pub-\d+\/\d+$/.test(rewardedId))
   failures.push('Production rewarded-ad ID is missing or invalid');
 if (rewardedId.startsWith(`ca-app-pub-${GOOGLE_SAMPLE_ADMOB_PUBLISHER}/`))
   failures.push('Production payload is configured with Google’s sample rewarded-ad ID');
+if (!/^ca-app-pub-\d+\/\d+$/.test(interstitialId))
+  failures.push('Production interstitial-ad ID is missing or invalid');
+if (interstitialId.startsWith(`ca-app-pub-${GOOGLE_SAMPLE_ADMOB_PUBLISHER}/`))
+  failures.push('Production payload is configured with Google’s sample interstitial-ad ID');
+const rewardedPublisher = rewardedId.match(/^ca-app-pub-(\d+)\//)?.[1] || '';
+const interstitialPublisher = interstitialId.match(/^ca-app-pub-(\d+)\//)?.[1] || '';
+if (rewardedPublisher && interstitialPublisher && rewardedPublisher !== interstitialPublisher)
+  failures.push('Production rewarded and interstitial ad IDs must belong to the same publisher account');
+if (rewardedId && rewardedId === interstitialId)
+  failures.push('Production rewarded and interstitial ads must use separate unit IDs');
 
 if (!fs.existsSync(indexFile)) {
   failures.push('Capacitor Android web assets are missing; run cap sync android');
@@ -68,6 +79,8 @@ if (!fs.existsSync(indexFile)) {
       || !source.includes(rewardedId)
       || !source.includes('/v1/admob/reward/status'))
     failures.push('Android release payload does not contain the configured production rewarded-ad integration');
+  if (!interstitialId || !source.includes(interstitialId))
+    failures.push('Android release payload does not contain the configured production interstitial-ad integration');
   if (!env.VITE_API_URL || !source.includes(env.VITE_API_URL.replace(/\/$/, '')))
     failures.push('Android release payload does not contain the configured production account API');
   if (!env.VITE_PLAY_GAMES_LEADERBOARD_ID || !source.includes(env.VITE_PLAY_GAMES_LEADERBOARD_ID))

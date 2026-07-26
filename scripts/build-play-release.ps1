@@ -1,3 +1,7 @@
+param(
+    [switch]$ClosedAlphaWithGoogleDemoAds
+)
+
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -6,6 +10,8 @@ $androidNamespace = 'http://schemas.android.com/apk/res/android'
 $bundletoolVersion = '1.18.3'
 $bundletoolSha256 = 'A099CFA1543F55593BC2ED16A70A7C67FE54B1747BB7301F37FDFD6D91028E29'
 $gradleDistributionSha256 = 'ED1A8D686605FD7C23BDF62C7FC7ADD1C5B23B2BBC3721E661934EF4A4911D7C'
+$closedAlphaRewardedId = 'ca-app-pub-3940256099942544/5224354917'
+$closedAlphaInterstitialId = 'ca-app-pub-3940256099942544/1033173712'
 
 if (-not (Test-Path -LiteralPath $javaHome)) {
     throw "Android Studio Java runtime was not found at $javaHome"
@@ -127,6 +133,68 @@ function Assert-Equal {
     }
 }
 
+function Get-ProductionWebValues {
+    $values = @{}
+    foreach ($relativePath in @('.env', '.env.local', '.env.production', '.env.production.local')) {
+        $fromFile = Read-KeyValueFile (Join-Path $root $relativePath)
+        foreach ($key in $fromFile.Keys) { $values[$key] = $fromFile[$key] }
+    }
+    foreach ($name in @(
+        'VITE_API_URL',
+        'VITE_PLAY_GAMES_LEADERBOARD_ID',
+        'VITE_GAME_CENTER_LEADERBOARD_ID'
+    )) {
+        $fromProcess = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($null -ne $fromProcess) { $values[$name] = $fromProcess }
+    }
+    return $values
+}
+
+function Invoke-ClosedAlphaWebBuild {
+    $productionValues = Get-ProductionWebValues
+    $apiUrl = [string]$productionValues.VITE_API_URL
+    $leaderboardId = [string]$productionValues.VITE_PLAY_GAMES_LEADERBOARD_ID
+    if ($apiUrl -notmatch '^https://') {
+        throw 'Closed Alpha requires the real HTTPS VITE_API_URL from the production configuration.'
+    }
+    if ($leaderboardId -notmatch '^CgkI') {
+        throw 'Closed Alpha requires the real VITE_PLAY_GAMES_LEADERBOARD_ID from the production configuration.'
+    }
+
+    $overrides = [ordered]@{
+        VITE_VISUAL_AUDIT = 'false'
+        VITE_ADMOB_TESTING = 'true'
+        VITE_ADMOB_ANDROID_REWARDED_ID = $null
+        VITE_ADMOB_ANDROID_INTERSTITIAL_ID = $null
+        VITE_ADMOB_IOS_REWARDED_ID = $null
+        VITE_ADMOB_IOS_INTERSTITIAL_ID = $null
+        VITE_API_URL = $apiUrl
+        VITE_PLAY_GAMES_LEADERBOARD_ID = $leaderboardId
+        VITE_GAME_CENTER_LEADERBOARD_ID = [string]$productionValues.VITE_GAME_CENTER_LEADERBOARD_ID
+    }
+    $previous = @{}
+    foreach ($name in $overrides.Keys) {
+        $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
+    try {
+        foreach ($name in $overrides.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $overrides[$name], 'Process')
+        }
+        Invoke-NativeChecked 'Closed Alpha web build failed.' {
+            cmd /c "npx tsc --noEmit && npx vite build --mode closed-alpha"
+        }
+        Invoke-NativeChecked 'Capacitor Android sync failed.' { cmd /c npx cap sync android }
+        Invoke-NativeChecked 'Closed Alpha Android web payload verification failed.' {
+            node scripts/verify-android-closed-alpha-assets.mjs
+        }
+    }
+    finally {
+        foreach ($name in $overrides.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
+        }
+    }
+}
+
 Push-Location $root
 try {
     $initialSource = Get-SourceSnapshot
@@ -144,9 +212,16 @@ try {
     Invoke-NativeChecked 'Tests failed.' { cmd /c npm test }
     Invoke-NativeChecked 'Dependency security audit failed.' { cmd /c npm audit --audit-level=high }
     Invoke-NativeChecked 'Release bundle preflight failed.' { cmd /c npm run release:bundle-check }
-    Invoke-NativeChecked 'Production web build failed.' { cmd /c npm run build }
-    Invoke-NativeChecked 'Capacitor Android sync failed.' { cmd /c npx cap sync android }
-    Invoke-NativeChecked 'Packaged Android web payload verification failed.' { node scripts/verify-android-release-assets.mjs }
+    if ($ClosedAlphaWithGoogleDemoAds) {
+        Invoke-ClosedAlphaWebBuild
+    }
+    else {
+        Invoke-NativeChecked 'Production web build failed.' { cmd /c npm run build }
+        Invoke-NativeChecked 'Capacitor Android sync failed.' { cmd /c npx cap sync android }
+        Invoke-NativeChecked 'Packaged Android web payload verification failed.' {
+            node scripts/verify-android-release-assets.mjs
+        }
+    }
 
     $env:JAVA_HOME = $javaHome
     Push-Location (Join-Path $root 'android')
@@ -216,11 +291,25 @@ try {
     }
 
     $aabHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $aab).Hash
+    $artifactRelativePath = 'android/app/build/outputs/bundle/release/app-release.aab'
+    if ($ClosedAlphaWithGoogleDemoAds) {
+        $artifactDir = Join-Path $root 'artifacts\android-closed-alpha'
+        New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+        $safeVersionName = $releaseProperties.VERSION_NAME -replace '[^0-9A-Za-z._-]', '-'
+        $artifactName = "DISCIPLINE-closed-alpha-v$($safeVersionName)-code$($releaseProperties.VERSION_CODE)-$($aabHash.Substring(0, 12)).aab"
+        $closedAlphaAab = Join-Path $artifactDir $artifactName
+        Copy-Item -LiteralPath $aab -Destination $closedAlphaAab -Force
+        Remove-Item -LiteralPath $aab -Force
+        $aab = $closedAlphaAab
+        $artifactRelativePath = "artifacts/android-closed-alpha/$artifactName"
+    }
     $provenance = [ordered]@{
         schemaVersion = 1
         builtAtUtc = [DateTime]::UtcNow.ToString('o')
+        distribution = if ($ClosedAlphaWithGoogleDemoAds) { 'play-closed-alpha' } else { 'play-production' }
+        productionPromotable = (-not $ClosedAlphaWithGoogleDemoAds)
         artifact = [ordered]@{
-            path = 'android/app/build/outputs/bundle/release/app-release.aab'
+            path = $artifactRelativePath
             sha256 = $aabHash
         }
         source = [ordered]@{
@@ -247,6 +336,16 @@ try {
             admobAppId = $metadata['com.google.android.gms.ads.APPLICATION_ID']
             playGamesAppId = $releaseProperties.PLAY_GAMES_APP_ID
         }
+        ads = if ($ClosedAlphaWithGoogleDemoAds) {
+            [ordered]@{
+                testing = $true
+                rewardedAdUnitId = $closedAlphaRewardedId
+                interstitialAdUnitId = $closedAlphaInterstitialId
+            }
+        }
+        else {
+            [ordered]@{ testing = $false }
+        }
         tools = [ordered]@{
             node = (& node --version).Trim()
             npm = (& npm --version).Trim()
@@ -255,10 +354,20 @@ try {
             gradleDistributionSha256 = $gradleDistributionSha256
         }
     }
-    $provenanceFile = Join-Path (Split-Path -Parent $aab) 'app-release.provenance.json'
+    $provenanceFile = if ($ClosedAlphaWithGoogleDemoAds) {
+        "$aab.provenance.json"
+    }
+    else {
+        Join-Path (Split-Path -Parent $aab) 'app-release.provenance.json'
+    }
     $provenance | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $provenanceFile -Encoding UTF8
 
-    Write-Output "PLAY AAB READY (not uploaded): $aab"
+    if ($ClosedAlphaWithGoogleDemoAds) {
+        Write-Output "PLAY CLOSED-ALPHA AAB READY WITH GOOGLE DEMO ADS (not uploaded; never promote to production): $aab"
+    }
+    else {
+        Write-Output "PLAY AAB READY (not uploaded): $aab"
+    }
     Write-Output "SHA-256: $aabHash"
     Write-Output "Source HEAD: $($initialSource.identity.head)"
     Write-Output "Source dirty: $($initialSource.identity.dirty)"

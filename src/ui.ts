@@ -8,7 +8,15 @@ import type { AccountService } from './account';
 
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
-import { AD_CONFIG, PlaceholderAdProvider, showAdPrivacyOptions, withMusicPause, type AdProvider, type AdResult } from './ads';
+import {
+  AD_CONFIG,
+  PlaceholderAdProvider,
+  showAdPrivacyOptions,
+  withMusicPause,
+  type AdProvider,
+  type AdResult,
+  type AdVerification,
+} from './ads';
 import { AD_M_REWARD, M_PACKS, UnavailablePurchases, queuePendingPurchase, removePendingPurchase, type PurchaseProvider } from './purchases';
 
 function el(tag: string, cls?: string, html?: string): HTMLElement {
@@ -36,6 +44,7 @@ export class UI {
   private garageSheetOpen = true; // cosmetics list visible over the 3D garage
   private adInProgress = false;
   private lastAdStartedAt = 0;
+  private pendingRewardLoad: { verification: AdVerification; accountId: string } | null = null;
   private fadeTransition = 0;
   private readonly scaledFontElements = new Set<HTMLElement>();
   private readonly fittedFontSizes = new Map<HTMLElement, string>();
@@ -296,9 +305,17 @@ export class UI {
         this.toast('Log in before watching a reward ad so the reward can be verified.');
         return null;
       }
+      if (productionNative && this.pendingRewardLoad
+          && (this.pendingRewardLoad.accountId !== this.account!.accountId
+            || this.pendingRewardLoad.verification.kind !== rewardKind)) {
+        this.account!.clearPendingAdReward(this.pendingRewardLoad.verification.nonce);
+        this.pendingRewardLoad = null;
+      }
       const verification = productionNative
-        ? await this.account!.adVerification(rewardKind)
+        ? this.pendingRewardLoad?.verification ?? await this.account!.adVerification(rewardKind)
         : undefined;
+      if (verification && !this.pendingRewardLoad)
+        this.pendingRewardLoad = { verification, accountId: this.account!.accountId };
       // Persist the intent before opening the native ad. If Android terminates
       // the WebView after AdMob's reward event but before dismissal, the signed
       // SSV callback can still restore this exact account-scoped reward.
@@ -309,13 +326,24 @@ export class UI {
         result = await this.ads.show(fallbackSeconds, verification);
       } catch (error) {
         if (verification) this.account!.clearPendingAdReward(verification.nonce);
+        if (this.pendingRewardLoad?.verification.nonce === verification?.nonce)
+          this.pendingRewardLoad = null;
         throw error;
       }
       if (!productionNative || !verification) return result;
       if (!result.rewarded) {
-        this.account!.clearPendingAdReward(verification.nonce);
+        // A 15-second UI deadline does not cancel the native load. Keep the
+        // exact SSV nonce so a late-loaded ad opens on the next allowed press
+        // instead of being stranded behind a newly generated nonce.
+        if (!result.retryable) {
+          this.account!.clearPendingAdReward(verification.nonce);
+          if (this.pendingRewardLoad?.verification.nonce === verification.nonce)
+            this.pendingRewardLoad = null;
+        }
         return result;
       }
+      if (this.pendingRewardLoad?.verification.nonce === verification.nonce)
+        this.pendingRewardLoad = null;
       // The SDK event proves that the client watched an ad; the signed AdMob
       // callback proves which authenticated account and nonce earned it.
       this.account!.queueAdReward(verification, result.watchedSeconds, bonusRespect);

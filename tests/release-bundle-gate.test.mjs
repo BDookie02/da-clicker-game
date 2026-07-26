@@ -8,6 +8,7 @@ test('bundle preflight skips only store-listing art and keeps every runtime gate
   const packageJson = JSON.parse(read('package.json'));
   const build = read('scripts/build-play-release.ps1');
   const releaseCheck = read('scripts/release-check.mjs');
+  const releaseVerifier = read('scripts/verify-android-release-assets.mjs');
   const { selectReleaseFailures } = await import('../scripts/release-check-policy.mjs');
 
   assert.equal(packageJson.scripts['release:check'], 'node scripts/release-check.mjs');
@@ -33,6 +34,7 @@ test('bundle preflight skips only store-listing art and keeps every runtime gate
   for (const mandatoryRuntimeGate of [
     'VITE_API_URL',
     'VITE_ADMOB_ANDROID_REWARDED_ID',
+    'VITE_ADMOB_ANDROID_INTERSTITIAL_ID',
     'VITE_PLAY_GAMES_LEADERBOARD_ID',
     'VITE_ADMOB_TESTING',
     'ADMOB_ANDROID_APP_ID',
@@ -45,4 +47,10 @@ test('bundle preflight skips only store-listing art and keeps every runtime gate
   ]) {
     assert.match(releaseCheck, new RegExp(mandatoryRuntimeGate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
+  assert.match(releaseCheck, /isGoogleSampleAdMobId\(values\.VITE_ADMOB_ANDROID_INTERSTITIAL_ID\)/);
+  assert.match(releaseCheck, /appPublisher && interstitialPublisher && appPublisher !== interstitialPublisher/);
+  assert.match(releaseCheck, /Rewarded and interstitial ads must use separate AdMob unit IDs/);
+  assert.match(releaseVerifier, /VITE_ADMOB_ANDROID_INTERSTITIAL_ID/);
+  assert.match(releaseVerifier, /source\.includes\(interstitialId\)/);
+  assert.match(releaseVerifier, /rewardedPublisher !== interstitialPublisher/);
 });

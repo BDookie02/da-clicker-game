@@ -1,7 +1,12 @@
 const expression = process.argv.slice(2).join(' ');
 if (!expression) throw new Error('Usage: node scripts/android-cdp-eval.mjs <expression>');
 const pages = await fetch('http://127.0.0.1:9222/json').then((r) => r.json());
-const page = pages.find((candidate) => candidate.type === 'page');
+// Google Mobile Ads creates additional debuggable WebViews. Always target the
+// game page first so an ad preload cannot redirect QA expressions into a
+// creative's about:blank document.
+const page = pages.find((candidate) =>
+  candidate.type === 'page' && candidate.url?.startsWith('https://localhost'))
+  ?? pages.find((candidate) => candidate.type === 'page');
 if (!page) throw new Error('No Android WebView page found on forwarded port 9222');
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => {

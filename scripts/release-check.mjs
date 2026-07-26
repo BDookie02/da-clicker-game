@@ -117,6 +117,7 @@ if (!localOnly) {
   const required = [
     ['VITE_API_URL', /^https:\/\//, 'deployed account API URL'],
     ['VITE_ADMOB_ANDROID_REWARDED_ID', /^ca-app-pub-\d+\/\d+$/, 'production rewarded-ad unit ID'],
+    ['VITE_ADMOB_ANDROID_INTERSTITIAL_ID', /^ca-app-pub-\d+\/\d+$/, 'production interstitial-ad unit ID'],
     ['VITE_PLAY_GAMES_LEADERBOARD_ID', /^CgkI/, 'published Play Games leaderboard ID'],
   ];
   for (const [key, pattern, label] of required) {
@@ -124,6 +125,8 @@ if (!localOnly) {
   }
   if (isGoogleSampleAdMobId(values.VITE_ADMOB_ANDROID_REWARDED_ID))
     productionFailures.push('VITE_ADMOB_ANDROID_REWARDED_ID must not use Google’s sample rewarded-ad ID');
+  if (isGoogleSampleAdMobId(values.VITE_ADMOB_ANDROID_INTERSTITIAL_ID))
+    productionFailures.push('VITE_ADMOB_ANDROID_INTERSTITIAL_ID must not use Google’s sample interstitial-ad ID');
   if (String(values.VITE_ADMOB_TESTING).toLowerCase() !== 'false')
     productionFailures.push('VITE_ADMOB_TESTING must be false');
   if (!/^ca-app-pub-\d+~\d+$/.test(gradle.ADMOB_ANDROID_APP_ID || ''))
@@ -132,8 +135,14 @@ if (!localOnly) {
     productionFailures.push('android/private-release.properties: ADMOB_ANDROID_APP_ID must not use Google’s sample app ID');
   const appPublisher = admobPublisher(gradle.ADMOB_ANDROID_APP_ID);
   const rewardedPublisher = admobPublisher(values.VITE_ADMOB_ANDROID_REWARDED_ID);
+  const interstitialPublisher = admobPublisher(values.VITE_ADMOB_ANDROID_INTERSTITIAL_ID);
   if (appPublisher && rewardedPublisher && appPublisher !== rewardedPublisher)
     productionFailures.push('AdMob app and rewarded-ad IDs must belong to the same publisher account');
+  if (appPublisher && interstitialPublisher && appPublisher !== interstitialPublisher)
+    productionFailures.push('AdMob app and interstitial-ad IDs must belong to the same publisher account');
+  if (values.VITE_ADMOB_ANDROID_REWARDED_ID
+      && values.VITE_ADMOB_ANDROID_REWARDED_ID === values.VITE_ADMOB_ANDROID_INTERSTITIAL_ID)
+    productionFailures.push('Rewarded and interstitial ads must use separate AdMob unit IDs');
   if (!/^\d{6,}$/.test(gradle.PLAY_GAMES_APP_ID || '') || /^0+$/.test(gradle.PLAY_GAMES_APP_ID || ''))
     productionFailures.push('android/private-release.properties: missing numeric PLAY_GAMES_APP_ID');
   if (!/^[1-9]\d*$/.test(gradle.VERSION_CODE || ''))

@@ -33,9 +33,11 @@ test('unfinished purchases stay isolated on shared devices', () => {
   assert.match(account, /receipt\.appAccountToken !== expectedAccountToken\) continue/);
 });
 
-test('reward intent is durable before AdMob opens and is removed on definite failure', () => {
+test('reward intent survives a late native load but is removed on definite failure', () => {
   const prequeue = ui.indexOf('queueAdReward(verification, fallbackSeconds, bonusRespect)');
   const show = ui.indexOf('await this.ads.show(fallbackSeconds, verification)');
   assert.ok(prequeue >= 0 && show > prequeue);
-  assert.match(ui, /if \(!result\.rewarded\) \{\s*this\.account!\.clearPendingAdReward/);
+  assert.match(ui, /this\.pendingRewardLoad\?\.verification \?\? await this\.account!\.adVerification/);
+  assert.match(ui, /if \(!result\.retryable\) \{\s*this\.account!\.clearPendingAdReward/);
+  assert.match(ui, /this\.pendingRewardLoad = null/);
 });

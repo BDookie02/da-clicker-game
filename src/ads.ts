@@ -1,5 +1,9 @@
 import { music } from './audio';
-import { AdMob, RewardAdPluginEvents } from '@capacitor-community/admob';
+import {
+  AdMob,
+  InterstitialAdPluginEvents,
+  RewardAdPluginEvents,
+} from '@capacitor-community/admob';
 
 // ---------------------------------------------------------------------------
 // Rewarded ads. One interface, two providers:
@@ -16,6 +20,12 @@ import { AdMob, RewardAdPluginEvents } from '@capacitor-community/admob';
 export interface AdProvider {
   /** Shows a rewarded ad. fallbackSeconds is used only by the web placeholder. */
   show(fallbackSeconds: number, verification?: AdVerification): Promise<AdResult>;
+  /** Loads the next non-rewarded break ad without blocking gameplay. */
+  preloadInterstitial(): Promise<boolean>;
+  /** Shows only an already-loaded break ad. Never waits on the network. */
+  showInterstitial(): Promise<boolean>;
+  /** Prevents rewarded and non-rewarded full-screen ads from overlapping. */
+  isFullscreenAdActive(): boolean;
 }
 
 export interface AdVerification {
@@ -30,6 +40,8 @@ export interface AdResult {
   watchedSeconds: number;
   rewardNonce?: string;
   verificationPending?: boolean;
+  /** A native load is still running and the exact SSV intent should be reused. */
+  retryable?: boolean;
 }
 
 export const AD_CONFIG = {
@@ -37,9 +49,13 @@ export const AD_CONFIG = {
   // Google's documented test rewarded-video unit IDs (safe to ship in dev):
   rewardedAndroid: 'ca-app-pub-3940256099942544/5224354917',
   rewardedIos: 'ca-app-pub-3940256099942544/1712485313',
+  interstitialAndroid: 'ca-app-pub-3940256099942544/1033173712',
+  interstitialIos: 'ca-app-pub-3940256099942544/4411468910',
   // production unit IDs go here after AdMob account setup:
   prodRewardedAndroid: import.meta.env.VITE_ADMOB_ANDROID_REWARDED_ID ?? '',
   prodRewardedIos: import.meta.env.VITE_ADMOB_IOS_REWARDED_ID ?? '',
+  prodInterstitialAndroid: import.meta.env.VITE_ADMOB_ANDROID_INTERSTITIAL_ID ?? '',
+  prodInterstitialIos: import.meta.env.VITE_ADMOB_IOS_INTERSTITIAL_ID ?? '',
 };
 
 // These bounds stop a bad connection or a wedged SDK callback from leaving the
@@ -49,9 +65,11 @@ const AD_LOAD_TIMEOUT_MS = 15_000;
 const AD_SHOW_TIMEOUT_MS = 120_000;
 const AD_CACHE_MAX_AGE_MS = 50 * 60_000;
 
+class AdDeadlineError extends Error {}
+
 function deadline<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    const timer = window.setTimeout(() => reject(new AdDeadlineError(`${label} timed out`)), timeoutMs);
     promise.then(
       value => {
         window.clearTimeout(timer);
@@ -70,6 +88,8 @@ class AdMobAdProvider implements AdProvider {
   private preparing: { key: string; promise: Promise<void> } | null = null;
   private preparedKey = '';
   private preparedAt = 0;
+  private interstitialPreparing: Promise<void> | null = null;
+  private interstitialPreparedAt = 0;
   private showInProgress = false;
   private backgroundEpoch = 0;
 
@@ -78,6 +98,17 @@ class AdMobAdProvider implements AdProvider {
   private unitId(): string {
     if (AD_CONFIG.TESTING) return this.isIOS ? AD_CONFIG.rewardedIos : AD_CONFIG.rewardedAndroid;
     return this.isIOS ? AD_CONFIG.prodRewardedIos : AD_CONFIG.prodRewardedAndroid;
+  }
+
+  private interstitialUnitId(): string {
+    if (AD_CONFIG.TESTING)
+      return this.isIOS ? AD_CONFIG.interstitialIos : AD_CONFIG.interstitialAndroid;
+    return this.isIOS ? AD_CONFIG.prodInterstitialIos : AD_CONFIG.prodInterstitialAndroid;
+  }
+
+  private reportFailure(stage: string, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error || 'unknown error');
+    console.warn(`[AdMob] ${stage}: ${detail}`);
   }
 
   private init(): Promise<void> {
@@ -141,14 +172,56 @@ class AdMobAdProvider implements AdProvider {
     return load;
   }
 
-  /** Starts Mobile Ads/UMP immediately and keeps a test ad warm off the tap path. */
+  private isInterstitialPrepared(): boolean {
+    return this.interstitialPreparedAt > 0
+      && Date.now() - this.interstitialPreparedAt < AD_CACHE_MAX_AGE_MS;
+  }
+
+  private async prepareInterstitial(): Promise<void> {
+    await this.init();
+    const adId = this.interstitialUnitId();
+    if (!AD_CONFIG.TESTING && !adId)
+      throw new Error('Missing production AdMob interstitial unit ID');
+    if (this.isInterstitialPrepared()) return;
+    if (this.interstitialPreparing) return this.interstitialPreparing;
+
+    const load = AdMob.prepareInterstitial({
+      adId,
+      isTesting: AD_CONFIG.TESTING,
+      immersiveMode: true,
+    }).then(() => {
+      this.interstitialPreparedAt = Date.now();
+    });
+    this.interstitialPreparing = load;
+    load.then(
+      () => { if (this.interstitialPreparing === load) this.interstitialPreparing = null; },
+      () => { if (this.interstitialPreparing === load) this.interstitialPreparing = null; },
+    );
+    return load;
+  }
+
+  async preloadInterstitial(): Promise<boolean> {
+    if (document.hidden || this.showInProgress) return false;
+    try {
+      await deadline(this.prepareInterstitial(), AD_LOAD_TIMEOUT_MS, 'Interstitial ad preload');
+      return this.isInterstitialPrepared();
+    } catch (error) {
+      this.reportFailure('interstitial preload failed', error);
+      return false;
+    }
+  }
+
+  /** Starts Mobile Ads/UMP immediately and keeps reusable inventory warm. */
   async warmup(): Promise<void> {
     if (document.hidden || this.showInProgress) return;
     await deadline(this.init(), AD_LOAD_TIMEOUT_MS, 'AdMob initialization');
+    const loads: Promise<unknown>[] = [this.preloadInterstitial()];
     // Production SSV data is unique to a signed-in reward intent, so only a
-    // public test ad can be loaded before the player requests a reward.
-    if (AD_CONFIG.TESTING)
-      await deadline(this.prepare(), AD_LOAD_TIMEOUT_MS, 'Rewarded ad preload');
+    // public test rewarded ad can be loaded before the player requests it.
+    if (AD_CONFIG.TESTING) loads.push(
+      deadline(this.prepare(), AD_LOAD_TIMEOUT_MS, 'Rewarded ad preload'),
+    );
+    await Promise.allSettled(loads);
   }
 
   private present(): Promise<AdResult> {
@@ -176,7 +249,10 @@ class AdMobAdProvider implements AdProvider {
           rewardedAt = performance.now();
         }),
         AdMob.addListener(RewardAdPluginEvents.Dismissed, () => done(rewarded)),
-        AdMob.addListener(RewardAdPluginEvents.FailedToShow, () => done(false)),
+        AdMob.addListener(RewardAdPluginEvents.FailedToShow, (error) => {
+          this.reportFailure('rewarded failed to show', error);
+          done(false);
+        }),
       ]).then((listeners) => {
         subs.push(...listeners);
         timeout = window.setTimeout(() => done(rewarded), AD_SHOW_TIMEOUT_MS);
@@ -188,7 +264,10 @@ class AdMobAdProvider implements AdProvider {
           rewarded = true;
           rewardedAt = performance.now();
         }
-      }).catch(() => done(false));
+      }).catch((error) => {
+        this.reportFailure('rewarded show failed', error);
+        done(false);
+      });
     });
   }
 
@@ -206,8 +285,13 @@ class AdMobAdProvider implements AdProvider {
       this.preparedKey = '';
       this.preparedAt = 0;
       return await this.present();
-    } catch {
-      return { rewarded: false, watchedSeconds: 0 }; // no fill / offline — player just retries
+    } catch (error) {
+      this.reportFailure('rewarded load/show failed', error);
+      return {
+        rewarded: false,
+        watchedSeconds: 0,
+        retryable: error instanceof AdDeadlineError,
+      };
     } finally {
       this.showInProgress = false;
       // Rewarded ads are single-use. Refill the test slot immediately so the
@@ -216,6 +300,54 @@ class AdMobAdProvider implements AdProvider {
         void this.warmup().catch(() => undefined);
     }
   }
+
+  private presentInterstitial(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let showed = false;
+      let settled = false;
+      let timeout = 0;
+      const subs: { remove(): Promise<void> }[] = [];
+      const done = (didShow: boolean) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        for (const sub of subs) void sub.remove();
+        resolve(didShow);
+      };
+      Promise.all([
+        AdMob.addListener(InterstitialAdPluginEvents.Showed, () => { showed = true; }),
+        AdMob.addListener(InterstitialAdPluginEvents.Dismissed, () => done(showed)),
+        AdMob.addListener(InterstitialAdPluginEvents.FailedToShow, (error) => {
+          this.reportFailure('interstitial failed to show', error);
+          done(false);
+        }),
+      ]).then((listeners) => {
+        subs.push(...listeners);
+        timeout = window.setTimeout(() => done(showed), AD_SHOW_TIMEOUT_MS);
+        return AdMob.showInterstitial();
+      }).catch((error) => {
+        this.reportFailure('interstitial show failed', error);
+        done(false);
+      });
+    });
+  }
+
+  async showInterstitial(): Promise<boolean> {
+    if (this.showInProgress || document.hidden || !this.isInterstitialPrepared())
+      return false;
+    this.showInProgress = true;
+    const requestedInEpoch = this.backgroundEpoch;
+    this.interstitialPreparedAt = 0;
+    try {
+      if (document.hidden || requestedInEpoch !== this.backgroundEpoch) return false;
+      return await this.presentInterstitial();
+    } finally {
+      this.showInProgress = false;
+      if (!document.hidden) void this.preloadInterstitial();
+    }
+  }
+
+  isFullscreenAdActive(): boolean { return this.showInProgress; }
 
   onVisibilityChange(): void {
     if (document.hidden) {
@@ -275,6 +407,9 @@ export class PlaceholderAdProvider implements AdProvider {
       }, 250);
     });
   }
+  async preloadInterstitial(): Promise<boolean> { return false; }
+  async showInterstitial(): Promise<boolean> { return false; }
+  isFullscreenAdActive(): boolean { return false; }
 }
 
 /** Picks AdMob on device (once the plugin is present), placeholder elsewhere. */
@@ -301,5 +436,12 @@ export function withMusicPause(provider: AdProvider): AdProvider {
       try { return await provider.show(lengthSec, verification); }
       finally { music.resumeAfterAd(); }
     },
+    preloadInterstitial: () => provider.preloadInterstitial(),
+    async showInterstitial() {
+      music.pauseForAd();
+      try { return await provider.showInterstitial(); }
+      finally { music.resumeAfterAd(); }
+    },
+    isFullscreenAdActive: () => provider.isFullscreenAdActive(),
   };
 }
