@@ -202,8 +202,12 @@ try {
         throw 'Built AAB Play Games app-ID resource does not match android/private-release.properties.'
     }
 
+    # Android upload certificates are normally self-signed. `-strict` treats
+    # that expected certificate-chain warning as an error, so verify archive
+    # signature integrity without requiring a public-CA chain.
+    $signatureLog = Join-Path $verificationDir 'jarsigner-verification.txt'
     Invoke-NativeChecked 'AAB signature verification failed.' {
-        & (Join-Path $javaHome 'bin\jarsigner.exe') -verify -strict -certs $aab
+        & (Join-Path $javaHome 'bin\jarsigner.exe') -verify $aab *> $signatureLog
     }
 
     $finalSource = Get-SourceSnapshot
