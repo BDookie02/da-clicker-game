@@ -66,13 +66,15 @@ if (!fs.existsSync(indexFile)) {
     failures.push('Android packaged web assets are not byte-for-byte identical to the latest dist build');
   if (!rewardedId
       || !source.includes(rewardedId)
-      || !source.includes('completed_ad'))
+      || !source.includes('/v1/admob/reward/status'))
     failures.push('Android release payload does not contain the configured production rewarded-ad integration');
   if (!env.VITE_API_URL || !source.includes(env.VITE_API_URL.replace(/\/$/, '')))
     failures.push('Android release payload does not contain the configured production account API');
   if (!env.VITE_PLAY_GAMES_LEADERBOARD_ID || !source.includes(env.VITE_PLAY_GAMES_LEADERBOARD_ID))
     failures.push('Android release payload does not contain the configured Play Games leaderboard');
-  if (!source.includes('/v1/auth/login') || !source.includes('/v1/save'))
+  // The account client builds its login/register URL from `/v1/auth/${path}`;
+  // production minification therefore preserves the prefix, not `/login`.
+  if (!source.includes('/v1/auth/') || !source.includes('/v1/save'))
     failures.push('Android release payload does not contain the production account client');
   if (!index.includes('DISCIPLINE.'))
     failures.push('Android release index is not the expected game entry point');
