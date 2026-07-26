@@ -34,11 +34,11 @@
     "@capacitor/ios": "^8.4.1",
     "@capgo/native-purchases": "8.6.4",
     "@ni2khanna/capacitor-game-connect": "^8.0.1",
-    "three": "^0.170.0"
+    "three": "0.162.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.1",
-    "@types/three": "^0.170.0",
+    "@types/three": "0.162.0",
     "@vitejs/plugin-legacy": "^6.0.0",
     "sharp": "^0.35.3",
     "terser": "^5.49.0",

@@ -295,7 +295,7 @@ body.in-garage .quick-buy { display: none; }
 @keyframes arrowbob { from { margin-top: -8px; } to { margin-top: 8px; } }
 /* M store */
 .ad-box.mshop {
-  /* Chrome 91 on the Android 12 test device predates dynamic viewport
+  /* Chrome 74 on the Android 10 test device predates dynamic viewport
      units, so keep the vh declaration as the operative fallback. */
   max-height: 80vh;
   max-height: min(80vh, calc(100dvh - 12px));

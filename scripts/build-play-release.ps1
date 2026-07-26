@@ -183,7 +183,7 @@ try {
     Assert-Equal 'package' $manifestNode.GetAttribute('package') 'com.nosiah.discipline'
     Assert-Equal 'versionCode' $manifestNode.GetAttribute('versionCode', $androidNamespace) $releaseProperties.VERSION_CODE
     Assert-Equal 'versionName' $manifestNode.GetAttribute('versionName', $androidNamespace) $releaseProperties.VERSION_NAME
-    Assert-Equal 'minSdkVersion' $usesSdk.GetAttribute('minSdkVersion', $androidNamespace) '31'
+    Assert-Equal 'minSdkVersion' $usesSdk.GetAttribute('minSdkVersion', $androidNamespace) '29'
     Assert-Equal 'targetSdkVersion' $usesSdk.GetAttribute('targetSdkVersion', $androidNamespace) '36'
 
     $metadata = @{}

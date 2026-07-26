@@ -34,9 +34,9 @@ export default defineConfig({
   server: { host: true },
   plugins: [
     devlogSaver(),
-    // Android 12 is the supported floor. Keep the legacy bundle aligned with
-    // its factory-era Chrome 91 WebView so the packaged app remains resilient
+    // Android 10 is the supported floor. Keep the legacy bundle aligned with
+    // its factory-era Chrome 74 WebView so the packaged app remains resilient
     // when a device has not yet updated Android System WebView.
-    legacy({ targets: ['Chrome >= 91'] }),
+    legacy({ targets: ['Chrome >= 74'] }),
   ],
 });

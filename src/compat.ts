@@ -1,4 +1,4 @@
-/** Runtime fallbacks for the oldest supported Android 12 WebViews.
+/** Runtime fallbacks for the oldest supported Android 10 WebViews.
  *
  * Vite's legacy bundle transpiles JavaScript syntax, but browser APIs are not
  * automatically supplied. Keep these tiny fallbacks ahead of UI construction

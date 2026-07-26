@@ -52,6 +52,8 @@ function psxify(mat: THREE.Material, res: THREE.Vector2) {
 }
 
 // Fullscreen composite: 15-bit color crush + 4x4 Bayer dither, like the PSX GPU.
+// Constant branches keep the lookup legal in GLSL ES 1.00; dynamic matrix
+// indexing is not guaranteed on the WebGL 1 baseline used by Android 10.
 const COMPOSITE_FRAG = /* glsl */ `
   uniform sampler2D tScene;
   uniform sampler2D tCosmetics;
@@ -59,12 +61,31 @@ const COMPOSITE_FRAG = /* glsl */ `
   uniform sampler2D tCosmeticDepth;
   uniform float uNoir;
   varying vec2 vUv;
-  const mat4 bayer = mat4(
-     0.0,  8.0,  2.0, 10.0,
-    12.0,  4.0, 14.0,  6.0,
-     3.0, 11.0,  1.0,  9.0,
-    15.0,  7.0, 13.0,  5.0
-  );
+  float bayer4(vec2 coordinate) {
+    vec2 p = floor(mod(coordinate, 4.0));
+    if (p.x < 0.5) {
+      if (p.y < 0.5) return 0.0;
+      if (p.y < 1.5) return 8.0;
+      if (p.y < 2.5) return 2.0;
+      return 10.0;
+    }
+    if (p.x < 1.5) {
+      if (p.y < 0.5) return 12.0;
+      if (p.y < 1.5) return 4.0;
+      if (p.y < 2.5) return 14.0;
+      return 6.0;
+    }
+    if (p.x < 2.5) {
+      if (p.y < 0.5) return 3.0;
+      if (p.y < 1.5) return 11.0;
+      if (p.y < 2.5) return 1.0;
+      return 9.0;
+    }
+    if (p.y < 0.5) return 15.0;
+    if (p.y < 1.5) return 7.0;
+    if (p.y < 2.5) return 13.0;
+    return 5.0;
+  }
   void main() {
     vec4 base = texture2D(tScene, vUv);
     vec4 cosmetic = texture2D(tCosmetics, vUv);
@@ -76,8 +97,7 @@ const COMPOSITE_FRAG = /* glsl */ `
     cosmetic.a *= step(cosmeticDepth, sceneDepth + 0.00015);
     vec3 c = mix(base.rgb, cosmetic.rgb, cosmetic.a);
     c = pow(c, vec3(0.4545));                 // linear RT -> sRGB out
-    ivec2 p = ivec2(mod(gl_FragCoord.xy, 4.0));
-    float d = (bayer[p.x][p.y] / 16.0 - 0.5) / 32.0;
+    float d = (bayer4(gl_FragCoord.xy) / 16.0 - 0.5) / 32.0;
     c = floor((c + d) * 31.0 + 0.5) / 31.0;   // 5 bits per channel
     if (uNoir > 0.5) {
       float gray = dot(c, vec3(0.299, 0.587, 0.114));
@@ -126,6 +146,7 @@ export class GameScene {
   private cosmeticLoader = new GLTFLoader();
   private cosmeticSources = new Map<string, Promise<THREE.Object3D>>();
   private compositeMaterial!: THREE.ShaderMaterial;
+  private supportsDerivativeFlatShading = true;
   private dashboardLoadVersion = 0;
   private danglerLoadVersion = 0;
   private garageLoadVersion = 0;
@@ -225,8 +246,15 @@ export class GameScene {
 
   constructor(canvas: HTMLCanvasElement) {
     // preserveDrawingBuffer lets us grab devlog screenshots off the canvas
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: false,
+      preserveDrawingBuffer: true,
+      stencil: false,
+    });
     this.renderer.setPixelRatio(1);
+    this.supportsDerivativeFlatShading = this.renderer.capabilities.isWebGL2
+      || this.renderer.extensions.has('OES_standard_derivatives');
 
     this.camera = new THREE.PerspectiveCamera(62, 4 / 3, 0.1, 60);
     // Driver's seat POV on a one-way 4-lane road. Player parked in a center
@@ -304,7 +332,11 @@ export class GameScene {
   }
 
   private mat(color: number, opts: Partial<THREE.MeshLambertMaterialParameters> = {}): THREE.MeshLambertMaterial {
-    const m = new THREE.MeshLambertMaterial({ color, flatShading: true, ...opts } as THREE.MeshLambertMaterialParameters);
+    const m = new THREE.MeshLambertMaterial({
+      color,
+      flatShading: this.supportsDerivativeFlatShading,
+      ...opts,
+    } as THREE.MeshLambertMaterialParameters);
     psxify(m, this.psxRes);
     return m;
   }
@@ -365,7 +397,8 @@ export class GameScene {
         }
         const materials = Array.isArray(node.material) ? node.material : [node.material];
         for (const material of materials) {
-          if ('flatShading' in material) (material as THREE.MeshStandardMaterial).flatShading = true;
+          if ('flatShading' in material)
+            (material as THREE.MeshStandardMaterial).flatShading = this.supportsDerivativeFlatShading;
           const map = (material as THREE.MeshStandardMaterial).map;
           if (map) {
             map.magFilter = THREE.NearestFilter;
@@ -1201,7 +1234,7 @@ export class GameScene {
       const coalMaterial = new THREE.MeshLambertMaterial({
         map: coalTexture,
         color: 0xf06aa7,
-        flatShading: true,
+        flatShading: this.supportsDerivativeFlatShading,
       });
       psxify(coalMaterial, this.cosmeticRes);
       const coalGeometry = (phase: number) => {
@@ -2019,7 +2052,10 @@ export class GameScene {
   /** Cover the opponent car in goop blobs + splat particles. */
   goop(colorHex = '#f2f0e8') {
     const color = new THREE.Color(colorHex);
-    const m = new THREE.MeshLambertMaterial({ color, flatShading: true });
+    const m = new THREE.MeshLambertMaterial({
+      color,
+      flatShading: this.supportsDerivativeFlatShading,
+    });
     psxify(m, this.psxRes);
     const rng = mulberry(42);
     for (let i = 0; i < 34; i++) {

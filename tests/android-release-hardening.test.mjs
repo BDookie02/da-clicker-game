@@ -14,7 +14,7 @@ test('Android release variants require explicit versions and reject Google sampl
   assert.match(gradle, /manifestPlaceholders\.admobAppId = releaseAdMobAppId \?: ""/);
 });
 
-test('Play Games is auto-discovered once and splash resources cover Android 12+', () => {
+test('Play Games is auto-discovered once and splash resources cover Android 10+', () => {
   const activity = read('android/app/src/main/java/com/nosiah/discipline/MainActivity.java');
   const gradle = read('android/app/build.gradle');
   const styles = read('android/app/src/main/res/values/styles.xml');
@@ -25,6 +25,31 @@ test('Play Games is auto-discovered once and splash resources cover Android 12+'
   assert.match(styles, /windowSplashScreenBackground/);
   assert.match(styles, /windowSplashScreenAnimatedIcon">@mipmap\/ic_launcher<\/item>/);
   assert.match(styles, /postSplashScreenTheme">@style\/AppTheme\.NoActionBar<\/item>/);
+});
+
+test('every Android build and release gate preserves the Android 10 floor', () => {
+  const variables = read('android/variables.gradle');
+  const testBuild = read('scripts/build-test-apk.ps1');
+  const releaseBuild = read('scripts/build-play-release.ps1');
+  const releaseCheck = read('scripts/release-check.mjs');
+  const vite = read('vite.config.ts');
+  assert.match(variables, /minSdkVersion = 29/);
+  assert.match(testBuild, /\$expectedMinSdk = '29'/);
+  assert.match(releaseBuild, /Assert-Equal 'minSdkVersion'[\s\S]*'29'/);
+  assert.match(releaseCheck, /minSdkVersion\\s\*=\\s\*29/);
+  assert.match(vite, /Chrome >= 74/);
+});
+
+test('Android 10 renderer retains a WebGL 1-safe graphics path', () => {
+  const pkg = JSON.parse(read('package.json'));
+  const scene = read('src/scene.ts');
+  assert.equal(pkg.dependencies.three, '0.162.0');
+  assert.equal(pkg.devDependencies['@types/three'], '0.162.0');
+  assert.match(scene, /extensions\.has\('OES_standard_derivatives'\)/);
+  assert.match(scene, /flatShading: this\.supportsDerivativeFlatShading/);
+  assert.match(scene, /float bayer4\(vec2 coordinate\)/);
+  assert.doesNotMatch(scene, /bayer\[p\.x\]\[p\.y\]/);
+  assert.match(scene, /stencil: false/);
 });
 
 test('Android compatibility bootstrap uses the browser global directly', () => {

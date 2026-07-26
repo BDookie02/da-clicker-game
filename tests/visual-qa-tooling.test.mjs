@@ -198,12 +198,15 @@ test('responsive UGC audit covers every tier, target viewport, and moderation su
   assert.match(ugcScript, /process\.exitCode = 1/);
 });
 
-test('Android 12 touch-look audit proves physical direct manipulation and cancellation', () => {
-  assert.match(touchScript, /apiLevel !== 31/);
+test('Android 10 floor touch-look audit proves physical direct manipulation and cancellation', () => {
+  assert.match(touchScript, /expectedApiLevel = numericOption\('--api', 29\)/);
+  assert.match(touchScript, /apiLevel !== expectedApiLevel/);
   assert.match(touchScript, /webview_devtools_remote_\$\{pid\}/);
   assert.match(touchScript, /JSON\.parse\(cdp\.page\.description \|\| '\{\}'\)/);
   assert.match(touchScript, /'shell', 'input', 'touchscreen', 'swipe'/);
-  assert.match(touchScript, /'motionevent'/);
+  assert.match(touchScript, /'shell', 'input', 'motionevent'/);
+  assert.match(touchScript, /KEYCODE_HOME/);
+  assert.match(touchScript, /HOME_RESUME/);
   assert.match(touchScript, /motionEvent\('DOWN'/);
   assert.match(touchScript, /motionEvent\('CANCEL'/);
   assert.match(touchScript, /totalTaps/);

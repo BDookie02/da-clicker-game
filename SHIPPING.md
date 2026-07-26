@@ -2,8 +2,8 @@
 
 ## Verified in this repository
 
-- Android package: `com.nosiah.discipline`; minSdk 31 (Android 12), target/compile SDK 36.
-- Debug runtime tested on Android 12 / API 31. API 36 must be rerun against
+- Android package: `com.nosiah.discipline`; minSdk 29 (Android 10), target/compile SDK 36.
+- Debug runtime tested on Android 10 / API 29. API 36 must be rerun against
   each final release candidate.
 - Rewarded AdMob integration grants only from the SDK reward event. Checked-in defaults are Google test IDs.
 - Seven Google Play one-time product IDs are wired: `m_handful`, `m_stack`, `m_pouch`, `m_crate`, `m_vault`, `m_hoard`, `m_empire`.

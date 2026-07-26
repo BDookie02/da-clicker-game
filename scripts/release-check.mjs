@@ -95,7 +95,7 @@ if (!workerSource.includes("url.pathname === '/v1/admob/reward'") || !workerSour
   runtimeFailures.push('signed AdMob server-side verification endpoint is missing');
 
 const androidConfig = `${fs.readFileSync(path.join(root, 'android', 'app', 'build.gradle'), 'utf8')}\n${fs.readFileSync(path.join(root, 'android', 'variables.gradle'), 'utf8')}`;
-if (!/minSdkVersion\s*=\s*31\b/.test(androidConfig)) runtimeFailures.push('Android minSdkVersion must remain 31 (Android 12)');
+if (!/minSdkVersion\s*=\s*29\b/.test(androidConfig)) runtimeFailures.push('Android minSdkVersion must remain 29 (Android 10)');
 if (!/targetSdkVersion\s*=\s*36\b/.test(androidConfig)) runtimeFailures.push('Android targetSdkVersion must be 36');
 const mainActivity = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'java', 'com', 'nosiah', 'discipline', 'MainActivity.java'), 'utf8');
 if (/registerPlugin\s*\(\s*CapacitorGameConnectPlugin/.test(mainActivity))

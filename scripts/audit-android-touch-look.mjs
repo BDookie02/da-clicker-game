@@ -23,6 +23,7 @@ const adbDefault = sdkRoot
   : 'adb';
 const adb = option('--adb', adbDefault);
 const duration = Number(option('--duration', '260'));
+const expectedApiLevel = numericOption('--api', 29);
 const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 
 if (!Number.isInteger(duration) || duration < 80 || duration > 2000)
@@ -38,8 +39,8 @@ const adbBuffer = (args, options = {}) => execFileSync(adb, ['-s', serial, ...ar
 });
 const adbText = (args) => String(adbBuffer(args, { encoding: 'utf8' })).trim();
 const apiLevel = Number(adbText(['shell', 'getprop', 'ro.build.version.sdk']));
-if (apiLevel !== 31)
-  throw new Error(`This audit requires the Android 12 / API 31 test device; ${serial} reports API ${apiLevel}`);
+if (apiLevel !== expectedApiLevel)
+  throw new Error(`This audit requires API ${expectedApiLevel}; ${serial} reports API ${apiLevel}`);
 
 const pid = adbText(['shell', 'pidof', packageName]).split(/\s+/).filter(Boolean)[0];
 if (!pid)
@@ -69,8 +70,21 @@ const swipe = (startCss, endCss, viewport, frame) => {
 };
 const motionEvent = (action, cssPoint, viewport, frame) => {
   const point = devicePoint(cssPoint, viewport, frame);
+  if (action === 'CANCEL') {
+    // Android 10's `input` binary has no synthetic CANCEL action.
+    // Backgrounding the activity during an active pointer is the
+    // platform-authentic cancellation path; release the shell pointer while
+    // backgrounded so later swipes still receive their normal pointerup.
+    adbBuffer(['shell', 'input', 'keyevent', 'KEYCODE_HOME']);
+    adbBuffer([
+      'shell', 'input', 'motionevent',
+      'UP', String(point.x), String(point.y),
+    ]);
+    adbBuffer(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`]);
+    return { ...point, mechanism: 'HOME_RESUME' };
+  }
   adbBuffer([
-    'shell', 'input', 'touchscreen', 'motionevent',
+    'shell', 'input', 'motionevent',
     action, String(point.x), String(point.y),
   ]);
   return point;
@@ -366,9 +380,14 @@ try {
     const history = (eventsAfter.history || []).slice((eventsBefore.history || []).length);
     const down = history.find((event) => event.type === 'pointerdown') || null;
     const up = history.find((event) => event.type === 'pointerup') || null;
+    const cancel = history.find((event) => event.type === 'pointercancel') || null;
+    // Android 10 WebView may terminate an ADB-injected swipe with
+    // pointercancel after delivering its full movement. That is still a valid
+    // physical terminal event, and the game deliberately uses it for cleanup.
+    const terminal = up || cancel;
     const samples = motion.samples || [];
     const startTime = down?.time ?? motion.startedAt;
-    const stopTime = (up?.time ?? startTime + duration) + 400;
+    const stopTime = (terminal?.time ?? startTime + duration) + 400;
     const relevant = samples.filter((sample) =>
       sample.time >= startTime - 20 && sample.time <= stopTime);
     const frameIntervals = relevant.slice(1).map((sample, index) =>
@@ -389,13 +408,13 @@ try {
     }
     const finalPosition = relevant.length ? relevant[relevant.length - 1][key] : null;
     let settleMs = null;
-    if (up && finalPosition !== null) {
+    if (terminal && finalPosition !== null) {
       for (let index = 0; index <= relevant.length - 4; index += 1) {
-        if (relevant[index].time < up.time) continue;
+        if (relevant[index].time < terminal.time) continue;
         const stable = relevant.slice(index, index + 4)
           .every((sample) => Math.abs(sample[key] - finalPosition) <= 1.25);
         if (stable) {
-          settleMs = Math.max(0, relevant[index].time - up.time);
+          settleMs = Math.max(0, relevant[index].time - terminal.time);
           break;
         }
       }
@@ -404,7 +423,7 @@ try {
     const frameMaxMs = frameIntervals.length ? Math.max(...frameIntervals) : null;
     return {
       sampleCount: relevant.length,
-      pointerTimeline: { down, up },
+      pointerTimeline: { down, up, cancel, terminalType: terminal?.type || null },
       frameIntervals: {
         count: frameIntervals.length,
         p95Ms: frameP95Ms,
@@ -475,7 +494,10 @@ try {
       physicalTouchObserved:
         eventDelta(eventsBefore, eventsAfter, 'pointerdown') >= 1
         && eventDelta(eventsBefore, eventsAfter, 'pointermove') >= 1
-        && eventDelta(eventsBefore, eventsAfter, 'pointerup') >= 1,
+        && (
+          eventDelta(eventsBefore, eventsAfter, 'pointerup') >= 1
+          || eventDelta(eventsBefore, eventsAfter, 'pointercancel') >= 1
+        ),
       eventDelta: {
         pointerdown: eventDelta(eventsBefore, eventsAfter, 'pointerdown'),
         pointermove: eventDelta(eventsBefore, eventsAfter, 'pointermove'),
@@ -619,7 +641,7 @@ try {
       bar: describe(bar),
       target: describe(target),
       insideHistoricalCollapsedArea: y > innerHeight * 0.42
-        && (!bar || y < bar.getBoundingClientRect().top - 4),
+        && (!bar || y > bar.getBoundingClientRect().bottom + 4),
       targetIsButton: Boolean(target && target.closest('button')),
     };
   })()`);
@@ -745,7 +767,8 @@ try {
         const handlers = window.__disciplineTouchQaHandlers || {};
         for (const type of Object.keys(handlers))
           window.removeEventListener(type, handlers[type], true);
-        document.querySelector('#discipline-touch-qa-style')?.remove();
+        const auditStyle = document.querySelector('#discipline-touch-qa-style');
+        if (auditStyle) auditStyle.remove();
         const scene = window.__scene;
         const ui = window.__ui;
         ui.close();
