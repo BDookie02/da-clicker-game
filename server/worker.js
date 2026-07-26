@@ -17,6 +17,9 @@ const html = (body) => new Response(body, {
   headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
 });
 const PASSWORD_MIN = 10;
+// Cloudflare Workers Web Crypto rejects PBKDF2 iteration counts above 100,000.
+// Keep this at the platform maximum so production registration/login works.
+const PBKDF2_ITERATIONS = 100000;
 const SESSION_SECONDS = 60 * 60 * 24 * 90;
 export const TERMS_VERSION = '2026-07-23';
 const REPORT_REASONS = Object.freeze(['username', 'cheating', 'harassment', 'other']);
@@ -186,7 +189,12 @@ async function adRewardStatus(url, env, account) {
 }
 async function passwordHash(password, saltHex) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: hexToBytes(saltHex), iterations: 210000 }, key, 256);
+  const bits = await crypto.subtle.deriveBits({
+    name: 'PBKDF2',
+    hash: 'SHA-256',
+    salt: hexToBytes(saltHex),
+    iterations: PBKDF2_ITERATIONS,
+  }, key, 256);
   return bytesToHex(new Uint8Array(bits));
 }
 function constantTimeEqual(a, b) {

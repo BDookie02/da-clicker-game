@@ -83,7 +83,7 @@ export const privacyPage = (env = {}) => {
 ${config.retentionNotice
     ? `<p>${escapeHtml(config.retentionNotice)}</p>`
     : '<p class="danger"><b>Not finalized:</b> retention for infrastructure logs, backups, fraud/security records, and legal obligations has not been configured. This policy is not ready for publication.</p>'}</section>
-<section id="deletion"><h2>Your choices and deletion</h2><p>You can revisit advertising privacy choices from Settings. A signed-in player can choose <b>Settings &gt; Delete account</b>. You may also use the <a href="/account-deletion">web account-deletion page</a> if the app is no longer installed. Platform transaction or advertising records controlled by Google or Apple are not deleted by deleting a DISCIPLINE. account.</p></section>
+<section id="deletion"><h2>Your choices and deletion</h2><p>You can revisit advertising privacy choices from Settings. A signed-in player can choose <b>Settings &gt; Delete account</b>. You may also use the <a href="/account-deletion">web account-deletion page</a> if the app is no longer installed. Account deletion cannot remotely erase a local save that remains on another installed device; clear the app's local storage or remove the app on that device to remove its local copy. Platform transaction or advertising records controlled by Google or Apple are not deleted by deleting a DISCIPLINE. account.</p></section>
 <section><h2>Age eligibility and target audience</h2>${config.targetAudienceNotice
     ? `<p>${escapeHtml(config.targetAudienceNotice)}</p>`
     : '<p class="danger"><b>Not finalized:</b> the publisher has not configured an age-eligibility and target-audience statement consistent with the Play Console selection, content rating, and ad treatment. No age threshold is asserted by this draft.</p>'}</section>
@@ -109,7 +109,7 @@ export const deletionPage = (env = {}) => {
   return shell('Delete Account', `
 <h1>Delete a DISCIPLINE. account</h1>${legalStatus(config)}
 <p>This page works even after the game has been uninstalled. Enter the same username and password used in the game.</p>
-<section><h2 class="danger">Permanent deletion</h2><p>Deletion erases the account username, Terms/profile state, cloud progress, leaderboard score, reports involving the account, private hide relationships, inventory, sessions, rewarded-ad ledger, and DISCIPLINE. purchase ledger from the primary account database. It cannot be undone. Google Play or Apple may retain their own transaction records.</p>
+<section><h2 class="danger">Permanent deletion</h2><p>Deletion erases the account username, Terms/profile state, cloud progress, leaderboard score, reports involving the account, private hide relationships, inventory, sessions, rewarded-ad ledger, and DISCIPLINE. purchase ledger from the primary account database. It cannot remotely erase a local save that remains on another installed device; clear that device's app storage or remove the app to remove its local copy. Google Play or Apple may retain their own transaction records.</p>
 <form id="delete-form"><label for="username">Username</label><input id="username" autocomplete="username" maxlength="14" required>
 <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" minlength="10" required>
 <label for="confirm">Type DELETE</label><input id="confirm" autocomplete="off" required>

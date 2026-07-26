@@ -82,3 +82,8 @@ test('served privacy copy discloses the authoritative purchase financial ledger'
   assert.match(page, /financial\/order status/);
   assert.match(page, /refund\/void evidence/);
 });
+
+test('privacy and web deletion disclose local saves that cannot be erased remotely', () => {
+  assert.match(privacyPage(completeLegalEnv), /cannot remotely erase a local save/i);
+  assert.match(deletionPage(completeLegalEnv), /cannot remotely erase a local save/i);
+});
