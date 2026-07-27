@@ -61,7 +61,7 @@ export const AD_CONFIG = {
 // These bounds stop a bad connection or a wedged SDK callback from leaving the
 // loading overlay on screen indefinitely. A late load remains cached, so the
 // player's next attempt can still use it immediately.
-const AD_LOAD_TIMEOUT_MS = 15_000;
+const AD_LOAD_TIMEOUT_MS = 60_000;
 const AD_SHOW_TIMEOUT_MS = 120_000;
 const AD_CACHE_MAX_AGE_MS = 50 * 60_000;
 
@@ -115,6 +115,10 @@ class AdMobAdProvider implements AdProvider {
     if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
       await AdMob.initialize({ initializeForTesting: AD_CONFIG.TESTING });
+      // Google demo units do not use production inventory or personal data.
+      // Requiring a publisher UMP form here blocked every closed-track demo
+      // request before AdMob could load the guaranteed-fill test ad.
+      if (AD_CONFIG.TESTING) return;
       let consent = await AdMob.requestConsentInfo();
       if (!consent.canRequestAds && consent.isConsentFormAvailable)
         consent = await AdMob.showConsentForm();
@@ -227,28 +231,43 @@ class AdMobAdProvider implements AdProvider {
   private present(): Promise<AdResult> {
     return new Promise<AdResult>((resolve) => {
       let rewarded = false;
+      let dismissed = false;
       let shownAt = 0;
       let rewardedAt = 0;
       let settled = false;
       let timeout = 0;
+      let dismissGrace = 0;
       const subs: { remove(): Promise<void> }[] = [];
       const done = (ok: boolean) => {
         if (settled) return;
         settled = true;
         window.clearTimeout(timeout);
+        window.clearTimeout(dismissGrace);
         for (const sub of subs) void sub.remove();
         const end = rewardedAt || performance.now();
         resolve({ rewarded: ok, watchedSeconds: shownAt ? Math.max(0, (end - shownAt) / 1000) : 0 });
+      };
+      const markRewarded = () => {
+        if (settled) return;
+        if (!rewarded) {
+          rewarded = true;
+          rewardedAt = performance.now();
+        }
+        // Capacitor can deliver dismissal before its bridged reward callback.
+        // Settle only after both facts are known so a completed ad cannot be
+        // mistaken for an early close.
+        if (dismissed) done(true);
       };
       Promise.all([
         AdMob.addListener(RewardAdPluginEvents.Showed, () => {
           shownAt = performance.now();
         }),
-        AdMob.addListener(RewardAdPluginEvents.Rewarded, () => {
-          rewarded = true;
-          rewardedAt = performance.now();
+        AdMob.addListener(RewardAdPluginEvents.Rewarded, markRewarded),
+        AdMob.addListener(RewardAdPluginEvents.Dismissed, () => {
+          dismissed = true;
+          if (rewarded) done(true);
+          else dismissGrace = window.setTimeout(() => done(false), 2_000);
         }),
-        AdMob.addListener(RewardAdPluginEvents.Dismissed, () => done(rewarded)),
         AdMob.addListener(RewardAdPluginEvents.FailedToShow, (error) => {
           this.reportFailure('rewarded failed to show', error);
           done(false);
@@ -258,12 +277,10 @@ class AdMobAdProvider implements AdProvider {
         timeout = window.setTimeout(() => done(rewarded), AD_SHOW_TIMEOUT_MS);
         return AdMob.showRewardVideoAd();
       }).then(() => {
-        // Android resolves this promise from OnUserEarnedRewardListener. Keep
-        // the event as the primary signal and the promise as a safe backup.
-        if (!rewarded) {
-          rewarded = true;
-          rewardedAt = performance.now();
-        }
+        // Android/iOS resolve this promise from the native earned-reward
+        // callback. Keep it as a second positive signal in case the bridged
+        // Rewarded event arrives after Dismissed or is lost.
+        markRewarded();
       }).catch((error) => {
         this.reportFailure('rewarded show failed', error);
         done(false);

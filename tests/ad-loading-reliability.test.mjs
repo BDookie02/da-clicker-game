@@ -15,7 +15,7 @@ test('native ad inventory initializes and preloads away from the user tap path',
 });
 
 test('rewarded loads are bounded, serialized, and never open after backgrounding', () => {
-  assert.match(ads, /const AD_LOAD_TIMEOUT_MS = 15_000/);
+  assert.match(ads, /const AD_LOAD_TIMEOUT_MS = 60_000/);
   assert.match(ads, /private showInProgress = false/);
   assert.match(ads, /if \(this\.showInProgress\) return \{ rewarded: false, watchedSeconds: 0 \}/);
   assert.match(ads, /requestedInEpoch !== this\.backgroundEpoch/);
@@ -24,12 +24,25 @@ test('rewarded loads are bounded, serialized, and never open after backgrounding
   assert.match(ui, /pendingRewardLoad/);
 });
 
+test('closed-track demo ads cannot be blocked by an unconfigured production consent form', () => {
+  assert.match(ads, /await AdMob\.initialize\(\{ initializeForTesting: AD_CONFIG\.TESTING \}\);\s*\/\/[^]*?if \(AD_CONFIG\.TESTING\) return;\s*let consent = await AdMob\.requestConsentInfo\(\)/);
+});
+
 test('a consumed test reward is refilled while the UI retains its five-second guard', () => {
   assert.match(ads, /Rewarded ads are single-use/);
   assert.match(ads, /void this\.warmup\(\)\.catch/);
   assert.match(ui, /const waitMs = 5000 - \(now - this\.lastAdStartedAt\)/);
   assert.match(ui, /if \(this\.adInProgress\)/);
   assert.match(ui, /class="ad-loading-spinner"/);
+});
+
+test('reward settlement tolerates native dismissal arriving before the reward callback', () => {
+  assert.match(ads, /const markRewarded = \(\) =>/);
+  assert.match(ads, /if \(dismissed\) done\(true\)/);
+  assert.match(ads, /dismissGrace = window\.setTimeout\(\(\) => done\(false\), 2_000\)/);
+  assert.match(ads, /RewardAdPluginEvents\.Rewarded, markRewarded/);
+  assert.match(ads, /return AdMob\.showRewardVideoAd\(\);\s*\}\)\.then\(\(\) => \{[^]*?markRewarded\(\)/);
+  assert.doesNotMatch(ads, /RewardAdPluginEvents\.Dismissed, \(\) => done\(rewarded\)/);
 });
 
 test('forced interstitials use exactly 6.28 foreground minutes and only an opponent break', () => {
