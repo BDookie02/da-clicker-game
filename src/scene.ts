@@ -244,6 +244,19 @@ export class GameScene {
   streetSwipe(dx: number, dy: number) { this.tapLook(dx, dy); }
   resetLook() { this.resetTapLook(); }
 
+  /** End manual free-look and face the live rival immediately. Used when the
+   *  car reaches a red light so the eye-contact gate is already satisfied
+   *  before gameplay input is re-enabled. */
+  focusOpponentNow() {
+    this.freeLook = false;
+    this.gaze = 'opponent';
+    this.camera.lookAt(new THREE.Vector3(
+      this.opponentAnchor.position.x - 0.45,
+      this.spritePos.y + 0.05,
+      this.opponentAnchor.position.z - this.spritePos.z,
+    ));
+  }
+
   constructor(canvas: HTMLCanvasElement) {
     // preserveDrawingBuffer lets us grab devlog screenshots off the canvas
     this.renderer = new THREE.WebGLRenderer({
@@ -2093,6 +2106,8 @@ export class GameScene {
     this.driveT = 0;
     this.driveS = 0;
     this.onDriveDone = onDone;
+    // A previous player swipe must not override the automatic road view.
+    this.resetTapLook();
     this.gaze = 'road'; // eyes back on the road until the next red light
     this.setLight('green');
     // stage the next rival at the next intersection down the road

@@ -291,6 +291,8 @@ game.on((e) => {
         scene.setOpponent(game.opponent);
         scene.setShakeAmp(game.shakeAmp);
         applyCosmetics();
+        // Restore exact eye contact before taps are accepted at the new light.
+        scene.focusOpponentNow();
         if (game.s.opponentIndex % 10 === 0 && game.s.opponentIndex > 0) {
           ui.toast(`NEW DISTRICT: ${getDistrict(game.s.opponentIndex).name}`, 'gold');
         }
@@ -540,6 +542,12 @@ shopArrow.className = 'garage-arrow';
 shopArrow.textContent = '▼';
 shopArrow.hidden = true;
 document.body.appendChild(shopArrow);
+// Match the garage laptop cue, but point upward from beneath the HUD control.
+const eyeContactArrow = document.createElement('div');
+eyeContactArrow.className = 'garage-arrow eye-contact-arrow';
+eyeContactArrow.textContent = '▲';
+eyeContactArrow.hidden = true;
+document.body.appendChild(eyeContactArrow);
 function updateShopArrow() {
   const p = scene.garageLaptopScreen();
   const shopOpen = ui.isPanelOpen && !document.querySelector('.panel.collapsed');
@@ -553,6 +561,23 @@ function updateShopArrow() {
   requestAnimationFrame(updateShopArrow);
 }
 requestAnimationFrame(updateShopArrow);
+function updateEyeContactArrow() {
+  const shouldShow = gameplayEngaged
+    && !scene.inGarage
+    && !transitioning
+    && !ui.isPanelOpen
+    && !tutorial.isActive
+    && !scene.isMakingEyeContact();
+  const eyeButton = document.getElementById('btn-eye');
+  if (shouldShow && eyeButton) {
+    const rect = eyeButton.getBoundingClientRect();
+    eyeContactArrow.style.left = `${rect.left + rect.width / 2}px`;
+    eyeContactArrow.style.top = `${rect.bottom + 4}px`;
+    eyeContactArrow.hidden = false;
+  } else {
+    eyeContactArrow.hidden = true;
+  }
+}
 window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', cancelPointer);
 // mouse wheel = zoom on desktop
@@ -585,6 +610,7 @@ function frame(now: number) {
     // replace its callback and desynchronize the opponent state from the scene.
     if (!transitioning) game.tick(dt);
   scene.render(dt);
+  updateEyeContactArrow();
   uiAccum += dt;
   if (uiAccum > 0.2) {
     uiAccum = 0;

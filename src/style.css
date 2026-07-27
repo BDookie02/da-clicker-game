@@ -292,6 +292,7 @@ body.in-garage .quick-buy { display: none; }
   pointer-events: none;
   animation: arrowbob 0.7s ease-in-out infinite alternate;
 }
+.eye-contact-arrow { line-height: 1; }
 @keyframes arrowbob { from { margin-top: -8px; } to { margin-top: 8px; } }
 /* M store */
 .ad-box.mshop {
