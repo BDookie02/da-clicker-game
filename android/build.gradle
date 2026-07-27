@@ -22,6 +22,17 @@ allprojects {
         google()
         mavenCentral()
     }
+
+    // Some upstream Capacitor plugins declare dynamic Google dependency
+    // versions. Force the versions validated by this source revision so a
+    // later Maven publication cannot silently change a release build.
+    configurations.configureEach {
+        resolutionStrategy {
+            force 'com.google.android.gms:play-services-ads:24.9.0'
+            force 'com.google.android.gms:play-services-games-v2:21.0.0'
+            force 'com.android.billingclient:billing:8.3.0'
+        }
+    }
 }
 
 task clean(type: Delete) {

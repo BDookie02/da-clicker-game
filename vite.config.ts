@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from 'vite';
+import legacy from '@vitejs/plugin-legacy';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -30,7 +31,12 @@ function devlogSaver(): Plugin {
 // base './' so the built app works inside a Capacitor webview or any static host
 export default defineConfig({
   base: './',
-  build: { target: 'es2022' },
   server: { host: true },
-  plugins: [devlogSaver()],
+  plugins: [
+    devlogSaver(),
+    // Android 10 is the supported floor. Keep the legacy bundle aligned with
+    // its factory-era Chrome 74 WebView so the packaged app remains resilient
+    // when a device has not yet updated Android System WebView.
+    legacy({ targets: ['Chrome >= 74'] }),
+  ],
 });

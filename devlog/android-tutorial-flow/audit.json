@@ -1,0 +1,226 @@
+[
+  {
+    "index": 1,
+    "step": "QUICK START 1/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": false,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 2,
+    "step": "QUICK START 2/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": false,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 3,
+    "step": "QUICK START 3/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": true,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 4,
+    "step": "QUICK START 4/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": false,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 5,
+    "step": "QUICK START 5/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": true,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 6,
+    "step": "QUICK START 6/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": false,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 7,
+    "step": "QUICK START 7/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": true,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 8,
+    "step": "QUICK START 8/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": false,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 9,
+    "step": "QUICK START 9/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": true,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 10,
+    "step": "QUICK START 10/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": false,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 11,
+    "step": "QUICK START 11/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": true,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 12,
+    "step": "QUICK START 12/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": false,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "index": 13,
+    "step": "QUICK START 13/13",
+    "missing": false,
+    "outside": [],
+    "focusOverlap": false,
+    "skipBubbleOverlap": false,
+    "controlOverlap": [],
+    "clipped": [],
+    "blockedTarget": false,
+    "panelOpen": false,
+    "hasNext": true,
+    "viewport": [
+      412,
+      660
+    ]
+  },
+  {
+    "completed": true
+  }
+]

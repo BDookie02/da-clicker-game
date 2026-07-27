@@ -4,6 +4,8 @@ class Sfx {
   private ctx: AudioContext | null = null;
   private yelpBuffer: Promise<AudioBuffer> | null = null;
   private yelpDecoded: AudioBuffer | null = null;
+  private appActive = !document.hidden;
+  private activeSources = new Set<AudioScheduledSourceNode>();
   // Start the request while the title screen is up. Decoding happens on the
   // first user gesture, so a defeat never waits on network or decoding work.
   private readonly yelpBytes = fetch('/sfx/opponent-yelp.wav?v=instant')
@@ -12,17 +14,51 @@ class Sfx {
       return response.arrayBuffer();
     });
   muted = localStorage.getItem('discipline-muted') === '1';
+  volume = Number(localStorage.getItem('discipline-sfx-volume') ?? '1');
+
+  setVolume(value: number) {
+    this.volume = Math.max(0, Math.min(1, value));
+    localStorage.setItem('discipline-sfx-volume', String(this.volume));
+    if (this.volume > 0 && this.appActive && !this.muted && this.ctx?.state === 'suspended')
+      void this.ctx.resume();
+  }
 
   toggleMute(): boolean {
     this.muted = !this.muted;
     localStorage.setItem('discipline-muted', this.muted ? '1' : '0');
     music.setMuted(this.muted);
+    if (!this.muted && this.appActive && this.volume > 0 && this.ctx?.state === 'suspended')
+      void this.ctx.resume();
     return this.muted;
+  }
+
+  setAppActive(active: boolean) {
+    this.appActive = active;
+    if (!active) {
+      // Short effects must not resume halfway through after the phone unlocks.
+      for (const source of this.activeSources) {
+        try { source.stop(); } catch { /* already stopped */ }
+      }
+      this.activeSources.clear();
+      if (this.ctx?.state === 'running') void this.ctx.suspend();
+      return;
+    }
+    if (!this.muted && this.volume > 0 && this.ctx?.state === 'suspended')
+      void this.ctx.resume();
+  }
+
+  private canPlay() { return this.appActive && !this.muted && this.volume > 0; }
+
+  private track<T extends AudioScheduledSourceNode>(source: T): T {
+    this.activeSources.add(source);
+    source.addEventListener('ended', () => this.activeSources.delete(source), { once: true });
+    return source;
   }
 
   private ac(): AudioContext {
     if (!this.ctx) this.ctx = new AudioContext();
-    if (this.ctx.state === 'suspended') void this.ctx.resume();
+    if (this.appActive && !this.muted && this.volume > 0 && this.ctx.state === 'suspended')
+      void this.ctx.resume();
     return this.ctx;
   }
 
@@ -37,15 +73,15 @@ class Sfx {
   }
 
   private blip(freq: number, dur: number, type: OscillatorType = 'square', vol = 0.08, slide = 0) {
-    if (this.muted) return;
+    if (!this.canPlay()) return;
     try {
       const ctx = this.ac();
-      const o = ctx.createOscillator();
+      const o = this.track(ctx.createOscillator());
       const g = ctx.createGain();
       o.type = type;
       o.frequency.value = freq;
       if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), ctx.currentTime + dur);
-      g.gain.setValueAtTime(vol, ctx.currentTime);
+      g.gain.setValueAtTime(vol * this.volume, ctx.currentTime);
       g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
       o.connect(g).connect(ctx.destination);
       o.start();
@@ -54,16 +90,16 @@ class Sfx {
   }
 
   private noise(dur: number, vol = 0.15) {
-    if (this.muted) return;
+    if (!this.canPlay()) return;
     try {
       const ctx = this.ac();
       const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
       const d = buf.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-      const src = ctx.createBufferSource();
+      const src = this.track(ctx.createBufferSource());
       src.buffer = buf;
       const g = ctx.createGain();
-      g.gain.value = vol;
+      g.gain.value = vol * this.volume;
       const f = ctx.createBiquadFilter();
       f.type = 'lowpass';
       f.frequency.value = 900;
@@ -90,17 +126,17 @@ class Sfx {
   }
   /** Opponent defeat yelp: starts synchronously when the decoded buffer is ready. */
   yelp() {
-    if (this.muted) return;
+    if (!this.canPlay()) return;
     try {
       const ctx = this.ac();
       const play = (buffer: AudioBuffer) => {
-        if (this.muted) return;
-        const src = ctx.createBufferSource();
+        if (!this.canPlay()) return;
+        const src = this.track(ctx.createBufferSource());
         const gain = ctx.createGain();
         const semitones = -6 + Math.random() * 12;
         src.buffer = buffer;
         src.playbackRate.value = Math.pow(2, semitones / 12);
-        gain.gain.value = 0.68;
+        gain.gain.value = 0.68 * this.volume;
         src.connect(gain).connect(ctx.destination);
         src.start(ctx.currentTime);
       };
@@ -147,13 +183,23 @@ class MusicDirector {
   private targetTrack = -1;
   private targetBpm: MusicBpm = 77;
   private readonly baseVolume = 0.55;
+  private userVolume = Number(localStorage.getItem('discipline-music-volume') ?? '1');
+  private appActive = !document.hidden;
+
+  setVolume(value: number) {
+    this.userVolume = Math.max(0, Math.min(1, value));
+    localStorage.setItem('discipline-music-volume', String(this.userVolume));
+    this.applyVolume();
+    if (this.userVolume > 0) this.resumeIfAllowed();
+    else if (this.ctx?.state === 'running') void this.ctx.suspend();
+  }
 
   engage(opponentIndex: number, progress: number) {
     this.engaged = true;
     this.opponentIndex = opponentIndex;
     this.progress = progress;
     const ctx = this.audioContext();
-    void ctx.resume();
+    this.resumeIfAllowed();
     this.warmBattle(opponentIndex);
     this.start(this.battleTrack(opponentIndex), this.bpmForProgress(progress), true);
   }
@@ -191,8 +237,32 @@ class MusicDirector {
 
   setMenuOpen(open: boolean) { this.ducked = open; this.applyVolume(); }
   pauseForAd() { this.adPauseDepth += 1; if (this.ctx?.state === 'running') void this.ctx.suspend(); }
-  resumeAfterAd() { this.adPauseDepth = Math.max(0, this.adPauseDepth - 1); if (this.adPauseDepth === 0 && this.engaged) void this.audioContext().resume(); }
-  setMuted(muted: boolean) { this.muted = muted; this.applyVolume(); }
+  resumeAfterAd() { this.adPauseDepth = Math.max(0, this.adPauseDepth - 1); this.resumeIfAllowed(); }
+  setMuted(muted: boolean) {
+    this.muted = muted;
+    this.applyVolume();
+    if (muted) {
+      if (this.ctx?.state === 'running') void this.ctx.suspend();
+    } else {
+      this.resumeIfAllowed();
+    }
+  }
+
+  setAppActive(active: boolean) {
+    this.appActive = active;
+    this.applyVolume();
+    if (!active) {
+      if (this.ctx?.state === 'running') void this.ctx.suspend();
+    } else {
+      this.resumeIfAllowed();
+    }
+  }
+
+  private resumeIfAllowed() {
+    if (!this.ctx || !this.engaged || !this.appActive || this.adPauseDepth > 0 || this.muted || this.userVolume <= 0)
+      return;
+    if (this.ctx.state === 'suspended') void this.ctx.resume();
+  }
 
   private audioContext() {
     if (this.ctx && this.master) return this.ctx;
@@ -259,7 +329,7 @@ class MusicDirector {
       previous.source.stop(now + 0.08);
     }
     this.warmBattle(this.opponentIndex);
-    if (this.adPauseDepth === 0) void ctx.resume();
+    this.resumeIfAllowed();
   }
 
   private bpmForProgress(progress: number): MusicBpm {
@@ -270,7 +340,9 @@ class MusicDirector {
   private battleTrack(index: number) { return ((index % MUSIC_TRACKS.length) + MUSIC_TRACKS.length) % MUSIC_TRACKS.length; }
   private applyVolume() {
     if (!this.ctx || !this.master) return;
-    const volume = this.muted ? 0 : this.baseVolume * (this.ducked ? 0.5 : 1);
+    const volume = this.muted || !this.appActive
+      ? 0
+      : this.baseVolume * this.userVolume * (this.ducked ? 0.5 : 1);
     this.master.gain.setTargetAtTime(volume, this.ctx.currentTime, 0.02);
   }
 }

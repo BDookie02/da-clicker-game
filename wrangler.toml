@@ -2,7 +2,19 @@ name = "discipline-api"
 main = "server/worker.js"
 compatibility_date = "2026-07-01"
 
+[triggers]
+crons = ["17 * * * *"]
+
+[vars]
+ADMOB_REWARDED_AD_UNIT_ID = "6776690128"
+LEGAL_PUBLISHER_NAME = "Nomogames"
+LEGAL_CONTACT_EMAIL = "co.nosiah@gmail.com"
+LEGAL_EFFECTIVE_DATE = "2026-07-26"
+LEGAL_RETENTION_NOTICE = "A successful account deletion removes account-linked records from the live D1 database, and the application does not create a separate archive. Cloudflare D1 Time Travel may retain recoverable database history for 7 days on the Free plan or 30 days on a Paid plan. Workers Logs, if enabled, are retained for 3 days on Free or 7 days on Paid. Cloudflare may also retain limited security or network data under its own privacy policy and legal obligations."
+LEGAL_TARGET_AUDIENCE_NOTICE = "DISCIPLINE. is intended for players age 13 and older and is not directed to children under 13. The game does not ask for a birth date or independently verify age. Players under 13 should not create a DISCIPLINE. account or use its online community features. A parent or guardian who believes a child under 13 created an account may use the account-deletion page or contact the privacy address below."
+
 [[d1_databases]]
 binding = "DB"
 database_name = "discipline-db"
-database_id = "PASTE_ID_FROM_wrangler_d1_create"
+database_id = "58d64196-499f-42ba-bd7e-a688b8bf64a4"
+migrations_dir = "server/migrations"
