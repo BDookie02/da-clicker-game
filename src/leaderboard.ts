@@ -44,27 +44,51 @@ class GameConnectLeaderboard implements LeaderboardProvider {
 
   constructor(private plugin: any, isIOS: boolean) {
     this.platform = isIOS ? 'gamecenter' : 'playgames';
+    this.signedIn = this.hasRememberedSession();
+  }
+
+  private get sessionKey() {
+    return `discipline-platform-session-v1:${this.platform}`;
+  }
+
+  private hasRememberedSession() {
+    try { return localStorage.getItem(this.sessionKey) !== null; }
+    catch { return false; }
+  }
+
+  private rememberSession() {
+    try { localStorage.setItem(this.sessionKey, 'signed-in'); }
+    catch { /* WebView storage unavailable */ }
+  }
+
+  private forgetSession() {
+    try { localStorage.removeItem(this.sessionKey); }
+    catch { /* WebView storage unavailable */ }
   }
 
   private get boardId() { return this.platform === 'gamecenter' ? BOARD.ios : BOARD.android; }
 
   async signIn(): Promise<boolean> {
-    try { await this.plugin.signIn(); this.signedIn = true; }
-    catch { this.signedIn = false; }
+    try {
+      await this.plugin.signIn();
+      this.signedIn = true;
+      this.rememberSession();
+    } catch {
+      this.signedIn = false;
+      this.forgetSession();
+    }
     return this.signedIn;
   }
 
   async submit(taps: number) {
-    if (!this.boardId) return;
-    if (!this.signedIn && !(await this.signIn())) return;
+    if (!this.boardId || !this.signedIn) return;
     try {
       await this.plugin.submitScore({ leaderboardID: this.boardId, totalScoreAmount: Math.floor(taps) });
     } catch { /* offline / not configured — resubmits on next defeat */ }
   }
 
   async show() {
-    if (!this.boardId) return;
-    if (!this.signedIn && !(await this.signIn())) return;
+    if (!this.boardId || !this.signedIn) return;
     try { await this.plugin.showLeaderboard({ leaderboardID: this.boardId }); } catch { /* ignore */ }
   }
 }
