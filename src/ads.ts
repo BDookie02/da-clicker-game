@@ -61,7 +61,7 @@ export const AD_CONFIG = {
 // These bounds stop a bad connection or a wedged SDK callback from leaving the
 // loading overlay on screen indefinitely. A late load remains cached, so the
 // player's next attempt can still use it immediately.
-const AD_LOAD_TIMEOUT_MS = 60_000;
+const AD_LOAD_TIMEOUT_MS = 15_000;
 const AD_SHOW_TIMEOUT_MS = 120_000;
 const AD_CACHE_MAX_AGE_MS = 50 * 60_000;
 
@@ -210,6 +210,10 @@ class AdMobAdProvider implements AdProvider {
       await deadline(this.prepareInterstitial(), AD_LOAD_TIMEOUT_MS, 'Interstitial ad preload');
       return this.isInterstitialPrepared();
     } catch (error) {
+      if (error instanceof AdDeadlineError) {
+        if (this.interstitialPreparing) this.interstitialPreparing = null;
+        else this.initPromise = null;
+      }
       this.reportFailure('interstitial preload failed', error);
       return false;
     }
@@ -218,7 +222,12 @@ class AdMobAdProvider implements AdProvider {
   /** Starts Mobile Ads/UMP immediately and keeps reusable inventory warm. */
   async warmup(): Promise<void> {
     if (document.hidden || this.showInProgress) return;
-    await deadline(this.init(), AD_LOAD_TIMEOUT_MS, 'AdMob initialization');
+    try {
+      await deadline(this.init(), AD_LOAD_TIMEOUT_MS, 'AdMob initialization');
+    } catch (error) {
+      if (error instanceof AdDeadlineError) this.initPromise = null;
+      throw error;
+    }
     const loads: Promise<unknown>[] = [this.preloadInterstitial()];
     // Production SSV data is unique to a signed-in reward intent, so only a
     // public test rewarded ad can be loaded before the player requests it.
@@ -292,8 +301,8 @@ class AdMobAdProvider implements AdProvider {
     if (this.showInProgress) return { rewarded: false, watchedSeconds: 0 };
     this.showInProgress = true;
     const requestedInEpoch = this.backgroundEpoch;
+    const key = this.preparationKey(verification);
     try {
-      const key = this.preparationKey(verification);
       await deadline(this.prepare(verification), AD_LOAD_TIMEOUT_MS, 'Rewarded ad load');
       // Never launch a full-screen ad after the player left or locked the app.
       // The completed load remains cached for the next explicit attempt.
@@ -303,6 +312,10 @@ class AdMobAdProvider implements AdProvider {
       this.preparedAt = 0;
       return await this.present();
     } catch (error) {
+      if (error instanceof AdDeadlineError) {
+        if (this.preparing?.key === key) this.preparing = null;
+        else this.initPromise = null;
+      }
       this.reportFailure('rewarded load/show failed', error);
       return {
         rewarded: false,

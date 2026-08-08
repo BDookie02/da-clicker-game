@@ -5,6 +5,7 @@ import fs from 'node:fs';
 const ads = fs.readFileSync(new URL('../src/ads.ts', import.meta.url), 'utf8');
 const ui = fs.readFileSync(new URL('../src/ui.ts', import.meta.url), 'utf8');
 const main = fs.readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+const style = fs.readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
 
 test('native ad inventory initializes and preloads away from the user tap path', () => {
   assert.match(ads, /void nativeProvider\.warmup\(\)\.catch/);
@@ -15,13 +16,18 @@ test('native ad inventory initializes and preloads away from the user tap path',
 });
 
 test('rewarded loads are bounded, serialized, and never open after backgrounding', () => {
-  assert.match(ads, /const AD_LOAD_TIMEOUT_MS = 60_000/);
+  assert.match(ads, /const AD_LOAD_TIMEOUT_MS = 15_000/);
   assert.match(ads, /private showInProgress = false/);
   assert.match(ads, /if \(this\.showInProgress\) return \{ rewarded: false, watchedSeconds: 0 \}/);
   assert.match(ads, /requestedInEpoch !== this\.backgroundEpoch/);
   assert.match(ads, /const AD_SHOW_TIMEOUT_MS = 120_000/);
   assert.match(ads, /retryable: error instanceof AdDeadlineError/);
+  assert.match(ads, /if \(this\.preparing\?\.key === key\) this\.preparing = null;\s*else this\.initPromise = null/);
+  assert.match(ads, /if \(this\.interstitialPreparing\) this\.interstitialPreparing = null;\s*else this\.initPromise = null/);
   assert.match(ui, /pendingRewardLoad/);
+  assert.match(ui, /A VPN or ad blocker may be blocking ads; disable it and retry/);
+  assert.match(style, /\.toasts\s*\{[^}]*z-index:\s*90/);
+  assert.match(ui, /document\.body\.appendChild\(document\.getElementById\('toasts'\)!\)/);
 });
 
 test('closed-track demo ads cannot be blocked by an unconfigured production consent form', () => {

@@ -13,6 +13,10 @@ $gradleDistributionSha256 = 'ED1A8D686605FD7C23BDF62C7FC7ADD1C5B23B2BBC3721E6619
 $closedAlphaRewardedId = 'ca-app-pub-3940256099942544/5224354917'
 $closedAlphaInterstitialId = 'ca-app-pub-3940256099942544/1033173712'
 
+if ($ClosedAlphaWithGoogleDemoAds) {
+    throw 'Google demo ad units cannot be uploaded to a Play track: they cannot credit the production SSV reward ledger. Use the default production-ad release path.'
+}
+
 if (-not (Test-Path -LiteralPath $javaHome)) {
     throw "Android Studio Java runtime was not found at $javaHome"
 }

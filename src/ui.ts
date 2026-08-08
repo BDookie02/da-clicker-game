@@ -91,6 +91,7 @@ export class UI {
       </div>
       <div class="toasts" id="toasts"></div>
       <div class="fade" id="fade"></div>`;
+    document.body.appendChild(document.getElementById('toasts')!);
     this.fade = document.getElementById('fade')!;
     // Reserve the space the rendered HUD/navigation actually consume. This
     // updates after wrapping, text scaling, rotation, and split-screen resize.
@@ -329,6 +330,10 @@ export class UI {
         if (this.pendingRewardLoad?.verification.nonce === verification?.nonce)
           this.pendingRewardLoad = null;
         throw error;
+      }
+      if (!result.rewarded && result.retryable) {
+        this.toast('Ad network did not respond. A VPN or ad blocker may be blocking ads; disable it and retry.');
+        return null;
       }
       if (!productionNative || !verification) return result;
       if (!result.rewarded) {

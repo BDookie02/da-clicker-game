@@ -19,7 +19,7 @@
     "release:bundle-check": "node scripts/release-check.mjs --bundle",
     "release:local-check": "node scripts/release-check.mjs --local",
     "release:play": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-play-release.ps1",
-    "release:play:closed-alpha": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-play-release.ps1 -ClosedAlphaWithGoogleDemoAds",
+    "release:play:closed-alpha": "npm run release:play",
     "preview": "vite preview",
     "assemble:cosmetics": "node scripts/assemble-cosmetics.mjs",
     "assemble:blockbench": "node scripts/blockbench-assembly.mjs",
