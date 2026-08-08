@@ -110,6 +110,24 @@ test('requires signed AdMob fields followed by terminal signature and key ID', (
   assert.equal(parseAdmobSignedQuery(`${signed}&key_id=3335741209&signature=MEUCIQ`), null);
 });
 
+test('accepts AdMob callback tester payloads that omit optional user and custom data', () => {
+  const signed = [
+    'ad_network=5450213213286189855',
+    'ad_unit=1234567890',
+    'reward_amount=1',
+    'reward_item=completed_ad',
+    'timestamp=1785046013637',
+    'transaction_id=123456789',
+  ].join('&');
+  const query = `${signed}&signature=MEUCIQ&key_id=3335741209`;
+  const parsed = parseAdmobSignedQuery(query);
+  assert.ok(parsed);
+  assert.equal(parsed.signedContent, signed);
+  assert.equal(parsed.params.has('custom_data'), false);
+  assert.equal(parsed.params.has('user_id'), false);
+  assert.equal(parseAdmobSignedQuery(`${signed}&user_id=one&user_id=two&signature=MEUCIQ&key_id=3335741209`), null);
+});
+
 test('reward status is authenticated and scoped to exact account, nonce, and kind', async () => {
   const db = new MockDb();
   const nonce = '123e4567-e89b-12d3-a456-426614174000';

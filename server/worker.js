@@ -148,10 +148,12 @@ export function parseAdmobSignedQuery(rawQuery) {
 
   const params = new URLSearchParams(rawQuery);
   const requiredOnce = [
-    'ad_network', 'ad_unit', 'custom_data', 'reward_amount', 'reward_item',
-    'timestamp', 'transaction_id', 'user_id', 'signature', 'key_id',
+    'ad_network', 'ad_unit', 'reward_amount', 'reward_item',
+    'timestamp', 'transaction_id', 'signature', 'key_id',
   ];
-  if (requiredOnce.some((name) => params.getAll(name).length !== 1)) return null;
+  const optionalAtMostOnce = ['custom_data', 'user_id'];
+  if (requiredOnce.some((name) => params.getAll(name).length !== 1)
+      || optionalAtMostOnce.some((name) => params.getAll(name).length > 1)) return null;
   return {
     signedContent: rawQuery.slice(0, signatureAt),
     signature,
