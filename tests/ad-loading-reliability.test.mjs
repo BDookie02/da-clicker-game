@@ -16,16 +16,21 @@ test('native ad inventory initializes and preloads away from the user tap path',
 });
 
 test('rewarded loads are bounded, serialized, and never open after backgrounding', () => {
-  assert.match(ads, /const AD_LOAD_TIMEOUT_MS = 15_000/);
+  assert.match(ads, /const AD_LOAD_TIMEOUT_MS = 30_000/);
+  assert.match(ads, /const AD_RETRY_DELAY_MS = 1_500/);
   assert.match(ads, /private showInProgress = false/);
   assert.match(ads, /if \(this\.showInProgress\) return \{ rewarded: false, watchedSeconds: 0 \}/);
   assert.match(ads, /requestedInEpoch !== this\.backgroundEpoch/);
   assert.match(ads, /const AD_SHOW_TIMEOUT_MS = 120_000/);
   assert.match(ads, /retryable: error instanceof AdDeadlineError/);
+  assert.match(ads, /\[0, 2, 3, 9\]\.includes\(error\.code\)/);
+  assert.match(ads, /error instanceof AdConfigurationError \|\| error instanceof AdConsentRequiredError/);
+  assert.match(ads, /deadline\(this\.prepareRewardedWithRetry\(verification\)/);
+  assert.match(ads, /await delay\(AD_RETRY_DELAY_MS\);\s*await this\.prepare\(verification\)/);
   assert.match(ads, /if \(this\.preparing\?\.key === key\) this\.preparing = null;\s*else this\.initPromise = null/);
   assert.match(ads, /if \(this\.interstitialPreparing\) this\.interstitialPreparing = null;\s*else this\.initPromise = null/);
   assert.match(ui, /pendingRewardLoad/);
-  assert.match(ui, /A VPN or ad blocker may be blocking ads; disable it and retry/);
+  assert.match(ui, /Ad inventory did not respond\. Check the connection or VPN, then retry in a moment/);
   assert.match(style, /\.toasts\s*\{[^}]*z-index:\s*90/);
   assert.match(ui, /document\.body\.appendChild\(document\.getElementById\('toasts'\)!\)/);
 });

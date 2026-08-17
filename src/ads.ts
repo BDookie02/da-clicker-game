@@ -61,11 +61,29 @@ export const AD_CONFIG = {
 // These bounds stop a bad connection or a wedged SDK callback from leaving the
 // loading overlay on screen indefinitely. A late load remains cached, so the
 // player's next attempt can still use it immediately.
-const AD_LOAD_TIMEOUT_MS = 15_000;
+const AD_LOAD_TIMEOUT_MS = 30_000;
 const AD_SHOW_TIMEOUT_MS = 120_000;
 const AD_CACHE_MAX_AGE_MS = 50 * 60_000;
+const AD_RETRY_DELAY_MS = 1_500;
 
 class AdDeadlineError extends Error {}
+class AdConfigurationError extends Error {}
+class AdConsentRequiredError extends Error {}
+class AdLoadFailure extends Error {
+  constructor(readonly code: number, message: string) {
+    super(message);
+  }
+}
+
+function isRetryablePreparationFailure(error: unknown): boolean {
+  if (error instanceof AdConfigurationError || error instanceof AdConsentRequiredError)
+    return false;
+  return !(error instanceof AdLoadFailure) || [0, 2, 3, 9].includes(error.code);
+}
+
+function delay(timeoutMs: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, timeoutMs));
+}
 
 function deadline<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -122,7 +140,7 @@ class AdMobAdProvider implements AdProvider {
       let consent = await AdMob.requestConsentInfo();
       if (!consent.canRequestAds && consent.isConsentFormAvailable)
         consent = await AdMob.showConsentForm();
-      if (!consent.canRequestAds) throw new Error('Ad consent is required');
+      if (!consent.canRequestAds) throw new AdConsentRequiredError('Ad consent is required');
     })().catch((error) => {
       // Initialization failures (including temporary network trouble) must be
       // retryable on the next foreground or button press.
@@ -146,7 +164,8 @@ class AdMobAdProvider implements AdProvider {
   private async prepare(verification?: AdVerification): Promise<void> {
     await this.init();
     const adId = this.unitId();
-    if (!AD_CONFIG.TESTING && !adId) throw new Error('Missing production AdMob rewarded unit ID');
+    if (!AD_CONFIG.TESTING && !adId)
+      throw new AdConfigurationError('Missing production AdMob rewarded unit ID');
     const key = this.preparationKey(verification);
     if (this.isPrepared(key)) return;
 
@@ -156,14 +175,7 @@ class AdMobAdProvider implements AdProvider {
       if (this.isPrepared(key)) return;
     }
 
-    const load = AdMob.prepareRewardVideoAd({
-      adId,
-      isTesting: AD_CONFIG.TESTING,
-      ...(verification ? { ssv: {
-        userId: verification.userId,
-        customData: verification.customData,
-      } } : {}),
-    }).then(() => {
+    const load = this.loadRewarded(adId, verification).then(() => {
       this.preparedKey = key;
       this.preparedAt = Date.now();
     });
@@ -176,6 +188,43 @@ class AdMobAdProvider implements AdProvider {
     return load;
   }
 
+  private async loadRewarded(adId: string, verification?: AdVerification): Promise<void> {
+    const failure = { current: null as { code: number; message: string } | null };
+    const listener = await AdMob.addListener(RewardAdPluginEvents.FailedToLoad, (error) => {
+      failure.current = error;
+    });
+    try {
+      await AdMob.prepareRewardVideoAd({
+        adId,
+        isTesting: AD_CONFIG.TESTING,
+        ...(verification ? { ssv: {
+          userId: verification.userId,
+          customData: verification.customData,
+        } } : {}),
+      });
+    } catch (error) {
+      // The native failure event and rejected bridge call are emitted together.
+      // Let the event cross the bridge so transient no-fill/network failures can
+      // be distinguished from permanent configuration errors.
+      await delay(0);
+      if (failure.current)
+        throw new AdLoadFailure(failure.current.code, failure.current.message);
+      throw error;
+    } finally {
+      await listener.remove();
+    }
+  }
+
+  private async prepareRewardedWithRetry(verification?: AdVerification): Promise<void> {
+    try {
+      await this.prepare(verification);
+    } catch (error) {
+      if (!isRetryablePreparationFailure(error)) throw error;
+      await delay(AD_RETRY_DELAY_MS);
+      await this.prepare(verification);
+    }
+  }
+
   private isInterstitialPrepared(): boolean {
     return this.interstitialPreparedAt > 0
       && Date.now() - this.interstitialPreparedAt < AD_CACHE_MAX_AGE_MS;
@@ -185,7 +234,7 @@ class AdMobAdProvider implements AdProvider {
     await this.init();
     const adId = this.interstitialUnitId();
     if (!AD_CONFIG.TESTING && !adId)
-      throw new Error('Missing production AdMob interstitial unit ID');
+      throw new AdConfigurationError('Missing production AdMob interstitial unit ID');
     if (this.isInterstitialPrepared()) return;
     if (this.interstitialPreparing) return this.interstitialPreparing;
 
@@ -303,7 +352,7 @@ class AdMobAdProvider implements AdProvider {
     const requestedInEpoch = this.backgroundEpoch;
     const key = this.preparationKey(verification);
     try {
-      await deadline(this.prepare(verification), AD_LOAD_TIMEOUT_MS, 'Rewarded ad load');
+      await deadline(this.prepareRewardedWithRetry(verification), AD_LOAD_TIMEOUT_MS, 'Rewarded ad load');
       // Never launch a full-screen ad after the player left or locked the app.
       // The completed load remains cached for the next explicit attempt.
       if (document.hidden || requestedInEpoch !== this.backgroundEpoch || !this.isPrepared(key))
@@ -320,7 +369,7 @@ class AdMobAdProvider implements AdProvider {
       return {
         rewarded: false,
         watchedSeconds: 0,
-        retryable: error instanceof AdDeadlineError,
+        retryable: error instanceof AdDeadlineError || isRetryablePreparationFailure(error),
       };
     } finally {
       this.showInProgress = false;

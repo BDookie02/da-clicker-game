@@ -332,7 +332,7 @@ export class UI {
         throw error;
       }
       if (!result.rewarded && result.retryable) {
-        this.toast('Ad network did not respond. A VPN or ad blocker may be blocking ads; disable it and retry.');
+        this.toast('Ad inventory did not respond. Check the connection or VPN, then retry in a moment.');
         return null;
       }
       if (!productionNative || !verification) return result;
