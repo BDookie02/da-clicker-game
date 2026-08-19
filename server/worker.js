@@ -611,6 +611,9 @@ async function deleteAccount(env, account) {
       WHERE reporter_account_id=? OR reported_account_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM account_blocks
       WHERE blocker_account_id=? OR blocked_account_id=?`).bind(account.id, account.id),
+    env.DB.prepare(`DELETE FROM referral_claims
+      WHERE referred_account_id=? OR referrer_account_id=?`).bind(account.id, account.id),
+    env.DB.prepare('DELETE FROM referral_codes WHERE account_id=?').bind(account.id),
     env.DB.prepare(`DELETE FROM purchase_consumptions
       WHERE EXISTS (
         SELECT 1 FROM purchases p
