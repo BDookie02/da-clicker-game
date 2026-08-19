@@ -54,6 +54,7 @@ export class UI {
   private readonly layoutObserver: ResizeObserver;
   private lastPanelRenderAt = 0;
   private referral: ReferralStatus | null = null;
+  private referralAccountId = '';
   private referralLoading = false;
 
   lb: LeaderboardProvider | null = null;
@@ -1230,6 +1231,7 @@ export class UI {
           <div class="cheat-entry"><input class="cheat-code" type="password" autocomplete="off" spellcheck="false" placeholder="ENTER OWNER CODE"><button class="cheat-submit">UNLOCK</button></div>
         </details>`);
       if (this.account?.signedIn) {
+        if (this.referralAccountId !== this.account.accountId) this.referral = null;
         if (!this.referral && !this.referralLoading) void this.loadReferralStatus();
         const referral = this.referral;
         rows.push(`<section class="referral-card" aria-label="Friend referral reward">
@@ -1391,9 +1393,13 @@ export class UI {
 
   private async loadReferralStatus(force = false) {
     if (!this.account?.signedIn || this.referralLoading || (this.referral && !force)) return;
+    const accountId = this.account.accountId;
     this.referralLoading = true;
     try {
-      this.referral = await this.account.referralStatus();
+      const referral = await this.account.referralStatus();
+      if (this.account.accountId !== accountId) return;
+      this.referral = referral;
+      this.referralAccountId = accountId;
       if (this.referral.unlocked && !this.game.s.referralDanglerUnlocked) {
         this.game.s.referralDanglerUnlocked = true;
         this.game.save();
