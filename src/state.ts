@@ -36,6 +36,7 @@ export interface SaveData {
   appliedAdRewards: string[];          // crash-safe, server-verified ad grants
   textSizeTier: number;                // accessibility: 0=current size, 1-3 larger
   tutorialComplete: boolean;           // first-launch walkthrough completed or skipped
+  referralDanglerUnlocked: boolean;    // server-authoritative referral reward
 }
 
 export const createFreshSave = (): SaveData => ({
@@ -62,6 +63,7 @@ export const createFreshSave = (): SaveData => ({
   appliedAdRewards: [],
   textSizeTier: 0,
   tutorialComplete: false,
+  referralDanglerUnlocked: false,
 });
 
 export type GameEvent =
@@ -333,6 +335,7 @@ export class Game {
         loaded.appliedAdRewards = Array.isArray(parsed.appliedAdRewards)
           ? parsed.appliedAdRewards.filter((nonce: unknown) => typeof nonce === 'string').slice(-500)
           : [];
+        loaded.referralDanglerUnlocked = parsed.referralDanglerUnlocked === true;
         // The old build exposed fuzzy dice as a dashboard ornament.  Keep
         // existing owners, but migrate that purchase to the real mirror-hung
         // item so dice can never remain mounted on the dashboard.

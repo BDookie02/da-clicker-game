@@ -13,6 +13,7 @@ import { installCompatibilityFallbacks } from './compat';
 import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
+import { claimInstallReferral } from './referral';
 
 installCompatibilityFallbacks();
 
@@ -212,6 +213,8 @@ if (API_URL) {
     }
     else {
       await recoverAccountEntitlements(true);
+      await claimInstallReferral(account!).catch(() => false);
+      await ui.refreshReferralReward();
       game.save(); void account!.save(game.s);
       if (!account!.termsCurrent) await ui.promptTermsAcceptance();
     }
@@ -238,6 +241,8 @@ const reconnectAccount = async () => {
       return;
     }
     await recoverAccountEntitlements(true);
+    await claimInstallReferral(account).catch(() => false);
+    await ui.refreshReferralReward();
     if (!account.termsCurrent) await ui.promptTermsAcceptance();
   } catch {
     // The cloud gate remains closed. Local play and account-scoped saves stay
@@ -248,6 +253,9 @@ window.addEventListener('online', () => void reconnectAccount());
 setInterval(() => {
   if (account?.cloudReady) void recoverAccountEntitlements(false);
 }, 15_000);
+setInterval(() => {
+  if (account?.cloudReady) void ui.refreshReferralReward();
+}, 60_000);
 
 scene.setOpponent(game.opponent);
 scene.setShakeAmp(game.shakeAmp);

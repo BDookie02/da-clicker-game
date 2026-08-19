@@ -50,6 +50,21 @@ export interface AdRewardStatus {
   kind: AdRewardKind;
   transactionId?: string;
 }
+export interface ReferralStatus {
+  code: string;
+  shareUrl: string;
+  qualifiedCount: number;
+  unlocked: boolean;
+  claimed: boolean;
+}
+export interface ReferralEvidence {
+  code: string;
+  platform: 'android' | 'ios';
+  installReferrer: string;
+  clickTimestamp: number;
+  installTimestamp: number;
+  installVersion: string;
+}
 
 async function accountUuid(accountId: string): Promise<string> {
   const seed = new TextEncoder().encode(`discipline-account:${accountId}`);
@@ -200,6 +215,28 @@ export class AccountService {
     }
     const { account } = await res.json();
     return this.applyIdentity(account);
+  }
+
+  async referralStatus(): Promise<ReferralStatus> {
+    const res = await fetch(`${this.apiUrl}/v1/referral`, { headers: this.headers() });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? 'referral_unavailable');
+    return {
+      code: String(data.code || ''),
+      shareUrl: String(data.shareUrl || ''),
+      qualifiedCount: Math.max(0, Math.trunc(Number(data.qualifiedCount) || 0)),
+      unlocked: data.unlocked === true,
+      claimed: data.claimed === true,
+    };
+  }
+
+  async claimReferral(evidence: ReferralEvidence): Promise<void> {
+    const res = await fetch(`${this.apiUrl}/v1/referral/claim`, {
+      method: 'POST', headers: this.headers(true), body: JSON.stringify(evidence),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok && data.error !== 'referral_already_claimed')
+      throw new Error(data.error ?? 'referral_unavailable');
   }
 
   async acceptTerms(version: string): Promise<AccountIdentity> {

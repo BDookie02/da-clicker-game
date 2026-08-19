@@ -106,3 +106,18 @@ test('raw leaderboard taps are monotonic and rate bounded', () => {
   assert.equal(verifiedTapTotal(355, 100, 1_000, 1_010), 355);
   assert.equal(verifiedTapTotal(356, 100, 1_000, 1_010), null);
 });
+
+test('referral reward unlock is server authoritative', () => {
+  const forged = base();
+  forged.referralDanglerUnlocked = true;
+  const authority = {
+    earnedMentality: 0, totalTaps: 25, adCount: 0,
+    purchaseIds: [], rewardNonces: [], referralUnlocked: false,
+  };
+  const rejected = sanitizeSave(forged, authority, null, 'PLAYER');
+  assert.equal(rejected.referralDanglerUnlocked, false);
+
+  authority.referralUnlocked = true;
+  const unlocked = sanitizeSave(forged, authority, null, 'PLAYER');
+  assert.equal(unlocked.referralDanglerUnlocked, true);
+});

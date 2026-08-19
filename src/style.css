@@ -866,6 +866,8 @@ body.in-garage .boost-pill { display: none; }
 .account-delete-box .ad-label { color: #ff8b8b; }
 .account-delete-box .delete-final { border-color: #d94b4b; background: #3a1118; color: #ffb0b0; }
 .account-delete-box .delete-final:disabled { opacity: .42; }
+.referral-card { margin: 12px 0; padding: 12px; border: 2px solid #6d5ab5; background: #151326; }
+.referral-code { margin: 10px 0; padding: 9px; border: 1px solid #e8c96a; color: #ffe28a; text-align: center; letter-spacing: .18em; font-size: 1.18em; }
 .panel button[data-id="delete"] { border-color: #a63c48; color: #ff9a9a; }
 
 /* The six HUD cells are one permanent control row. On phone-width portrait

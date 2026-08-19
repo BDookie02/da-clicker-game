@@ -19,6 +19,7 @@ public class MainActivity extends BridgeActivity {
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             WebView.setWebContentsDebuggingEnabled(true);
         }
+        registerPlugin(InstallReferrerPlugin.class);
         super.onCreate(savedInstanceState);
 
         // A hardware-keyboard Escape/Back event used to invoke Android's

@@ -97,6 +97,14 @@ await evaluate(`(() => {
     blockPlayer: async () => undefined,
     unblockPlayer: async () => undefined,
     markTermsOutdated: () => undefined,
+    referralStatus: async () => ({
+      code: 'A1B2C3D4E5',
+      shareUrl: 'https://play.google.com/store/apps/details?id=com.nosiah.discipline&referrer=visual-qa',
+      qualifiedCount: 1,
+      unlocked: true,
+      claimed: false,
+    }),
+    save: async () => true,
   };
   if (ui) {
     ui.account = window.__disciplineResponsiveQaAccount;

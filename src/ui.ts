@@ -4,7 +4,8 @@ import { music, sfx } from './audio';
 import { fetchBoardRemote, type BoardResult, type LeaderboardProvider } from './leaderboard';
 import { API_URL } from './config';
 import { RENAME_COST, validateUsername, type UsernameService } from './username';
-import type { AccountService } from './account';
+import type { AccountService, ReferralStatus } from './account';
+import { shareReferral } from './referral';
 
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
 // placeholder on web. main.ts swaps the provider in via initAds().
@@ -52,6 +53,8 @@ export class UI {
   private readonly textScales = [1, 1.15, 1.3, 1.45] as const;
   private readonly layoutObserver: ResizeObserver;
   private lastPanelRenderAt = 0;
+  private referral: ReferralStatus | null = null;
+  private referralLoading = false;
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
@@ -1227,6 +1230,19 @@ export class UI {
           <div class="cheat-entry"><input class="cheat-code" type="password" autocomplete="off" spellcheck="false" placeholder="ENTER OWNER CODE"><button class="cheat-submit">UNLOCK</button></div>
         </details>`);
       if (this.account?.signedIn) {
+        if (!this.referral && !this.referralLoading) void this.loadReferralStatus();
+        const referral = this.referral;
+        rows.push(`<section class="referral-card" aria-label="Friend referral reward">
+          <div class="ad-label">SECRET REFERRAL DANGLER</div>
+          <div class="panel-note">Share your verified Play link. One real new player who installs and creates an account unlocks your custom pixel-art mirror dangler.</div>
+          ${referral ? `<div class="referral-code">${escapeHtml(referral.code)}</div>
+            <div class="name-actions"><button class="referral-share">SHARE LINK</button>
+            <button disabled>${referral.unlocked ? 'UNLOCKED' : 'LOCKED'}</button></div>
+            <div class="setting-hint">Qualified friends: ${referral.qualifiedCount}</div>`
+            : '<div class="panel-note">Loading verified referral status…</div>'}
+        </section>`);
+      }
+      if (this.account?.signedIn) {
         rows.push(row('logout', `Account: ${this.account.username}`,
           'Progress is synced across devices.', 'LOG OUT', true, 'account'));
         rows.push(row('delete', 'Delete account',
@@ -1359,6 +1375,36 @@ export class UI {
         this.toast('Invalid owner code.');
       }
     });
+    this.panel.querySelector('.referral-share')?.addEventListener('click', async (ev) => {
+      ev.stopImmediatePropagation();
+      if (!this.referral) return;
+      try {
+        await shareReferral(this.referral.shareUrl, this.referral.code);
+        this.toast('Referral link shared.', 'gold');
+      } catch { this.toast('Sharing was canceled.'); }
+    });
+  }
+
+  async refreshReferralReward() {
+    await this.loadReferralStatus(true);
+  }
+
+  private async loadReferralStatus(force = false) {
+    if (!this.account?.signedIn || this.referralLoading || (this.referral && !force)) return;
+    this.referralLoading = true;
+    try {
+      this.referral = await this.account.referralStatus();
+      if (this.referral.unlocked && !this.game.s.referralDanglerUnlocked) {
+        this.game.s.referralDanglerUnlocked = true;
+        this.game.save();
+        await this.account.save(this.game.s);
+        this.toast('Secret custom mirror dangler unlocked!', 'gold');
+      }
+    } catch { /* settings remains usable offline */ }
+    finally {
+      this.referralLoading = false;
+      if (this.openTab === 'settings') this.refreshPanel();
+    }
   }
 
   private async action(kind: string, id: string) {

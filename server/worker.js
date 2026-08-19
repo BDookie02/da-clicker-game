@@ -414,11 +414,12 @@ export function sanitizeSave(value, authority, previous = null, username = null)
     ].filter((nonce) => (authority.rewardNonces || []).includes(nonce)))].slice(-500),
     textSizeTier: integer(value.textSizeTier, 0, 3),
     tutorialComplete: Boolean(value.tutorialComplete),
+    referralDanglerUnlocked: Boolean(authority.referralUnlocked),
   };
 }
 
 async function economyAuthority(env, accountId) {
-  const [purchases, ads, ids, rewardNonces] = await Promise.all([
+  const [purchases, ads, ids, rewardNonces, referrals] = await Promise.all([
     env.DB.prepare(`SELECT COALESCE(SUM(CASE
       WHEN p.platform='ios' OR pc.consumed_at IS NOT NULL THEN p.mentality_amount ELSE 0 END),0) AS amount
       FROM purchases p LEFT JOIN purchase_consumptions pc
@@ -439,13 +440,91 @@ async function economyAuthority(env, accountId) {
         NOT IN ('canceled','pending_refund','partially_refunded','refunded','revoked')
       ORDER BY p.verified_at ASC`).bind(accountId).all(),
     env.DB.prepare('SELECT nonce FROM ad_rewards WHERE account_id=? ORDER BY verified_at ASC').bind(accountId).all(),
+    env.DB.prepare('SELECT COUNT(*) AS count FROM referral_claims WHERE referrer_account_id=?')
+      .bind(accountId).first(),
   ]);
   return {
     earnedMentality: integer(purchases?.amount, 0, MAX_SAFE) + integer(ads?.m_count, 0, MAX_SAFE) * AD_M_REWARD,
     adCount: integer(ads?.count, 0, MAX_SAFE),
     purchaseIds: (ids?.results || []).map((row) => String(row.transaction_id)),
     rewardNonces: (rewardNonces?.results || []).map((row) => String(row.nonce)),
+    referralUnlocked: Number(referrals?.count || 0) > 0,
   };
+}
+
+async function ensureReferralCode(env, accountId) {
+  let row = await env.DB.prepare('SELECT code FROM referral_codes WHERE account_id=?')
+    .bind(accountId).first();
+  for (let attempt = 0; !row && attempt < 5; attempt++) {
+    const code = randomHex(5).toUpperCase();
+    await env.DB.prepare('INSERT OR IGNORE INTO referral_codes(account_id,code) VALUES(?,?)')
+      .bind(accountId, code).run();
+    row = await env.DB.prepare('SELECT code FROM referral_codes WHERE account_id=?')
+      .bind(accountId).first();
+  }
+  if (!row) throw new Error('referral_code_unavailable');
+  return String(row.code);
+}
+
+async function referralStatus(env, account) {
+  const [code, countRow, ownClaim] = await Promise.all([
+    ensureReferralCode(env, account.id),
+    env.DB.prepare('SELECT COUNT(*) AS count FROM referral_claims WHERE referrer_account_id=?')
+      .bind(account.id).first(),
+    env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
+      .bind(account.id).first(),
+  ]);
+  const qualifiedCount = Number(countRow?.count || 0);
+  const referrer = new URLSearchParams({ discipline_ref: code }).toString();
+  return json({
+    code,
+    shareUrl: `https://play.google.com/store/apps/details?id=com.nosiah.discipline&referrer=${encodeURIComponent(referrer)}`,
+    qualifiedCount,
+    unlocked: qualifiedCount > 0,
+    claimed: Boolean(ownClaim),
+  });
+}
+
+async function claimReferral(req, env, account) {
+  const body = await req.json().catch(() => ({}));
+  const code = String(body.code || '').trim().toUpperCase();
+  const rawReferrer = String(body.installReferrer || '');
+  const platform = String(body.platform || '');
+  const clickTimestamp = integer(body.clickTimestamp, 1, 4_102_444_800);
+  const installTimestamp = integer(body.installTimestamp, 1, 4_102_444_800);
+  const now = Math.floor(Date.now() / 1000);
+  if (!/^[A-F0-9]{10}$/.test(code) || !['android', 'ios'].includes(platform))
+    return json({ ok: false, error: 'invalid_referral' }, 400);
+  const parsed = new URLSearchParams(rawReferrer);
+  if (parsed.get('discipline_ref')?.toUpperCase() !== code)
+    return json({ ok: false, error: 'referral_mismatch' }, 400);
+  if (clickTimestamp > installTimestamp + 300 || installTimestamp > now + 300
+      || now - installTimestamp > 90 * 24 * 60 * 60)
+    return json({ ok: false, error: 'invalid_install_evidence' }, 400);
+  if (Number(account.created_epoch || 0) < installTimestamp - 300
+      || Number(account.created_epoch || 0) > now
+      || now - Number(account.created_epoch || 0) > 14 * 24 * 60 * 60)
+    return json({ ok: false, error: 'new_account_required' }, 409);
+  const referrer = await env.DB.prepare(`SELECT rc.account_id FROM referral_codes rc
+    WHERE rc.code=?`).bind(code).first();
+  if (!referrer) return json({ ok: false, error: 'referral_not_found' }, 404);
+  if (Number(referrer.account_id) === Number(account.id))
+    return json({ ok: false, error: 'self_referral' }, 409);
+  try {
+    await env.DB.prepare(`INSERT INTO referral_claims(
+      referred_account_id,referrer_account_id,referral_code,platform,
+      click_timestamp,install_timestamp,install_version
+    ) VALUES(?,?,?,?,?,?,?)`).bind(
+      account.id, referrer.account_id, code, platform,
+      clickTimestamp, installTimestamp, String(body.installVersion || '').slice(0, 32),
+    ).run();
+  } catch {
+    const existing = await env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
+      .bind(account.id).first();
+    if (existing?.referral_code === code) return json({ ok: true, alreadyClaimed: true });
+    return json({ ok: false, error: 'referral_already_claimed' }, 409);
+  }
+  return json({ ok: true, unlockedReferrer: true }, 201);
 }
 
 export function verifiedTapTotal(requested, prior, anchorSeconds, nowSeconds) {
@@ -1423,6 +1502,10 @@ export default {
       if (!account) return json({ ok: false, error: 'unauthorized' }, 401);
       if (req.method === 'GET' && url.pathname === '/v1/admob/reward/status')
         return adRewardStatus(url, env, account);
+      if (req.method === 'GET' && url.pathname === '/v1/referral')
+        return referralStatus(env, account);
+      if (req.method === 'POST' && url.pathname === '/v1/referral/claim')
+        return claimReferral(req, env, account);
       if (req.method === 'GET' && url.pathname === '/v1/account') {
         const profile = await ensureAccountProfile(env, account.id);
         return json({ account: accountJson(account, profile) });
