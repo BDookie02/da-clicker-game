@@ -47,6 +47,8 @@ const COSMETICS = Object.freeze({
   dangle_fire: [175, 'dangler'], dangle_censored: [225, 'dangler'], dangle_testing_coals: [200, 'dangler'],
   dangle_goop: [250, 'dangler'], roof_taxi: [175, 'roof'],
 });
+export const REFERRAL_REWARD_LIMIT = 10;
+const REFERRAL_REWARD_IDS = Object.freeze(Object.keys(COSMETICS));
 const ANDROID_PACKAGE_NAME = 'com.nosiah.discipline';
 const ANDROID_PUBLISHER_ROOT = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${ANDROID_PACKAGE_NAME}`;
 const FINAL_REVERSED_FINANCIAL_STATUSES = Object.freeze([
@@ -350,19 +352,21 @@ const levelMap = (value, limits) => {
  * ledger, and owned items can never disappear because a stale device saves. */
 export function sanitizeSave(value, authority, previous = null, username = null) {
   if (!validSave(value)) throw new Error('invalid_save');
+  const referralRewardIds = knownList(authority.referralRewardIds, COSMETICS);
   const priorOwned = knownList(previous?.ownedCosmetics, COSMETICS);
   const requestedOwned = knownList(value.ownedCosmetics, COSMETICS);
-  const ownedCosmetics = [...new Set([...priorOwned, ...requestedOwned])];
+  const ownedCosmetics = [...new Set([...priorOwned, ...requestedOwned, ...referralRewardIds])];
   const priorLabs = knownList(previous?.labOwned, LAB_COSTS);
   const requestedLabs = knownList(value.labOwned, LAB_COSTS);
   const labOwned = [...new Set([...priorLabs, ...requestedLabs])];
-  const premiumSpent = ownedCosmetics.reduce((sum, id) => sum + COSMETICS[id][0], 0)
+  const premiumSpent = ownedCosmetics.reduce((sum, id) => sum + (referralRewardIds.includes(id) ? 0 : COSMETICS[id][0]), 0)
     + labOwned.reduce((sum, id) => sum + LAB_COSTS[id], 0);
-  const priorPremiumSpent = priorOwned.reduce((sum, id) => sum + COSMETICS[id][0], 0)
+  const priorPremiumSpent = priorOwned.reduce((sum, id) => sum + (referralRewardIds.includes(id) ? 0 : COSMETICS[id][0]), 0)
     + priorLabs.reduce((sum, id) => sum + LAB_COSTS[id], 0);
   const earnedMentality = integer(authority.earnedMentality, 0, MAX_SAFE);
   if (premiumSpent > earnedMentality) {
-    const addsUnverifiedItem = requestedOwned.some((id) => !priorOwned.includes(id))
+    const addsUnverifiedItem = requestedOwned.some((id) =>
+      !priorOwned.includes(id) && !referralRewardIds.includes(id))
       || requestedLabs.some((id) => !priorLabs.includes(id));
     // A refunded currency pack can place an existing account in premium debt.
     // Preserve already-owned items, but grant no balance and reject every new
@@ -414,12 +418,11 @@ export function sanitizeSave(value, authority, previous = null, username = null)
     ].filter((nonce) => (authority.rewardNonces || []).includes(nonce)))].slice(-500),
     textSizeTier: integer(value.textSizeTier, 0, 3),
     tutorialComplete: Boolean(value.tutorialComplete),
-    referralDanglerUnlocked: Boolean(authority.referralUnlocked),
   };
 }
 
 async function economyAuthority(env, accountId) {
-  const [purchases, ads, ids, rewardNonces, referrals] = await Promise.all([
+  const [purchases, ads, ids, rewardNonces, referralRewards] = await Promise.all([
     env.DB.prepare(`SELECT COALESCE(SUM(CASE
       WHEN p.platform='ios' OR pc.consumed_at IS NOT NULL THEN p.mentality_amount ELSE 0 END),0) AS amount
       FROM purchases p LEFT JOIN purchase_consumptions pc
@@ -440,16 +443,67 @@ async function economyAuthority(env, accountId) {
         NOT IN ('canceled','pending_refund','partially_refunded','refunded','revoked')
       ORDER BY p.verified_at ASC`).bind(accountId).all(),
     env.DB.prepare('SELECT nonce FROM ad_rewards WHERE account_id=? ORDER BY verified_at ASC').bind(accountId).all(),
-    env.DB.prepare('SELECT COUNT(*) AS count FROM referral_claims WHERE referrer_account_id=?')
-      .bind(accountId).first(),
+    env.DB.prepare('SELECT cosmetic_id FROM referral_rewards WHERE referrer_account_id=? ORDER BY reward_index ASC')
+      .bind(accountId).all(),
   ]);
   return {
     earnedMentality: integer(purchases?.amount, 0, MAX_SAFE) + integer(ads?.m_count, 0, MAX_SAFE) * AD_M_REWARD,
     adCount: integer(ads?.count, 0, MAX_SAFE),
     purchaseIds: (ids?.results || []).map((row) => String(row.transaction_id)),
     rewardNonces: (rewardNonces?.results || []).map((row) => String(row.nonce)),
-    referralUnlocked: Number(referrals?.count || 0) > 0,
+    referralRewardIds: (referralRewards?.results || []).map((row) => String(row.cosmetic_id)),
   };
+}
+
+export function selectReferralRewardId(ownedIds, randomValue) {
+  const owned = new Set(knownList(ownedIds, COSMETICS));
+  const available = REFERRAL_REWARD_IDS.filter((id) => !owned.has(id));
+  if (!available.length) return null;
+  const normalized = (Number(randomValue) >>> 0) / 0x1_0000_0000;
+  return available[Math.min(available.length - 1, Math.floor(normalized * available.length))];
+}
+
+function randomUint32() {
+  const value = new Uint32Array(1);
+  crypto.getRandomValues(value);
+  return value[0];
+}
+
+async function referralRewardState(env, accountId) {
+  const [rewards, saveRow] = await Promise.all([
+    env.DB.prepare(`SELECT cosmetic_id,reward_index FROM referral_rewards
+      WHERE referrer_account_id=? ORDER BY reward_index ASC`).bind(accountId).all(),
+    env.DB.prepare('SELECT save_json FROM cloud_saves WHERE account_id=?').bind(accountId).first(),
+  ]);
+  let saveOwned = [];
+  try { saveOwned = JSON.parse(String(saveRow?.save_json || '{}')).ownedCosmetics || []; }
+  catch { /* invalid stored save is ignored; server sanitization handles it separately */ }
+  const rewardIds = (rewards?.results || []).map((row) => String(row.cosmetic_id));
+  return {
+    rewardIds,
+    ownedIds: [...new Set([...knownList(saveOwned, COSMETICS), ...rewardIds])],
+  };
+}
+
+async function reconcileReferralRewards(env, accountId) {
+  const pending = await env.DB.prepare(`SELECT rc.referred_account_id
+    FROM referral_claims rc
+    LEFT JOIN referral_rewards rr ON rr.referred_account_id=rc.referred_account_id
+    WHERE rc.referrer_account_id=? AND rr.referred_account_id IS NULL
+    ORDER BY rc.claimed_at ASC LIMIT ?`).bind(accountId, REFERRAL_REWARD_LIMIT).all();
+  for (const claim of pending?.results || []) {
+    const state = await referralRewardState(env, accountId);
+    if (state.rewardIds.length >= REFERRAL_REWARD_LIMIT) break;
+    const cosmeticId = selectReferralRewardId(state.ownedIds, randomUint32());
+    if (!cosmeticId) break;
+    try {
+      await env.DB.prepare(`INSERT INTO referral_rewards(
+        referred_account_id,referrer_account_id,reward_index,cosmetic_id
+      ) VALUES(?,?,?,?)`).bind(
+        claim.referred_account_id, accountId, state.rewardIds.length + 1, cosmeticId,
+      ).run();
+    } catch { /* another request may have reconciled the same claim */ }
+  }
 }
 
 async function ensureReferralCode(env, accountId) {
@@ -467,20 +521,23 @@ async function ensureReferralCode(env, accountId) {
 }
 
 async function referralStatus(env, account) {
-  const [code, countRow, ownClaim] = await Promise.all([
+  await reconcileReferralRewards(env, account.id);
+  const [code, rewardState, ownClaim] = await Promise.all([
     ensureReferralCode(env, account.id),
-    env.DB.prepare('SELECT COUNT(*) AS count FROM referral_claims WHERE referrer_account_id=?')
-      .bind(account.id).first(),
+    referralRewardState(env, account.id),
     env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
       .bind(account.id).first(),
   ]);
-  const qualifiedCount = Number(countRow?.count || 0);
+  const rewardCount = rewardState.rewardIds.length;
   const referrer = new URLSearchParams({ discipline_ref: code }).toString();
   return json({
     code,
     shareUrl: `https://play.google.com/store/apps/details?id=com.nosiah.discipline&referrer=${encodeURIComponent(referrer)}`,
-    qualifiedCount,
-    unlocked: qualifiedCount > 0,
+    qualifiedCount: rewardCount,
+    rewardCount,
+    rewardLimit: REFERRAL_REWARD_LIMIT,
+    remaining: Math.max(0, REFERRAL_REWARD_LIMIT - rewardCount),
+    rewards: rewardState.rewardIds,
     claimed: Boolean(ownClaim),
   });
 }
@@ -510,21 +567,54 @@ async function claimReferral(req, env, account) {
   if (!referrer) return json({ ok: false, error: 'referral_not_found' }, 404);
   if (Number(referrer.account_id) === Number(account.id))
     return json({ ok: false, error: 'self_referral' }, 409);
-  try {
-    await env.DB.prepare(`INSERT INTO referral_claims(
-      referred_account_id,referrer_account_id,referral_code,platform,
-      click_timestamp,install_timestamp,install_version
-    ) VALUES(?,?,?,?,?,?,?)`).bind(
-      account.id, referrer.account_id, code, platform,
-      clickTimestamp, installTimestamp, String(body.installVersion || '').slice(0, 32),
-    ).run();
-  } catch {
-    const existing = await env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
-      .bind(account.id).first();
-    if (existing?.referral_code === code) return json({ ok: true, alreadyClaimed: true });
-    return json({ ok: false, error: 'referral_already_claimed' }, 409);
+  const existing = await env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
+    .bind(account.id).first();
+  if (existing?.referral_code === code) return json({ ok: true, alreadyClaimed: true });
+  if (existing) return json({ ok: false, error: 'referral_already_claimed' }, 409);
+
+  const claimStatement = () => env.DB.prepare(`INSERT INTO referral_claims(
+    referred_account_id,referrer_account_id,referral_code,platform,
+    click_timestamp,install_timestamp,install_version
+  ) VALUES(?,?,?,?,?,?,?)`).bind(
+    account.id, referrer.account_id, code, platform,
+    clickTimestamp, installTimestamp, String(body.installVersion || '').slice(0, 32),
+  );
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const rewardState = await referralRewardState(env, referrer.account_id);
+    if (rewardState.rewardIds.length >= REFERRAL_REWARD_LIMIT) {
+      try { await claimStatement().run(); }
+      catch {
+        const prior = await env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
+          .bind(account.id).first();
+        if (prior?.referral_code === code) return json({ ok: true, alreadyClaimed: true });
+        return json({ ok: false, error: 'referral_already_claimed' }, 409);
+      }
+      return json({ ok: true, rewardedReferrer: false, rewardLimitReached: true }, 201);
+    }
+    const cosmeticId = selectReferralRewardId(rewardState.ownedIds, randomUint32());
+    if (!cosmeticId) {
+      try { await claimStatement().run(); }
+      catch { return json({ ok: false, error: 'referral_already_claimed' }, 409); }
+      return json({ ok: true, rewardedReferrer: false, shopComplete: true }, 201);
+    }
+    const rewardIndex = rewardState.rewardIds.length + 1;
+    try {
+      await env.DB.batch([
+        claimStatement(),
+        env.DB.prepare(`INSERT INTO referral_rewards(
+          referred_account_id,referrer_account_id,reward_index,cosmetic_id
+        ) VALUES(?,?,?,?)`).bind(account.id, referrer.account_id, rewardIndex, cosmeticId),
+      ]);
+      return json({ ok: true, rewardedReferrer: true }, 201);
+    } catch {
+      const prior = await env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
+        .bind(account.id).first();
+      if (prior?.referral_code === code) return json({ ok: true, alreadyClaimed: true });
+      if (attempt === 2) return json({ ok: false, error: 'referral_reward_busy' }, 503);
+    }
   }
-  return json({ ok: true, unlockedReferrer: true }, 201);
+  return json({ ok: false, error: 'referral_reward_busy' }, 503);
 }
 
 export function verifiedTapTotal(requested, prior, anchorSeconds, nowSeconds) {
@@ -611,6 +701,8 @@ async function deleteAccount(env, account) {
       WHERE reporter_account_id=? OR reported_account_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM account_blocks
       WHERE blocker_account_id=? OR blocked_account_id=?`).bind(account.id, account.id),
+    env.DB.prepare(`DELETE FROM referral_rewards
+      WHERE referred_account_id=? OR referrer_account_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM referral_claims
       WHERE referred_account_id=? OR referrer_account_id=?`).bind(account.id, account.id),
     env.DB.prepare('DELETE FROM referral_codes WHERE account_id=?').bind(account.id),

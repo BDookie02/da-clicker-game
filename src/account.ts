@@ -54,7 +54,10 @@ export interface ReferralStatus {
   code: string;
   shareUrl: string;
   qualifiedCount: number;
-  unlocked: boolean;
+  rewardCount: number;
+  rewardLimit: number;
+  remaining: number;
+  rewards: string[];
   claimed: boolean;
 }
 export interface ReferralEvidence {
@@ -225,7 +228,12 @@ export class AccountService {
       code: String(data.code || ''),
       shareUrl: String(data.shareUrl || ''),
       qualifiedCount: Math.max(0, Math.trunc(Number(data.qualifiedCount) || 0)),
-      unlocked: data.unlocked === true,
+      rewardCount: Math.max(0, Math.min(10, Math.trunc(Number(data.rewardCount) || 0))),
+      rewardLimit: Math.max(1, Math.trunc(Number(data.rewardLimit) || 10)),
+      remaining: Math.max(0, Math.trunc(Number(data.remaining) || 0)),
+      rewards: Array.isArray(data.rewards)
+        ? data.rewards.filter((id: unknown): id is string => typeof id === 'string').slice(0, 10)
+        : [],
       claimed: data.claimed === true,
     };
   }

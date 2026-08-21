@@ -156,6 +156,7 @@ test('deletes every account-owned record before the account row', async () => {
     'DELETE FROM community_reports WHERE reporter_account_id=? OR reported_account_id=?',
     'DELETE FROM username_reports WHERE reporter_account_id=? OR reported_account_id=?',
     'DELETE FROM account_blocks WHERE blocker_account_id=? OR blocked_account_id=?',
+    'DELETE FROM referral_rewards WHERE referred_account_id=? OR referrer_account_id=?',
     'DELETE FROM referral_claims WHERE referred_account_id=? OR referrer_account_id=?',
     'DELETE FROM referral_codes WHERE account_id=?',
     'DELETE FROM purchase_consumptions WHERE EXISTS ( SELECT 1 FROM purchases p WHERE p.account_id=? AND p.platform=purchase_consumptions.platform AND p.transaction_id=purchase_consumptions.transaction_id )',
@@ -168,6 +169,6 @@ test('deletes every account-owned record before the account row', async () => {
     'DELETE FROM accounts WHERE id=?',
   ]);
   assert.deepEqual(db.batches[0].map(statement => statement.args), [
-    [42, 42], [42, 42], [42, 42], [42, 42], [42], [42], [42], [42], [42], [42], [42], [42], [42],
+    [42, 42], [42, 42], [42, 42], [42, 42], [42, 42], [42], [42], [42], [42], [42], [42], [42], [42], [42],
   ]);
 });

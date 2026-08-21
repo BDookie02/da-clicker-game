@@ -1234,13 +1234,13 @@ export class UI {
         if (this.referralAccountId !== this.account.accountId) this.referral = null;
         if (!this.referral && !this.referralLoading) void this.loadReferralStatus();
         const referral = this.referral;
-        rows.push(`<section class="referral-card" aria-label="Friend referral reward">
-          <div class="ad-label">SECRET REFERRAL DANGLER</div>
-          <div class="panel-note">Share your verified Play link. One real new player who installs and creates an account unlocks your custom pixel-art mirror dangler.</div>
+        rows.push(`<section class="referral-card" aria-label="Friend referral rewards">
+          <div class="ad-label">FRIEND REFERRALS</div>
+          <div class="panel-note">Each real new player who installs with your verified Play link and creates an account unlocks one random unowned shop item. Maximum: 10 rewards.</div>
           ${referral ? `<div class="referral-code">${escapeHtml(referral.code)}</div>
-            <div class="name-actions"><button class="referral-share">SHARE LINK</button>
-            <button disabled>${referral.unlocked ? 'UNLOCKED' : 'LOCKED'}</button></div>
-            <div class="setting-hint">Qualified friends: ${referral.qualifiedCount}</div>`
+            <div class="name-actions"><button class="referral-share" ${referral.remaining === 0 ? 'disabled' : ''}>${referral.remaining === 0 ? 'REWARDS COMPLETE' : 'SHARE LINK'}</button>
+            <button disabled>${referral.rewardCount}/${referral.rewardLimit}</button></div>
+            <div class="setting-hint">Verified rewards: ${referral.rewardCount} · ${referral.remaining} remaining</div>`
             : '<div class="panel-note">Loading verified referral status…</div>'}
         </section>`);
       }
@@ -1400,11 +1400,14 @@ export class UI {
       if (this.account.accountId !== accountId) return;
       this.referral = referral;
       this.referralAccountId = accountId;
-      if (this.referral.unlocked && !this.game.s.referralDanglerUnlocked) {
-        this.game.s.referralDanglerUnlocked = true;
+      const newRewards = this.referral.rewards.filter((id) =>
+        COSMETICS.some((cosmetic) => cosmetic.id === id) && !this.game.s.ownedCosmetics.includes(id));
+      if (newRewards.length) {
+        this.game.s.ownedCosmetics.push(...newRewards);
         this.game.save();
         await this.account.save(this.game.s);
-        this.toast('Secret custom mirror dangler unlocked!', 'gold');
+        const newest = COSMETICS.find((cosmetic) => cosmetic.id === newRewards[newRewards.length - 1]);
+        this.toast(`${newest?.name || 'Random shop item'} unlocked by referral!`, 'gold');
       }
     } catch { /* settings remains usable offline */ }
     finally {

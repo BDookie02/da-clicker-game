@@ -94,11 +94,12 @@ test('privacy copy discloses rewarded and interstitial Google Mobile Ads', () =>
   assert.match(privacy, /Rewarded and interstitial advertising uses Google Mobile Ads/);
 });
 
-test('privacy and deletion copy disclose Play referral attribution and account-linked claims', () => {
+test('privacy and deletion copy disclose Play referral attribution and shop rewards', () => {
   const privacy = privacyPage(completeLegalEnv);
   const deletion = deletionPage(completeLegalEnv);
   assert.match(privacy, /Google Play provides the referral code, referral-click time, install time, and installed app version/);
-  assert.match(privacy, /referral code and claims involving the account/);
-  assert.match(deletion, /referral code and claims involving the account/);
+  assert.match(privacy, /grant the referrer one random unowned shop item/);
+  assert.match(privacy, /shop-item referral rewards involving the account/);
+  assert.match(deletion, /shop-item referral rewards involving the account/);
   assert.match(deletion, /install-referral records/);
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeSave, verifiedTapTotal } from '../server/worker.js';
+import { sanitizeSave, selectReferralRewardId, verifiedTapTotal } from '../server/worker.js';
 
 const base = () => ({
   economyVersion: 1,
@@ -107,17 +107,35 @@ test('raw leaderboard taps are monotonic and rate bounded', () => {
   assert.equal(verifiedTapTotal(356, 100, 1_000, 1_010), null);
 });
 
-test('referral reward unlock is server authoritative', () => {
+test('referral shop rewards are server authoritative and do not spend Mentality', () => {
   const forged = base();
-  forged.referralDanglerUnlocked = true;
+  forged.ownedCosmetics = ['roof_taxi'];
   const authority = {
     earnedMentality: 0, totalTaps: 25, adCount: 0,
-    purchaseIds: [], rewardNonces: [], referralUnlocked: false,
+    purchaseIds: [], rewardNonces: [], referralRewardIds: [],
   };
-  const rejected = sanitizeSave(forged, authority, null, 'PLAYER');
-  assert.equal(rejected.referralDanglerUnlocked, false);
+  assert.throws(() => sanitizeSave(forged, authority, null, 'PLAYER'), /unverified_premium_spend/);
 
-  authority.referralUnlocked = true;
-  const unlocked = sanitizeSave(forged, authority, null, 'PLAYER');
-  assert.equal(unlocked.referralDanglerUnlocked, true);
+  authority.referralRewardIds = ['roof_taxi'];
+  const rewarded = sanitizeSave(base(), authority, null, 'PLAYER');
+  assert.deepEqual(rewarded.ownedCosmetics, ['roof_taxi']);
+  assert.equal(rewarded.mentality, 0);
+  assert.equal(Object.hasOwn(rewarded, 'referralDanglerUnlocked'), false);
+
+  const debt = base();
+  debt.ownedCosmetics = ['dangle_dice'];
+  const debtWithReward = base();
+  debtWithReward.ownedCosmetics = ['dangle_dice', 'roof_taxi'];
+  const preserved = sanitizeSave(debtWithReward, {
+    earnedMentality: 0, totalTaps: 25, adCount: 0,
+    purchaseIds: [], rewardNonces: [], referralRewardIds: ['roof_taxi'],
+  }, debt, 'PLAYER');
+  assert.deepEqual(preserved.ownedCosmetics, ['dangle_dice', 'roof_taxi']);
+  assert.equal(preserved.mentality, 0);
+});
+
+test('random referral rewards never select an owned item', () => {
+  assert.equal(selectReferralRewardId([], 0), 'orn_napkin');
+  assert.equal(selectReferralRewardId(['orn_napkin'], 0), 'goop_gold');
+  assert.notEqual(selectReferralRewardId(['orn_napkin'], 0xffffffff), 'orn_napkin');
 });

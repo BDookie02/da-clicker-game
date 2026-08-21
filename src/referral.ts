@@ -41,7 +41,7 @@ export async function claimInstallReferral(account: AccountService): Promise<boo
 }
 
 export async function shareReferral(url: string, code: string): Promise<void> {
-  const text = `Try DISCIPLINE. on Google Play. Use my referral code ${code} to help unlock a secret custom mirror dangler.`;
+  const text = `Try DISCIPLINE. on Google Play. Install with my verified referral link to unlock a random shop item for me. Referral code: ${code}.`;
   if (navigator.share) {
     await navigator.share({ title: 'DISCIPLINE.', text, url });
     return;
