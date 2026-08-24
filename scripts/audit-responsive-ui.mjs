@@ -48,7 +48,7 @@ const viewports = [
   { name: 'tablet', width: 768, height: 1024 },
 ].filter(viewport => !viewportFilter || viewportFilter.includes(viewport.name));
 const visualViewports = new Set(['legacy-small', 'compact', 'tall', 'short-landscape', 'landscape']);
-const allScreens = ['main', 'upgrades', 'crew', 'garage', 'ranks', 'boosters', 'settings', 'settings-account', 'account', 'username', 'mshop', 'offline', 'delete-account'];
+const allScreens = ['main', 'upgrades', 'crew', 'garage', 'multiplayer', 'ranks', 'boosters', 'settings', 'settings-account', 'account', 'username', 'mshop', 'offline', 'delete-account'];
 const screens = screenFilter ? allScreens.filter(screen => screenFilter.includes(screen)) : allScreens;
 const reports = [];
 const captures = [];
@@ -107,6 +107,27 @@ await evaluate(`(() => {
       rewards: ['dangle_dice'],
       claimed: false,
     }),
+    multiplayerState: async () => ({
+      serverNow: Date.now(),
+      friendCode: 'A1B2C3D4',
+      friends: [
+        { playerCode: 'D15C1A1A', username: 'FRIEND_ONE', status: 'accepted', direction: 'incoming' },
+        { playerCode: 'BADDCAFE', username: 'LONGFRIENDNAME', status: 'accepted', direction: 'outgoing' },
+      ],
+      incomingRequests: [
+        { playerCode: 'FACEB00C', username: 'NEW_FRIEND', status: 'pending', direction: 'incoming' },
+      ],
+      outgoingRequests: [],
+      matches: [],
+    }),
+    requestFriend: async () => undefined,
+    respondFriend: async () => undefined,
+    removeFriend: async () => undefined,
+    invitePvP: async () => undefined,
+    respondPvP: async () => undefined,
+    cancelPvP: async () => undefined,
+    submitPvPTaps: async () => undefined,
+    submitQuickDraw: async () => ({ reactionMs: 200 }),
     save: async () => true,
   };
   if (ui) {
@@ -168,7 +189,7 @@ for (const viewport of viewports) {
          const screen=${JSON.stringify(screen)};
          if(window.__ui) window.__ui.account=window.__disciplineResponsiveQaAccount;
          if(!window.__ui){
-          if(['settings','upgrades','crew','garage','ranks','boosters'].includes(screen))
+          if(['settings','upgrades','crew','garage','multiplayer','ranks','boosters'].includes(screen))
             document.querySelector(screen==='settings'?'#btn-settings':'[data-tab="'+screen+'"]')?.click();
         }
         else if(screen==='settings') window.__ui.toggle('settings');

@@ -153,6 +153,10 @@ test('deletes every account-owned record before the account row', async () => {
   assert.deepEqual(await response.json(), { ok: true, deleted: true });
   assert.equal(db.batches.length, 1);
   assert.deepEqual(db.batches[0].map(statement => statement.sql), [
+    'DELETE FROM pvp_round_scores WHERE account_id=?',
+    'DELETE FROM pvp_matches WHERE inviter_account_id=? OR invitee_account_id=?',
+    'DELETE FROM pvp_rewards WHERE winner_account_id=?',
+    'DELETE FROM friendships WHERE account_low_id=? OR account_high_id=?',
     'DELETE FROM community_reports WHERE reporter_account_id=? OR reported_account_id=?',
     'DELETE FROM username_reports WHERE reporter_account_id=? OR reported_account_id=?',
     'DELETE FROM account_blocks WHERE blocker_account_id=? OR blocked_account_id=?',
@@ -169,6 +173,7 @@ test('deletes every account-owned record before the account row', async () => {
     'DELETE FROM accounts WHERE id=?',
   ]);
   assert.deepEqual(db.batches[0].map(statement => statement.args), [
+    [42], [42, 42], [42], [42, 42],
     [42, 42], [42, 42], [42, 42], [42, 42], [42, 42], [42], [42], [42], [42], [42], [42], [42], [42], [42],
   ]);
 });

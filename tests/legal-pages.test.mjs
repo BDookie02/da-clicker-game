@@ -103,3 +103,14 @@ test('privacy and deletion copy disclose Play referral attribution and shop rewa
   assert.match(deletion, /shop-item referral rewards involving the account/);
   assert.match(deletion, /install-referral records/);
 });
+
+test('privacy and deletion copy disclose friends, multiplayer timing, and rewards', () => {
+  const privacy = privacyPage(completeLegalEnv);
+  const deletion = deletionPage(completeLegalEnv);
+  assert.match(privacy, /random public friend code/);
+  assert.match(privacy, /server-controlled round timing/);
+  assert.match(privacy, /Quick Draw reaction times/);
+  assert.match(privacy, /winner's verified five-Mentality reward/);
+  assert.match(privacy, /friendship can work across supported platforms/);
+  assert.match(deletion, /friend code, friendships, PvP matches and round submissions/);
+});

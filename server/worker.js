@@ -4,6 +4,8 @@
 
 import { validateUsername } from './username-policy.js';
 import { deletionPage, legalConfig, privacyPage, termsPage } from './legal-pages.js';
+import { handleMultiplayerRoute } from './multiplayer.js';
+import { TERMS_VERSION } from './constants.js';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -21,7 +23,6 @@ const PASSWORD_MIN = 10;
 // Keep this at the platform maximum so production registration/login works.
 const PBKDF2_ITERATIONS = 100000;
 const SESSION_SECONDS = 60 * 60 * 24 * 90;
-export const TERMS_VERSION = '2026-07-23';
 const REPORT_REASONS = Object.freeze(['username', 'cheating', 'harassment', 'other']);
 const REPORT_STATUSES = Object.freeze(['open', 'reviewing', 'actioned', 'dismissed']);
 const PRODUCTS = Object.freeze({
@@ -47,7 +48,7 @@ const COSMETICS = Object.freeze({
   dangle_fire: [175, 'dangler'], dangle_censored: [225, 'dangler'], dangle_testing_coals: [200, 'dangler'],
   dangle_goop: [250, 'dangler'], roof_taxi: [175, 'roof'],
 });
-export const REFERRAL_REWARD_LIMIT = 10;
+const REFERRAL_REWARD_LIMIT = 10;
 const REFERRAL_REWARD_IDS = Object.freeze(Object.keys(COSMETICS));
 const ANDROID_PACKAGE_NAME = 'com.nosiah.discipline';
 const ANDROID_PUBLISHER_ROOT = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${ANDROID_PACKAGE_NAME}`;
@@ -422,7 +423,7 @@ export function sanitizeSave(value, authority, previous = null, username = null)
 }
 
 async function economyAuthority(env, accountId) {
-  const [purchases, ads, ids, rewardNonces, referralRewards] = await Promise.all([
+  const [purchases, ads, ids, rewardNonces, referralRewards, pvpRewards] = await Promise.all([
     env.DB.prepare(`SELECT COALESCE(SUM(CASE
       WHEN p.platform='ios' OR pc.consumed_at IS NOT NULL THEN p.mentality_amount ELSE 0 END),0) AS amount
       FROM purchases p LEFT JOIN purchase_consumptions pc
@@ -445,9 +446,13 @@ async function economyAuthority(env, accountId) {
     env.DB.prepare('SELECT nonce FROM ad_rewards WHERE account_id=? ORDER BY verified_at ASC').bind(accountId).all(),
     env.DB.prepare('SELECT cosmetic_id FROM referral_rewards WHERE referrer_account_id=? ORDER BY reward_index ASC')
       .bind(accountId).all(),
+    env.DB.prepare('SELECT COALESCE(SUM(mentality_amount),0) AS amount FROM pvp_rewards WHERE winner_account_id=?')
+      .bind(accountId).first(),
   ]);
   return {
-    earnedMentality: integer(purchases?.amount, 0, MAX_SAFE) + integer(ads?.m_count, 0, MAX_SAFE) * AD_M_REWARD,
+    earnedMentality: integer(purchases?.amount, 0, MAX_SAFE)
+      + integer(ads?.m_count, 0, MAX_SAFE) * AD_M_REWARD
+      + integer(pvpRewards?.amount, 0, MAX_SAFE),
     adCount: integer(ads?.count, 0, MAX_SAFE),
     purchaseIds: (ids?.results || []).map((row) => String(row.transaction_id)),
     rewardNonces: (rewardNonces?.results || []).map((row) => String(row.nonce)),
@@ -695,6 +700,12 @@ async function deleteAccount(env, account) {
   // Explicit deletes make the privacy guarantee independent of connection-
   // scoped foreign-key settings and leave no orphaned leaderboard/save data.
   await env.DB.batch([
+    env.DB.prepare('DELETE FROM pvp_round_scores WHERE account_id=?').bind(account.id),
+    env.DB.prepare('DELETE FROM pvp_matches WHERE inviter_account_id=? OR invitee_account_id=?')
+      .bind(account.id, account.id),
+    env.DB.prepare('DELETE FROM pvp_rewards WHERE winner_account_id=?').bind(account.id),
+    env.DB.prepare(`DELETE FROM friendships
+      WHERE account_low_id=? OR account_high_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM community_reports
       WHERE reporter_account_id=? OR reported_account_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM username_reports
@@ -854,8 +865,20 @@ async function blockAccount(req, env, account) {
   const target = await targetByPublicRef(env, playerRef);
   if (!target) return json({ ok: false, error: 'player_not_found' }, 404);
   if (target.id === account.id) return json({ ok: false, error: 'cannot_block_self' }, 400);
-  const result = await env.DB.prepare(`INSERT OR IGNORE INTO account_blocks(blocker_account_id,blocked_account_id)
-    VALUES(?,?)`).bind(account.id, target.id).run();
+  const [low, high] = Number(account.id) < Number(target.id)
+    ? [account.id, target.id] : [target.id, account.id];
+  const results = await env.DB.batch([
+    env.DB.prepare(`INSERT OR IGNORE INTO account_blocks(blocker_account_id,blocked_account_id)
+      VALUES(?,?)`).bind(account.id, target.id),
+    env.DB.prepare(`DELETE FROM friendships
+      WHERE account_low_id=? AND account_high_id=?`).bind(low, high),
+    env.DB.prepare(`UPDATE pvp_matches SET status='cancelled',updated_at=datetime('now')
+      WHERE status IN ('invited','active')
+        AND ((inviter_account_id=? AND invitee_account_id=?)
+          OR (inviter_account_id=? AND invitee_account_id=?))`)
+      .bind(account.id, target.id, target.id, account.id),
+  ]);
+  const result = results[0];
   return json({ ok: true, blocked: true, alreadyBlocked: !Number(result?.meta?.changes || 0) });
 }
 
@@ -1601,6 +1624,14 @@ export default {
         return referralStatus(env, account);
       if (req.method === 'POST' && url.pathname === '/v1/referral/claim')
         return claimReferral(req, env, account);
+      if (url.pathname === '/v1/multiplayer' || url.pathname.startsWith('/v1/friends/')
+          || url.pathname.startsWith('/v1/pvp/')) {
+        const profile = await ensureAccountProfile(env, account.id);
+        if (!hasCurrentTerms(profile))
+          return json({ ok: false, error: 'terms_required', termsVersion: TERMS_VERSION }, 428);
+        const multiplayer = await handleMultiplayerRoute(req, url, env, account, TERMS_VERSION);
+        if (multiplayer) return multiplayer;
+      }
       if (req.method === 'GET' && url.pathname === '/v1/account') {
         const profile = await ensureAccountProfile(env, account.id);
         return json({ account: accountJson(account, profile) });

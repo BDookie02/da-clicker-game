@@ -255,7 +255,7 @@ body.in-garage .quick-buy { display: none; }
   right: 8px;
   display: flex;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 5px;
   z-index: 30;
   background: #0a0a12;
@@ -362,6 +362,94 @@ button {
   text-align: center;
   min-height: 42px;
 }
+
+/* Six full labels remain readable on wide screens. Narrow portrait phones use
+   a compact two-row grid instead of crushing or overlapping the new button. */
+@media (orientation: portrait) and (max-width: 480px) {
+  .menu-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .menu-row button:nth-child(5), .menu-row button:nth-child(6) { grid-column: span 2; }
+}
+
+.multiplayer-card {
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 2px solid #4a4a70;
+  background: #11111c;
+}
+.friend-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  margin-top: 9px;
+}
+.friend-add input {
+  min-width: 0;
+  padding: 10px;
+  border: 2px solid #4a4a70;
+  background: #08080e;
+  color: #ffe28a;
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+}
+.mp-section-title {
+  margin: 14px 0 6px;
+  color: #ffd890;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.mp-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid #29293d;
+}
+.mp-row > span:first-child { min-width: 0; }
+.mp-row b, .mp-row small { display: block; overflow: hidden; text-overflow: ellipsis; }
+.mp-row small { margin-top: 3px; color: #a0a0c8; font-size: 9px; }
+.mp-actions, .mp-choice-row { display: flex; gap: 5px; }
+.mp-actions button { padding: 8px 5px; font-size: 9px; }
+.mp-choice-row { margin: 8px 0; }
+.mp-choice-row button { flex: 1; min-width: 0; }
+.mp-choice-row button.selected { border-color: #e66a2a; color: #ffd890; background: #35170c; }
+
+.pvp-overlay { z-index: 2200; touch-action: none; }
+.pvp-box {
+  width: min(94vw, 440px);
+  padding: 18px;
+  border: 3px solid #6d5ab5;
+  background: #0a0a14;
+  text-align: center;
+  box-shadow: 7px 7px 0 #030306;
+}
+.pvp-tiebreaker { margin-bottom: 7px; color: #ff7b47; letter-spacing: .18em; font-size: 10px; }
+.pvp-opponent { margin: 7px 0 12px; color: #e8e8f0; }
+.pvp-clock { min-height: 30px; color: #ffe28a; font-size: 24px; }
+.pvp-tap-zone {
+  width: min(70vw, 300px);
+  height: min(45vh, 270px);
+  min-height: 170px;
+  margin: 12px auto;
+  border: 4px solid #4a4a70;
+  border-bottom-width: 8px;
+  background: #1c1c2c;
+  color: #a0a0c8;
+  font: bold 24px 'Courier New', monospace;
+  touch-action: none;
+}
+.pvp-tap-zone.live { border-color: #e66a2a; background: #3a170c; color: #ffe28a; }
+.pvp-tap-zone.waiting { border-color: #7c2c38; background: #241014; color: #ff9a9a; }
+.pvp-tap-zone.submitted { opacity: .72; }
+.pvp-score { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+.pvp-score span { padding: 8px; border: 1px solid #4a4a70; }
+.pvp-score b { display: block; margin-top: 3px; color: #ffe28a; font-size: 22px; }
+.pvp-rule { min-height: 30px; }
+.pvp-result.won { border-color: #4ae66a; }
+.pvp-result.lost { border-color: #a63c48; }
+.pvp-result-reward { margin: 20px 0; color: #ffe28a; font-size: 18px; }
+.pvp-result-close { width: 100%; }
 
 .panel {
   position: absolute;

@@ -4,8 +4,9 @@ The production account service must serve the final policy at `/privacy` and
 the unauthenticated deletion flow at `/account-deletion`. Play Console must use
 deployed HTTPS URLs, not this repository file.
 
-`server/legal-pages.js` now describes the implemented account, purchase,
-rewarded-ad, leaderboard, report/hide, moderation, and deletion behavior. It
+`server/legal-pages.js` now describes the implemented account, referral,
+friends, multiplayer, purchase, rewarded-ad, leaderboard, report/hide,
+moderation, and deletion behavior. It
 deliberately renders a visible **Not launch-ready** warning when required legal
 facts are absent. It is still **not release-ready** because the owner fields,
 retention decision, target-audience decision, production deployment, and
@@ -60,6 +61,21 @@ account, selected reason, optional explanation, review status, and moderator
 note. If you hide another account, we store that private block relationship so
 the account remains absent from your leaderboard until you unhide it.
 
+**Referrals.** If a new player installs through an invite link, Google Play
+provides the referral code, referral-click time, install time, and installed app
+version. We connect that evidence to the new DISCIPLINE account to validate one
+claim, prevent duplicate or self-referrals, cap rewarded referrals at ten, and
+grant the referrer one random shop item they do not already own.
+
+**Friends and multiplayer.** We store a random public friend code, friend
+requests and accepted friendships, PvP invitations, selected mode and duration,
+server-controlled round timing, submitted tap totals or Quick Draw reaction
+times, match results, and the winner's verified five-Mentality reward. Your
+friend and opponent can see your username, friend code where relevant, shared
+match state, scores or reaction result, and match outcome. DISCIPLINE friends do
+not depend on a Google Play Games identity, which keeps the system usable across
+supported platforms.
+
 **Purchases.** For Google Play purchases, we process the platform, product ID,
 transaction ID, purchase-token hash, granted amount, verification time,
 purchase type, quantity, billing region, actual paid amount and currency,
@@ -90,10 +106,11 @@ the exact production logging, backup, security, and retention configuration.]`
 ### Why we use information
 
 We use information to create and authenticate accounts; synchronize game
-progress across devices; operate the public leaderboard; verify, grant, and
-restore purchases and rewarded-ad rewards; prevent fraud and duplicate grants;
-provide advertising; maintain security; diagnose failures; and operate the
-game.
+progress across devices; operate the public leaderboard; validate referrals;
+connect requested friends; run and settle PvP matches; verify, grant, and
+restore purchases, referral rewards, PvP rewards, and rewarded-ad rewards;
+prevent fraud and duplicate grants; provide advertising; maintain security;
+diagnose failures; and operate the game.
 
 ### Who receives information
 
@@ -124,8 +141,11 @@ signed AAB against every production endpoint and SDK.
 
 Primary DISCIPLINE account records remain while the account exists. A
 successful account deletion removes the account, sessions, cloud save,
-leaderboard score, purchase and consumption ledger, and rewarded-ad ledger
-from the primary D1 database.
+leaderboard score, referral records involving the account, its friend code and
+friendships, its PvP matches and round submissions, its own PvP reward ledger,
+purchase and consumption ledger, and rewarded-ad ledger from the primary D1
+database. A five-Mentality reward already won by another player remains in that
+winner's ledger without retaining the deleted opponent's account record.
 
 `[REQUIRED BEFORE RELEASE: state any retention that applies to Cloudflare or
 other provider logs, backups, fraud/security records, legal obligations, and
@@ -186,7 +206,7 @@ privacy/support contact named in the header.
 - [x] Pass the production Worker `env` object to the legal-page renderers.
 - [ ] Configure all five `LEGAL_*` values above as server-side variables.
 - [ ] Apply the current D1 schema plus every unapplied file through
-      `server/migrations/0005_purchase_financials_and_reversals.sql` in numeric
+      `server/migrations/0008_friends_and_pvp.sql` in numeric
       order; verify the expected tables and indexes exist.
 - [ ] Deploy the Worker and D1 schema to the production account-service domain.
 - [ ] Confirm the public HTTPS `/privacy` and `/account-deletion` pages load

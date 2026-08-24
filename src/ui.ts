@@ -4,7 +4,9 @@ import { music, sfx } from './audio';
 import { fetchBoardRemote, type BoardResult, type LeaderboardProvider } from './leaderboard';
 import { API_URL } from './config';
 import { RENAME_COST, validateUsername, type UsernameService } from './username';
-import type { AccountService, ReferralStatus } from './account';
+import type {
+  AccountService, MultiplayerState, PvPMatch, PvPMode, ReferralStatus,
+} from './account';
 import { shareReferral } from './referral';
 
 // Rewarded ads live in src/ads.ts: real AdMob on device, verified-watch
@@ -56,6 +58,22 @@ export class UI {
   private referral: ReferralStatus | null = null;
   private referralAccountId = '';
   private referralLoading = false;
+  private multiplayer: MultiplayerState | null = null;
+  private multiplayerAccountId = '';
+  private multiplayerLoading = false;
+  private multiplayerPollTimer = 0;
+  private multiplayerMode: PvPMode = 'tap';
+  private multiplayerDuration = 60;
+  private pvpOverlay: HTMLElement | null = null;
+  private pvpClockTimer = 0;
+  private pvpPhaseKey = '';
+  private pvpLocalTaps = 0;
+  private pvpTapSendTimer = 0;
+  private pvpDrawSubmitted = false;
+  private pvpServerOffset = 0;
+  private pvpPresentedMatchId = '';
+  private readonly settledPvP = new Set<string>();
+  private readonly dismissedPvP = new Set<string>();
 
   lb: LeaderboardProvider | null = null;
   names: UsernameService | null = null;
@@ -90,6 +108,7 @@ export class UI {
         <button data-tab="upgrades">UPGRADES</button>
         <button data-tab="crew">CREW</button>
         <button data-tab="garage">GARAGE</button>
+        <button data-tab="multiplayer">MULTIPLAYER</button>
         <button data-tab="ranks">RANKS</button>
         <button data-tab="boosters" class="hot">BOOSTERS</button>
       </div>
@@ -907,6 +926,7 @@ export class UI {
     this.root.appendChild(this.panel);
     document.body.classList.add('panel-open');
     this.refreshPanel();
+    if (tab === 'multiplayer') void this.loadMultiplayerState(true);
     const isGarage = tab === 'garage';
     // Only the actual garage transition gets a scene fade/audio swap.
     if (wasGarage !== isGarage) this.onGarage?.(isGarage);
@@ -977,6 +997,7 @@ export class UI {
     this.panel = null;
     document.body.classList.remove('panel-open');
     if (wasGarage) this.onGarage?.(false);
+    this.scheduleMultiplayerPoll();
   }
 
   get isPanelOpen() { return this.openTab !== null; }
@@ -1136,6 +1157,66 @@ export class UI {
           <button class="g-exit">‹ EXIT GARAGE</button>
           <button class="g-show">▴ COSMETICS</button></div>`);
       }
+    } else if (this.openTab === 'multiplayer') {
+      if (!this.account?.signedIn) {
+        rows.push('<div class="panel-note">Log in to your DISCIPLINE account to add cross-platform friends and play PvP.</div>');
+      } else if (!this.account.termsCurrent) {
+        rows.push('<div class="panel-note">Review the current Community Terms in Settings before using friends or multiplayer.</div>');
+      } else {
+        if (this.multiplayerAccountId !== this.account.accountId) this.multiplayer = null;
+        if (!this.multiplayer && !this.multiplayerLoading) void this.loadMultiplayerState();
+        const multiplayer = this.multiplayer;
+        rows.push(`<section class="multiplayer-card">
+          <div class="ad-label">YOUR FRIEND CODE</div>
+          ${multiplayer ? `<div class="referral-code">${escapeHtml(formatFriendCode(multiplayer.friendCode))}</div>
+            <button class="friend-code-copy">COPY CODE</button>`
+            : '<div class="panel-note">Loading your cross-platform friend code…</div>'}
+        </section>`);
+        rows.push(`<section class="multiplayer-card">
+          <div class="ad-label">ADD A FRIEND</div>
+          <div class="friend-add"><input class="friend-code-input" inputmode="text" maxlength="9" autocomplete="off" spellcheck="false" placeholder="ABCD-EF12"><button class="friend-add-submit">ADD</button></div>
+        </section>`);
+        if (multiplayer?.incomingRequests.length) {
+          rows.push('<div class="mp-section-title">FRIEND REQUESTS</div>');
+          for (const friend of multiplayer.incomingRequests) rows.push(`<div class="mp-row">
+            <span><b>${escapeHtml(friend.username)}</b><small>${escapeHtml(formatFriendCode(friend.playerCode))}</small></span>
+            <span class="mp-actions"><button data-friend-accept="${escapeAttr(friend.playerCode)}">ACCEPT</button><button data-friend-decline="${escapeAttr(friend.playerCode)}">DECLINE</button></span>
+          </div>`);
+        }
+        const incomingMatches = multiplayer?.matches.filter(match => match.status === 'invited' && !match.invitedByMe) ?? [];
+        if (incomingMatches.length) {
+          rows.push('<div class="mp-section-title">CHALLENGES</div>');
+          for (const match of incomingMatches) rows.push(`<div class="mp-row mp-challenge">
+            <span><b>${escapeHtml(match.opponentName)}</b><small>${match.mode === 'quick_draw' ? 'QUICK DRAW' : `${match.durationSeconds}s TAP BATTLE`}</small></span>
+            <span class="mp-actions"><button data-pvp-accept="${escapeAttr(match.id)}">PLAY</button><button data-pvp-decline="${escapeAttr(match.id)}">DECLINE</button></span>
+          </div>`);
+        }
+        rows.push(`<section class="multiplayer-card">
+          <div class="ad-label">CHALLENGE SETTINGS</div>
+          <div class="mp-choice-row"><button data-pvp-mode="tap" class="${this.multiplayerMode === 'tap' ? 'selected' : ''}">TAP BATTLE</button><button data-pvp-mode="quick_draw" class="${this.multiplayerMode === 'quick_draw' ? 'selected' : ''}">QUICK DRAW</button></div>
+          ${this.multiplayerMode === 'tap' ? `<div class="mp-choice-row">${[30, 60, 90].map(seconds => `<button data-pvp-duration="${seconds}" class="${this.multiplayerDuration === seconds ? 'selected' : ''}">${seconds}s</button>`).join('')}</div>` : '<div class="setting-hint">Timing mode. Tap only when DRAW appears.</div>'}
+          <div class="setting-hint">Winner receives 5 Mentality. Exact ties switch to the other mode as a tiebreaker.</div>
+        </section>`);
+        const friends = multiplayer?.friends ?? [];
+        rows.push('<div class="mp-section-title">FRIENDS</div>');
+        if (!friends.length) rows.push('<div class="panel-note">Add a friend with their DISCIPLINE friend code to challenge them on Android now and iOS later.</div>');
+        for (const friend of friends) rows.push(`<div class="mp-row">
+          <span><b>${escapeHtml(friend.username)}</b><small>${escapeHtml(formatFriendCode(friend.playerCode))}</small></span>
+          <span class="mp-actions"><button data-pvp-challenge="${escapeAttr(friend.playerCode)}">CHALLENGE</button><button data-friend-remove="${escapeAttr(friend.playerCode)}">REMOVE</button></span>
+        </div>`);
+        const outgoingMatches = multiplayer?.matches.filter(match => match.status === 'invited' && match.invitedByMe) ?? [];
+        if (outgoingMatches.length) {
+          rows.push('<div class="mp-section-title">WAITING FOR ACCEPTANCE</div>');
+          for (const match of outgoingMatches) rows.push(`<div class="mp-row">
+            <span><b>${escapeHtml(match.opponentName)}</b><small>${match.mode === 'quick_draw' ? 'QUICK DRAW' : `${match.durationSeconds}s TAP BATTLE`}</small></span>
+            <button data-pvp-cancel="${escapeAttr(match.id)}">CANCEL</button>
+          </div>`);
+        }
+        if (multiplayer?.outgoingRequests.length) {
+          rows.push('<div class="mp-section-title">REQUESTS SENT</div>');
+          for (const friend of multiplayer.outgoingRequests) rows.push(`<div class="mp-row"><span><b>${escapeHtml(friend.username)}</b><small>WAITING</small></span></div>`);
+        }
+      }
     } else if (this.openTab === 'ranks') {
       const native = !!this.lb && this.lb.platform !== 'web';
       rows.push(`<div class="panel-note">🌍 WORLDWIDE — ALL-TIME TAPS (raw taps only, boosters don't count)${native
@@ -1288,6 +1369,7 @@ export class UI {
     this.scheduleTextFit(this.panel);
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
     if (this.openTab === 'settings') this.bindSettings();
+    if (this.openTab === 'multiplayer') this.bindMultiplayer();
     // garage-specific controls
     this.panel.querySelector('.g-exit')?.addEventListener('click', () => this.close());
     this.panel.querySelector('.g-collapse')?.addEventListener('click', () => {
@@ -1416,6 +1498,245 @@ export class UI {
     }
   }
 
+  private bindMultiplayer() {
+    if (!this.panel || !this.account?.signedIn) return;
+    const run = async (action: () => Promise<void>) => {
+      try { await action(); await this.loadMultiplayerState(true); }
+      catch (error) { this.toast(multiplayerError(error)); }
+    };
+    this.panel.querySelector('.friend-code-copy')?.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation();
+      if (!this.multiplayer) return;
+      void navigator.clipboard.writeText(formatFriendCode(this.multiplayer.friendCode))
+        .then(() => this.toast('Friend code copied.', 'gold'))
+        .catch(() => this.toast('Could not copy the friend code.'));
+    });
+    this.panel.querySelector('.friend-add-submit')?.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation();
+      const input = this.panel!.querySelector<HTMLInputElement>('.friend-code-input');
+      const code = input?.value.trim() || '';
+      if (!code) { this.toast('Enter a friend code.'); return; }
+      void run(async () => { await this.account!.requestFriend(code); this.toast('Friend request sent.', 'gold'); });
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-mode]').forEach((button) => {
+      button.addEventListener('click', (ev) => {
+        ev.stopImmediatePropagation();
+        this.multiplayerMode = button.dataset.pvpMode as PvPMode;
+        this.refreshPanel();
+      });
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-duration]').forEach((button) => {
+      button.addEventListener('click', (ev) => {
+        ev.stopImmediatePropagation();
+        this.multiplayerDuration = Number(button.dataset.pvpDuration);
+        this.refreshPanel();
+      });
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-friend-accept]').forEach((button) => {
+      button.addEventListener('click', () => void run(() =>
+        this.account!.respondFriend(button.dataset.friendAccept!, true)));
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-friend-decline]').forEach((button) => {
+      button.addEventListener('click', () => void run(() =>
+        this.account!.respondFriend(button.dataset.friendDecline!, false)));
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-friend-remove]').forEach((button) => {
+      button.addEventListener('click', () => void run(() =>
+        this.account!.removeFriend(button.dataset.friendRemove!)));
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-challenge]').forEach((button) => {
+      button.addEventListener('click', () => void run(async () => {
+        await this.account!.invitePvP(button.dataset.pvpChallenge!, this.multiplayerMode,
+          this.multiplayerMode === 'tap' ? this.multiplayerDuration : 0);
+        this.toast('Challenge sent.', 'gold');
+      }));
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-accept]').forEach((button) => {
+      button.addEventListener('click', () => void run(() =>
+        this.account!.respondPvP(button.dataset.pvpAccept!, true)));
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-decline]').forEach((button) => {
+      button.addEventListener('click', () => void run(() =>
+        this.account!.respondPvP(button.dataset.pvpDecline!, false)));
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-cancel]').forEach((button) => {
+      button.addEventListener('click', () => void run(() =>
+        this.account!.cancelPvP(button.dataset.pvpCancel!)));
+    });
+  }
+
+  private scheduleMultiplayerPoll() {
+    window.clearTimeout(this.multiplayerPollTimer);
+    const active = this.multiplayer?.matches.some(match => match.status === 'active');
+    if (!active && this.openTab !== 'multiplayer') return;
+    this.multiplayerPollTimer = window.setTimeout(() => void this.loadMultiplayerState(true), active ? 500 : 3000);
+  }
+
+  private async loadMultiplayerState(force = false) {
+    if (!this.account?.signedIn || !this.account.termsCurrent || this.multiplayerLoading
+        || (this.multiplayer && !force)) return;
+    const accountId = this.account.accountId;
+    const startedAt = Date.now();
+    this.multiplayerLoading = true;
+    try {
+      const state = await this.account.multiplayerState();
+      if (this.account.accountId !== accountId) return;
+      const receivedAt = Date.now();
+      this.pvpServerOffset = state.serverNow - Math.round((startedAt + receivedAt) / 2);
+      this.multiplayer = state;
+      this.multiplayerAccountId = accountId;
+      const active = state.matches.find(match => match.status === 'active');
+      if (active) {
+        this.pvpPresentedMatchId = active.id;
+        this.showPvPMatch(active);
+      } else if (this.pvpPresentedMatchId) {
+        const completed = state.matches.find(match => match.id === this.pvpPresentedMatchId
+          && match.status === 'completed' && !this.dismissedPvP.has(match.id));
+        if (completed) this.showPvPMatch(completed);
+        else if (!completed) this.removePvPOverlay();
+      }
+    } catch (error) {
+      if (this.openTab === 'multiplayer') this.toast(multiplayerError(error));
+    } finally {
+      this.multiplayerLoading = false;
+      if (this.openTab === 'multiplayer') this.refreshPanel();
+      this.scheduleMultiplayerPoll();
+    }
+  }
+
+  private showPvPMatch(match: PvPMatch) {
+    if (match.status === 'completed') { this.showPvPResult(match); return; }
+    const phaseKey = `${match.id}:${match.roundNumber}:${match.phase}`;
+    if (this.pvpPhaseKey !== phaseKey) {
+      this.pvpPhaseKey = phaseKey;
+      this.pvpLocalTaps = match.myTapCount;
+      this.pvpDrawSubmitted = match.myReactionMs !== null;
+    } else this.pvpLocalTaps = Math.max(this.pvpLocalTaps, match.myTapCount);
+    if (!this.pvpOverlay) {
+      this.pvpOverlay = el('div', 'ad-overlay pvp-overlay');
+      document.body.appendChild(this.pvpOverlay);
+    }
+    const tiebreaker = match.roundNumber > 1 ? '<div class="pvp-tiebreaker">TIEBREAKER</div>' : '';
+    this.pvpOverlay.innerHTML = `<div class="pvp-box">
+      ${tiebreaker}<div class="ad-label">${match.phase === 'quick_draw' ? 'QUICK DRAW' : `${match.durationSeconds} SECOND TAP BATTLE`}</div>
+      <div class="pvp-opponent">VS ${escapeHtml(match.opponentName)}</div>
+      <div class="pvp-clock" aria-live="polite"></div>
+      <button class="pvp-tap-zone" aria-label="${match.phase === 'quick_draw' ? 'Quick draw' : 'Tap as fast as possible'}"><span></span></button>
+      <div class="pvp-score"><span>YOU <b class="pvp-my-score">${this.pvpLocalTaps}</b></span><span>THEM <b>${match.opponentTapCount}</b></span></div>
+      <div class="setting-hint pvp-rule">${match.phase === 'quick_draw'
+        ? 'Tap only after DRAW. An early tap is a foul.'
+        : 'Tap the large zone as fast as possible.'}</div>
+    </div>`;
+    const zone = this.pvpOverlay.querySelector<HTMLButtonElement>('.pvp-tap-zone')!;
+    zone.addEventListener('pointerdown', (event) => {
+      event.stopPropagation(); event.preventDefault();
+      const now = Date.now() + this.pvpServerOffset;
+      if (now < Number(match.phaseStartsAt) || now > Number(match.phaseEndsAt)) return;
+      if (match.phase === 'tap') {
+        this.pvpLocalTaps += 1;
+        const score = this.pvpOverlay?.querySelector('.pvp-my-score');
+        if (score) score.textContent = String(this.pvpLocalTaps);
+        sfx.tap();
+        this.queuePvPTap(match.id);
+      } else if (!this.pvpDrawSubmitted) {
+        this.pvpDrawSubmitted = true;
+        zone.classList.add('submitted');
+        void this.account!.submitQuickDraw(match.id)
+          .then(() => this.loadMultiplayerState(true))
+          .catch((error) => this.toast(multiplayerError(error)));
+      }
+    });
+    window.clearInterval(this.pvpClockTimer);
+    this.pvpClockTimer = window.setInterval(() => this.updatePvPClock(match), 50);
+    this.updatePvPClock(match);
+  }
+
+  private updatePvPClock(match: PvPMatch) {
+    if (!this.pvpOverlay?.isConnected || this.pvpPhaseKey !== `${match.id}:${match.roundNumber}:${match.phase}`) return;
+    const now = Date.now() + this.pvpServerOffset;
+    const clock = this.pvpOverlay.querySelector<HTMLElement>('.pvp-clock');
+    const zone = this.pvpOverlay.querySelector<HTMLButtonElement>('.pvp-tap-zone');
+    const label = zone?.querySelector('span');
+    if (!clock || !zone || !label) return;
+    if (now < Number(match.phaseStartsAt)) {
+      clock.textContent = `${Math.max(1, Math.ceil((Number(match.phaseStartsAt) - now) / 1000))}`;
+      label.textContent = 'GET READY';
+      zone.classList.remove('live');
+      return;
+    }
+    if (now > Number(match.phaseEndsAt)) {
+      clock.textContent = 'WAITING FOR RESULT';
+      label.textContent = 'LOCKED';
+      zone.classList.remove('live');
+      this.queuePvPTap(match.id, true);
+      return;
+    }
+    if (match.phase === 'quick_draw') {
+      const drawn = now >= Number(match.drawAt);
+      clock.textContent = drawn
+        ? `${Math.max(0, (Number(match.phaseEndsAt) - now) / 1000).toFixed(1)}s`
+        : 'WAIT…';
+      label.textContent = this.pvpDrawSubmitted ? 'LOCKED' : drawn ? 'DRAW!' : 'WAIT';
+      zone.classList.toggle('live', drawn && !this.pvpDrawSubmitted);
+      zone.classList.toggle('waiting', !drawn);
+    } else {
+      clock.textContent = `${Math.max(0, (Number(match.phaseEndsAt) - now) / 1000).toFixed(1)}s`;
+      label.textContent = 'TAP!';
+      zone.classList.add('live');
+    }
+  }
+
+  private queuePvPTap(matchId: string, immediate = false) {
+    if (!this.account?.signedIn || (!immediate && this.pvpTapSendTimer)) return;
+    const send = () => {
+      this.pvpTapSendTimer = 0;
+      void this.account!.submitPvPTaps(matchId, this.pvpLocalTaps).catch(() => { /* next poll preserves the match */ });
+    };
+    if (immediate) {
+      window.clearTimeout(this.pvpTapSendTimer); send();
+    } else this.pvpTapSendTimer = window.setTimeout(send, 140);
+  }
+
+  private showPvPResult(match: PvPMatch) {
+    window.clearInterval(this.pvpClockTimer);
+    if (!this.pvpOverlay) {
+      this.pvpOverlay = el('div', 'ad-overlay pvp-overlay');
+      document.body.appendChild(this.pvpOverlay);
+    }
+    this.pvpOverlay.innerHTML = `<div class="pvp-box pvp-result ${match.won ? 'won' : 'lost'}">
+      <div class="ad-label">${match.won ? 'YOU WIN' : 'YOU LOSE'}</div>
+      <div class="pvp-opponent">${escapeHtml(match.opponentName)}</div>
+      <div class="pvp-result-reward">${match.won ? '+5 MENTALITY' : 'BETTER LUCK NEXT TIME'}</div>
+      <button class="pvp-result-close">BACK TO GAME</button>
+    </div>`;
+    this.pvpOverlay.querySelector('.pvp-result-close')!.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.dismissedPvP.add(match.id);
+      this.pvpPresentedMatchId = '';
+      this.removePvPOverlay();
+      if (this.openTab === 'multiplayer') this.refreshPanel();
+    });
+    if (!this.settledPvP.has(match.id)) {
+      if (!match.won) this.settledPvP.add(match.id);
+      else void this.account?.save(this.game.s).then((saved) => {
+        if (!saved) return;
+        this.settledPvP.add(match.id);
+        this.refresh();
+        this.toast('PvP victory: +5 Mentality.', 'gold');
+      });
+    }
+  }
+
+  private removePvPOverlay() {
+    window.clearInterval(this.pvpClockTimer);
+    window.clearTimeout(this.pvpTapSendTimer);
+    this.pvpClockTimer = 0;
+    this.pvpTapSendTimer = 0;
+    this.pvpOverlay?.remove();
+    this.pvpOverlay = null;
+    this.pvpPhaseKey = '';
+  }
+
   private async action(kind: string, id: string) {
     const g = this.game;
     if (kind === 'prestige') {
@@ -1481,6 +1802,26 @@ export class UI {
     if (this.openTab && this.openTab !== 'settings') this.refreshPanel();
     this.refresh();
   }
+}
+
+function formatFriendCode(value: string): string {
+  const code = value.toUpperCase().replace(/[^A-F0-9]/g, '').slice(0, 8);
+  return code.length > 4 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+}
+
+function multiplayerError(error: unknown): string {
+  const code = error instanceof Error ? error.message : '';
+  const messages: Record<string, string> = {
+    friend_not_found: 'That friend code was not found.',
+    self_friend: 'You cannot add your own friend code.',
+    friend_unavailable: 'That player is unavailable.',
+    friend_required: 'Add this player as a friend before challenging them.',
+    player_busy: 'One of you already has an open challenge.',
+    unverified_pvp_tap_rate: 'The server rejected an impossible tap rate.',
+    terms_required: 'Review the current Community Terms in Settings first.',
+    login_required: 'Log in to use multiplayer.',
+  };
+  return messages[code] || 'Multiplayer is unavailable. Check your connection and retry.';
 }
 
 function escapeHtml(value: string): string {

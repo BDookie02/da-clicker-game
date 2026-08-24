@@ -68,6 +68,42 @@ export interface ReferralEvidence {
   installTimestamp: number;
   installVersion: string;
 }
+export type PvPMode = 'tap' | 'quick_draw';
+export type PvPPhase = 'tap' | 'quick_draw';
+export interface FriendEntry {
+  playerCode: string;
+  username: string;
+  status: 'pending' | 'accepted';
+  direction: 'incoming' | 'outgoing';
+}
+export interface PvPMatch {
+  id: string;
+  opponentCode: string;
+  opponentName: string;
+  invitedByMe: boolean;
+  mode: PvPMode;
+  durationSeconds: number;
+  status: 'invited' | 'active' | 'completed';
+  phase: PvPPhase | null;
+  roundNumber: number;
+  phaseStartsAt: number | null;
+  phaseEndsAt: number | null;
+  drawAt: number | null;
+  myTapCount: number;
+  opponentTapCount: number;
+  myReactionMs: number | null;
+  opponentReactionMs: number | null;
+  won: boolean | null;
+  rewardAmount: number;
+}
+export interface MultiplayerState {
+  serverNow: number;
+  friendCode: string;
+  friends: FriendEntry[];
+  incomingRequests: FriendEntry[];
+  outgoingRequests: FriendEntry[];
+  matches: PvPMatch[];
+}
 
 async function accountUuid(accountId: string): Promise<string> {
   const seed = new TextEncoder().encode(`discipline-account:${accountId}`);
@@ -245,6 +281,47 @@ export class AccountService {
     const data = await res.json().catch(() => ({}));
     if (!res.ok && data.error !== 'referral_already_claimed')
       throw new Error(data.error ?? 'referral_unavailable');
+  }
+
+  private async multiplayerRequest(path: string, method = 'GET', body?: unknown): Promise<any> {
+    if (!this.token) throw new Error('login_required');
+    const res = await fetch(`${this.apiUrl}${path}`, {
+      method,
+      headers: this.headers(body !== undefined),
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 428) this.markTermsOutdated();
+    if (!res.ok) throw new Error(data.error ?? 'multiplayer_unavailable');
+    return data;
+  }
+
+  async multiplayerState(): Promise<MultiplayerState> {
+    return this.multiplayerRequest('/v1/multiplayer');
+  }
+  async requestFriend(playerCode: string): Promise<void> {
+    await this.multiplayerRequest('/v1/friends/request', 'POST', { playerCode });
+  }
+  async respondFriend(playerCode: string, accept: boolean): Promise<void> {
+    await this.multiplayerRequest('/v1/friends/respond', 'POST', { playerCode, accept });
+  }
+  async removeFriend(playerCode: string): Promise<void> {
+    await this.multiplayerRequest(`/v1/friends/${encodeURIComponent(playerCode)}`, 'DELETE');
+  }
+  async invitePvP(playerCode: string, mode: PvPMode, durationSeconds = 0): Promise<void> {
+    await this.multiplayerRequest('/v1/pvp/invite', 'POST', { playerCode, mode, durationSeconds });
+  }
+  async respondPvP(matchId: string, accept: boolean): Promise<void> {
+    await this.multiplayerRequest(`/v1/pvp/${encodeURIComponent(matchId)}/respond`, 'POST', { accept });
+  }
+  async cancelPvP(matchId: string): Promise<void> {
+    await this.multiplayerRequest(`/v1/pvp/${encodeURIComponent(matchId)}/cancel`, 'POST', {});
+  }
+  async submitPvPTaps(matchId: string, count: number): Promise<void> {
+    await this.multiplayerRequest(`/v1/pvp/${encodeURIComponent(matchId)}/tap`, 'POST', { count });
+  }
+  async submitQuickDraw(matchId: string): Promise<{ reactionMs: number }> {
+    return this.multiplayerRequest(`/v1/pvp/${encodeURIComponent(matchId)}/draw`, 'POST', {});
   }
 
   async acceptTerms(version: string): Promise<AccountIdentity> {

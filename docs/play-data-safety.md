@@ -12,7 +12,7 @@ configuration, and SDK versions immediately before submission.
 | Is all collected user data encrypted in transit? | **Yes, only after production verification** | Android disables cleartext traffic and the planned endpoints use HTTPS/TLS. Confirm the final AAB and every production URL before selecting **Yes**. |
 | Can users request deletion? | **Yes, only after production verification** | The app has an authenticated delete action and the service has a public `/account-deletion` flow. Confirm both against production before selecting **Yes**. |
 | Is an account required? | **Yes** | A production build with the account API configured requires registration or login for a new player. |
-| Is collection optional? | Mixed | Account/save/leaderboard collection is required for the production account experience. Purchases, rewarded ads, and Google Play Games participation are optional features. |
+| Is collection optional? | Mixed | Account/save/leaderboard collection is required for the production account experience. Referrals, friends, multiplayer, purchases, rewarded ads, and Google Play Games participation are optional features. |
 | Independent security review completed? | **No / unresolved** | Do not claim an independent review unless one is actually completed and documented. |
 
 ## Data-type entries
@@ -26,7 +26,7 @@ shown as sharing so the form does not under-report the app's behavior.
 | Personal info - User IDs | Yes | **Yes** | Required for the DISCIPLINE account; optional for ads/Play Games | Account management; app functionality; security and fraud prevention; advertising | The service uses an internal account ID and hashed session token. AdMob SSV receives an account-derived user ID plus custom data containing the internal account ID, nonce, and reward kind. Google Play Games processes the signed-in Play Games identity separately. |
 | Personal info - Other info (authentication credential) | Yes | No, except infrastructure processing | Required | Account management; security | The password is transmitted to the account service over HTTPS. Only a salted PBKDF2 hash and salt are stored; plaintext passwords are not stored. |
 | Financial info - Purchase history | Yes | Yes | Optional | App functionality; fraud prevention; account management | The service verifies purchases with Google Play and stores platform, product ID, transaction ID, purchase-token hash, grant amount, purchase type, quantity, billing region, actual paid amount/currency, order state, consumption status, and refund/void evidence. It does not receive payment-card details. |
-| App activity - App interactions | Yes | **Yes** | Required for cloud progress/leaderboard; optional for ads | App functionality; analytics; advertising; fraud prevention | Cloud-save gameplay/settings/inventory data and raw physical tap totals are stored. Username, tap total, and rank are public. AdMob automatically processes interactions such as app launches, taps, and video views. |
+| App activity - App interactions | Yes | **Yes** | Required for cloud progress/leaderboard; optional for referrals, multiplayer, and ads | App functionality; analytics; advertising; fraud prevention | Cloud-save gameplay/settings/inventory data and raw physical tap totals are stored. Optional referral evidence, friend requests, PvP invitations, match settings, server-controlled round timing, tap totals or Quick Draw reaction times, match results, and five-Mentality winner rewards are stored. Username, tap total, and rank are public. A PvP opponent receives the shared match state and result. AdMob automatically processes interactions such as app launches, taps, and video views. |
 | App activity - Other user-generated content | Yes | **Yes** | Required for a public account; reporting is optional | App functionality; account management; security and compliance | The user-selected public username is UGC. A signed-in player may also submit a report reason and optional report explanation for private operator review. Use this entry as well as **Name** unless Play Console support gives a documented reason not to. |
 | Location - Approximate location | Yes | Yes | Optional purchase and rewarded-ad features | App functionality; advertising; analytics; fraud prevention | Google Play returns the two-letter billing region for a verified purchase, which DISCIPLINE stores with its financial ledger. Google Mobile Ads also states that it collects IP addresses that may estimate general location. DISCIPLINE does not request Android location permission or store GPS/precise location. |
 | App info and performance - Diagnostics | Yes | Yes | Optional rewarded-ad feature | Analytics; fraud prevention; advertising | Google Mobile Ads states that it automatically collects SDK/app performance information such as launch time, hang rate, and energy use. |
@@ -43,16 +43,21 @@ them.
 
 - Stores username, account ID, password salt/hash, hashed session tokens, cloud
   save, inventory/settings contained in the save, tap score, accepted Terms
-  version/time, private block relationships, submitted report content and
-  moderation state, verified purchase ledger, Android consumption status, and
-  verified rewarded-ad ledger.
+  version/time, referral code and verified install-referral evidence, friend
+  code and friend relationships, PvP invitations/timing/scores/results/rewards,
+  private block relationships, submitted report content and moderation state,
+  verified purchase ledger, Android consumption status, and verified
+  rewarded-ad ledger.
 - The public `/v1/board` endpoint exposes leaderboard username, tap total, and
   rank. It does not expose password hashes, account IDs, saves, sessions, or
   purchase records.
 - D1 account rows remain while the account exists. Successful account deletion
   removes the account, profile/Terms state, sessions, cloud save, score,
-  reports involving that account, block relationships, purchase/consumption
-  rows, and rewarded-ad rows.
+  referral records involving the account, its friend code and friendships,
+  its PvP matches/round submissions and its own PvP reward ledger, reports
+  involving that account, block relationships, purchase/consumption rows, and
+  rewarded-ad rows. A reward previously won by another player remains in that
+  winner's ledger without retaining the deleted opponent's account record.
 - **Unresolved before release:** document any Cloudflare/operational log,
   backup, abuse-prevention, or legal retention that survives the primary D1
   deletion. Do not enter a retention period until the owner and provider
@@ -147,7 +152,7 @@ source files in Git do not prove the production database was migrated.
   the legal-page renderers. Until the five `LEGAL_*` values documented in
   `docs/privacy-policy.md` are supplied, the pages intentionally show
   **Not launch-ready**.
-- The base D1 schema and every unapplied migration through `0005` must be
+- The base D1 schema and every unapplied migration through `0008` must be
   applied to the actual production database in numeric order and exercised
   with disposable accounts.
 - A high-entropy `MODERATION_ADMIN_TOKEN` must be stored as a Worker secret and

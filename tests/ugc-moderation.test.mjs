@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { TERMS_VERSION } from '../server/worker.js';
+import worker from '../server/worker.js';
+import { TERMS_VERSION } from '../server/constants.js';
 
 const VIEWER_ID = 42;
 const TARGET_ID = 84;
@@ -109,7 +110,7 @@ class Db {
   prepare(sql) { return new Statement(this, sql); }
   async batch(statements) {
     this.batches.push(statements);
-    return statements.map(() => ({ success: true }));
+    return Promise.all(statements.map((statement) => statement.run()));
   }
 }
 
@@ -226,6 +227,11 @@ test('block filtering hides a player and unblock restores the row', async () => 
   const blockedQuery = db.allCalls.find(call => call.sql.includes('FROM account_blocks b'));
   assert.match(blockedQuery.sql, /p\.terms_version=\?/);
   assert.match(blockedQuery.sql, /p\.leaderboard_status='active'/);
+  const blockBatch = db.batches[0];
+  assert.ok(blockBatch.some(call => call.sql.startsWith('DELETE FROM friendships')),
+    'blocking must dissolve the friendship');
+  assert.ok(blockBatch.some(call => call.sql.startsWith('UPDATE pvp_matches SET status=')),
+    'blocking must cancel invited or active matches between the two accounts');
 
   const unblocked = await worker.fetch(authorized(`https://api.example/v1/blocks/${TARGET_REF}`, {
     method: 'DELETE',
