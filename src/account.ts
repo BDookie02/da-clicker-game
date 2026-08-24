@@ -7,6 +7,7 @@ import {
   removePendingPurchase,
   type PurchaseReceipt,
 } from './purchases';
+import { finishAccountDeletion } from './account-deletion';
 
 export const TOKEN_KEY = 'discipline-account-token-v1';
 const USER_KEY = 'discipline-account-username-v1';
@@ -60,16 +61,32 @@ export interface ReferralStatus {
   rewards: string[];
   claimed: boolean;
 }
-export interface ReferralEvidence {
-  code: string;
-  platform: 'android' | 'ios';
+export interface GooglePlayReferralAttribution {
+  provider: 'google_play_install_referrer';
+  version: 'google_play_install_referrer_v1';
   installReferrer: string;
   clickTimestamp: number;
   installTimestamp: number;
   installVersion: string;
 }
+export interface ReferralEvidence {
+  referralCode: string;
+  platform: 'android';
+  attribution: GooglePlayReferralAttribution;
+  proof: ReferralPlatformProof;
+}
+export interface ReferralPlatformProof {
+  provider: 'google_play_integrity';
+  token: string;
+  requestHashVersion: 'referral_claim_v1';
+}
 export type PvPMode = 'tap' | 'quick_draw';
 export type PvPPhase = 'tap' | 'quick_draw';
+const MULTIPLAYER_REQUEST_TIMEOUT_MS = 3000;
+// Tap uploads are idempotent and cadence-bound. Keeping their timeout below
+// the 2.5 s server grace leaves room for a timed-out request and a real retry
+// before settlement; the general multiplayer timeout remains more tolerant.
+const PVP_TAP_REQUEST_TIMEOUT_MS = 900;
 export interface FriendEntry {
   playerCode: string;
   username: string;
@@ -83,18 +100,20 @@ export interface PvPMatch {
   invitedByMe: boolean;
   mode: PvPMode;
   durationSeconds: number;
-  status: 'invited' | 'active' | 'completed';
+  status: 'invited' | 'active' | 'completed' | 'cancelled';
   phase: PvPPhase | null;
   roundNumber: number;
   phaseStartsAt: number | null;
   phaseEndsAt: number | null;
-  drawAt: number | null;
+  drawReady: boolean;
   myTapCount: number;
-  opponentTapCount: number;
+  opponentTapCount: number | null;
   myReactionMs: number | null;
   opponentReactionMs: number | null;
   won: boolean | null;
   rewardAmount: number;
+  resultReason: 'no_input' | 'incomplete_round' | 'tie_limit' | 'stale_timeout'
+    | 'friend_removed' | 'blocked_player' | 'cancelled_by_inviter' | 'rollout_recovery' | null;
 }
 export interface MultiplayerState {
   serverNow: number;
@@ -275,21 +294,35 @@ export class AccountService {
   }
 
   async claimReferral(evidence: ReferralEvidence): Promise<void> {
-    const res = await fetch(`${this.apiUrl}/v1/referral/claim`, {
-      method: 'POST', headers: this.headers(true), body: JSON.stringify(evidence),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.apiUrl}/v1/referral/claim`, {
+        method: 'POST', headers: this.headers(true), body: JSON.stringify(evidence),
+      });
+    } catch { throw new Error('referral_unavailable'); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok && data.error !== 'referral_already_claimed')
       throw new Error(data.error ?? 'referral_unavailable');
   }
 
-  private async multiplayerRequest(path: string, method = 'GET', body?: unknown): Promise<any> {
+  private async multiplayerRequest(path: string, method = 'GET', body?: unknown,
+      timeoutMs = MULTIPLAYER_REQUEST_TIMEOUT_MS): Promise<any> {
     if (!this.token) throw new Error('login_required');
-    const res = await fetch(`${this.apiUrl}${path}`, {
-      method,
-      headers: this.headers(body !== undefined),
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(`${this.apiUrl}${path}`, {
+        method,
+        headers: this.headers(body !== undefined),
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: controller.signal,
+      });
+    } catch {
+      throw new Error('multiplayer_unavailable');
+    } finally {
+      window.clearTimeout(timeout);
+    }
     const data = await res.json().catch(() => ({}));
     if (res.status === 428) this.markTermsOutdated();
     if (!res.ok) throw new Error(data.error ?? 'multiplayer_unavailable');
@@ -318,10 +351,25 @@ export class AccountService {
     await this.multiplayerRequest(`/v1/pvp/${encodeURIComponent(matchId)}/cancel`, 'POST', {});
   }
   async submitPvPTaps(matchId: string, count: number): Promise<void> {
-    await this.multiplayerRequest(`/v1/pvp/${encodeURIComponent(matchId)}/tap`, 'POST', { count });
+    await this.multiplayerRequest(`/v1/pvp/${encodeURIComponent(matchId)}/tap`, 'POST',
+      { count }, PVP_TAP_REQUEST_TIMEOUT_MS);
   }
   async submitQuickDraw(matchId: string): Promise<{ reactionMs: number }> {
     return this.multiplayerRequest(`/v1/pvp/${encodeURIComponent(matchId)}/draw`, 'POST', {});
+  }
+  async quickDrawSocketTicket(matchId: string): Promise<{ ticket: string; expiresAt: number }> {
+    const data = await this.multiplayerRequest(
+      `/v1/pvp/${encodeURIComponent(matchId)}/quick-draw/ticket`, 'POST', {},
+    );
+    return { ticket: String(data.ticket || ''), expiresAt: Number(data.expiresAt) || 0 };
+  }
+  openQuickDrawSocket(matchId: string, ticket: string): WebSocket {
+    const endpoint = new URL(
+      `/v1/pvp/${encodeURIComponent(matchId)}/quick-draw/socket`, `${this.apiUrl}/`,
+    );
+    endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
+    endpoint.searchParams.set('ticket', ticket);
+    return new WebSocket(endpoint);
   }
 
   async acceptTerms(version: string): Promise<AccountIdentity> {
@@ -482,11 +530,9 @@ export class AccountService {
   }
   async deleteAccount(): Promise<void> {
     if (!this.token) throw new Error('login_required');
-    const res = await fetch(`${this.apiUrl}/v1/account`, {
-      method: 'DELETE', headers: this.headers(),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error ?? 'delete_unavailable');
+    await finishAccountDeletion(() => fetch(`${this.apiUrl}/v1/account`, {
+        method: 'DELETE', headers: this.headers(),
+      }));
     const removedAccountId = this.accountId;
     this.logout();
     localStorage.removeItem(SAVE_KEY);

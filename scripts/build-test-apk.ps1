@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $javaHome = 'C:\Program Files\Android\Android Studio\jbr'
 $androidNamespace = 'http://schemas.android.com/apk/res/android'
-$expectedPackage = 'com.nosiah.discipline'
+$expectedPackage = 'com.nosiah.discipline.test'
 $expectedMinSdk = '29'
 $expectedTargetSdk = '36'
 $expectedTestAdMobAppId = 'ca-app-pub-3940256099942544~3347511713'
@@ -33,10 +33,27 @@ function Get-StringSha256 {
     }
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+    $stream = [System.IO.File]::OpenRead($LiteralPath)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToUpperInvariant()
+        }
+        finally {
+            $sha.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-OptionalFileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash
+    return Get-FileSha256 -LiteralPath $Path
 }
 
 function Get-BuildInputSnapshot {
@@ -223,7 +240,7 @@ try {
         & $keytool -exportcert -alias androiddebugkey -keystore $debugKeystore `
             -storepass android -keypass android -file $debugCertificate | Out-Null
     }
-    $debugCertificateSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $debugCertificate).Hash
+    $debugCertificateSha256 = Get-FileSha256 -LiteralPath $debugCertificate
     if (($signerDn -notmatch 'CN=Android Debug(?:,|$)') -or
         ($signerSha256 -notmatch '^[0-9A-F]{64}$') -or
         ($signerSha256 -cne $debugCertificateSha256)) {
@@ -239,7 +256,7 @@ try {
         throw 'A build input changed while the test APK was building. No artifact was exported; rerun with stable environment/configuration.'
     }
 
-    $apkHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $apk).Hash
+    $apkHash = Get-FileSha256 -LiteralPath $apk
     $shortHead = $initialSource.identity.head.Substring(0, 12).ToLowerInvariant()
     $shortSource = $initialSource.fingerprintSha256.Substring(0, 16).ToLowerInvariant()
     $shortApk = $apkHash.Substring(0, 16).ToLowerInvariant()
@@ -252,7 +269,7 @@ try {
     $artifactBase = "DISCIPLINE-test-$shortHead-$shortSource-$shortApk"
     $artifactApk = Join-Path $artifactDir "$artifactBase.apk"
     Copy-Item -LiteralPath $apk -Destination $artifactApk -Force
-    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $artifactApk).Hash -ne $apkHash) {
+    if ((Get-FileSha256 -LiteralPath $artifactApk) -ne $apkHash) {
         throw 'Exported test APK is not byte-identical to Gradle output.'
     }
 

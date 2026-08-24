@@ -231,7 +231,7 @@ test('block filtering hides a player and unblock restores the row', async () => 
   assert.ok(blockBatch.some(call => call.sql.startsWith('DELETE FROM friendships')),
     'blocking must dissolve the friendship');
   assert.ok(blockBatch.some(call => call.sql.startsWith('UPDATE pvp_matches SET status=')),
-    'blocking must cancel invited or active matches between the two accounts');
+    'blocking must cancel an invitation before the forfeit helper settles any active match');
 
   const unblocked = await worker.fetch(authorized(`https://api.example/v1/blocks/${TARGET_REF}`, {
     method: 'DELETE',

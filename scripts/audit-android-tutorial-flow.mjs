@@ -17,7 +17,7 @@ const port = Number(option('--port', positionalPort));
 const captureEnabled = !argv.includes('--no-captures') && argv[1] !== 'no-captures';
 const output = resolve(root, option('--out', join('devlog', 'android-tutorial-flow')));
 const serial = option('--serial', 'emulator-5554');
-const packageName = option('--package', 'com.nosiah.discipline');
+const packageName = option('--package', 'com.nosiah.discipline.test');
 const sdkRoot = process.env.ANDROID_SDK_ROOT
   || (process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Android', 'Sdk') : '');
 const adbDefault = sdkRoot

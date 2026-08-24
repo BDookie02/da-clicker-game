@@ -177,6 +177,15 @@ const recoverAccountEntitlements = (refreshStore: boolean): Promise<void> => {
   return entitlementRecovery;
 };
 
+const refreshReferralInBackground = (service: AccountService) => {
+  // Referral proof can involve Play services and the network. Never put it in
+  // the startup, Terms, or visible referral-status critical path.
+  void ui.refreshReferralReward();
+  void claimInstallReferral(service)
+    .then(claimed => { if (claimed) void ui.refreshReferralReward(); })
+    .catch(() => false);
+};
+
 if (API_URL) {
   account = new AccountService(API_URL);
   ui.account = account;
@@ -213,8 +222,7 @@ if (API_URL) {
     }
     else {
       await recoverAccountEntitlements(true);
-      await claimInstallReferral(account!).catch(() => false);
-      await ui.refreshReferralReward();
+      refreshReferralInBackground(account!);
       game.save(); void account!.save(game.s);
       if (!account!.termsCurrent) await ui.promptTermsAcceptance();
     }
@@ -241,8 +249,7 @@ const reconnectAccount = async () => {
       return;
     }
     await recoverAccountEntitlements(true);
-    await claimInstallReferral(account).catch(() => false);
-    await ui.refreshReferralReward();
+    refreshReferralInBackground(account);
     if (!account.termsCurrent) await ui.promptTermsAcceptance();
   } catch {
     // The cloud gate remains closed. Local play and account-scoped saves stay

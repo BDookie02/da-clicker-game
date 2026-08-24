@@ -20,6 +20,7 @@
     "release:local-check": "node scripts/release-check.mjs --local",
     "release:play": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-play-release.ps1",
     "release:play:closed-alpha": "npm run release:play",
+    "release:worker": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-worker-with-maintenance.ps1",
     "preview": "vite preview",
     "assemble:cosmetics": "node scripts/assemble-cosmetics.mjs",
     "assemble:blockbench": "node scripts/blockbench-assembly.mjs",

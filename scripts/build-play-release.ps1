@@ -56,44 +56,49 @@ function Get-StringSha256 {
     }
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+    $stream = [System.IO.File]::OpenRead($LiteralPath)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToUpperInvariant()
+        }
+        finally {
+            $sha.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-OptionalFileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash
+    return Get-FileSha256 -LiteralPath $Path
 }
 
-function Get-SourceSnapshot {
-    $head = (& git rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $head) { throw 'Could not read the Git HEAD.' }
-    $branch = (& git branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0) { throw 'Could not read the Git branch.' }
-    $statusLines = @(& git status --porcelain=v1 --untracked-files=all)
-    if ($LASTEXITCODE -ne 0) { throw 'Could not read the Git working-tree status.' }
-    $trackedDiffHash = ((& git diff --binary HEAD --no-ext-diff | & git hash-object --stdin) | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $trackedDiffHash) { throw 'Could not fingerprint tracked source changes.' }
-
-    $untracked = @()
-    foreach ($relativePath in @(& git ls-files --others --exclude-standard)) {
-        if (-not $relativePath) { continue }
-        $objectHash = (& git hash-object -- $relativePath).Trim()
-        if ($LASTEXITCODE -ne 0 -or -not $objectHash) {
-            throw "Could not fingerprint untracked source file: $relativePath"
-        }
-        $untracked += [ordered]@{ path = $relativePath; gitObject = $objectHash }
+function Get-ReleaseSourceSnapshot {
+    param([Parameter(Mandatory = $true)][string]$VersionName)
+    $sourceJson = & node (Join-Path $root 'scripts\assert-clean-release-source.mjs') `
+        --version $VersionName --json
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Production source verification failed before dependency installation or build.'
     }
-
-    $identity = [ordered]@{
-        head = $head
-        branch = $branch
-        dirty = ($statusLines.Count -gt 0)
-        status = $statusLines
-        trackedDiffGitObject = $trackedDiffHash
-        untracked = $untracked
+    try {
+        $identity = $sourceJson | ConvertFrom-Json
     }
-    $identityJson = $identity | ConvertTo-Json -Depth 8 -Compress
+    catch {
+        throw 'Production source verifier returned invalid JSON.'
+    }
+    if (-not $identity.commit -or -not $identity.tree -or -not $identity.exactTag `
+        -or $identity.dirty -ne $false) {
+        throw 'Production source verifier did not return a clean committed tagged identity.'
+    }
     return [ordered]@{
         identity = $identity
-        fingerprintSha256 = Get-StringSha256 $identityJson
+        fingerprintSha256 = Get-StringSha256 ($identity | ConvertTo-Json -Depth 5 -Compress)
     }
 }
 
@@ -109,7 +114,7 @@ function Get-VerifiedBundletool {
     $download = "$jar.download"
 
     if (Test-Path -LiteralPath $jar) {
-        $existingHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $jar).Hash
+        $existingHash = Get-FileSha256 -LiteralPath $jar
         if ($existingHash -eq $bundletoolSha256) { return $jar }
         Remove-Item -LiteralPath $jar -Force
     }
@@ -117,7 +122,7 @@ function Get-VerifiedBundletool {
 
     $url = "https://github.com/google/bundletool/releases/download/$bundletoolVersion/bundletool-all-$bundletoolVersion.jar"
     Invoke-WebRequest -Uri $url -OutFile $download
-    $downloadHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash
+    $downloadHash = Get-FileSha256 -LiteralPath $download
     if ($downloadHash -ne $bundletoolSha256) {
         Remove-Item -LiteralPath $download -Force
         throw "Downloaded bundletool checksum mismatch: expected $bundletoolSha256, found $downloadHash"
@@ -152,6 +157,35 @@ function Get-ProductionWebValues {
         if ($null -ne $fromProcess) { $values[$name] = $fromProcess }
     }
     return $values
+}
+
+function Get-ReleaseInputSnapshot {
+    $files = [ordered]@{}
+    foreach ($relativePath in @(
+        'package-lock.json',
+        '.env',
+        '.env.local',
+        '.env.production',
+        '.env.production.local',
+        'android\private-release.properties',
+        'android\keystore.properties',
+        'capacitor.config.ts',
+        'wrangler.toml'
+    )) {
+        $files[$relativePath.Replace('\', '/')] = Get-OptionalFileSha256 (Join-Path $root $relativePath)
+    }
+    $viteEnvironment = [ordered]@{}
+    foreach ($entry in Get-ChildItem Env: | Where-Object { $_.Name.StartsWith('VITE_') } | Sort-Object Name) {
+        $viteEnvironment[$entry.Name] = $entry.Value
+    }
+    $identity = [ordered]@{
+        files = $files
+        viteEnvironmentSha256 = Get-StringSha256 ($viteEnvironment | ConvertTo-Json -Compress)
+    }
+    return [ordered]@{
+        identity = $identity
+        fingerprintSha256 = Get-StringSha256 ($identity | ConvertTo-Json -Depth 5 -Compress)
+    }
 }
 
 function Invoke-ClosedAlphaWebBuild {
@@ -201,8 +235,16 @@ function Invoke-ClosedAlphaWebBuild {
 
 Push-Location $root
 try {
-    $initialSource = Get-SourceSnapshot
-    $initialPackageLockHash = Get-OptionalFileSha256 (Join-Path $root 'package-lock.json')
+    $releaseProperties = Read-KeyValueFile (Join-Path $root 'android\private-release.properties')
+    $releaseVersionName = [string]$releaseProperties.VERSION_NAME
+    if ($releaseVersionName -notmatch '^\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$') {
+        throw 'A valid VERSION_NAME is required before production source verification.'
+    }
+    # This must remain before npm ci, tests, builds, or any other artifact-producing
+    # command. Production output is reconstructible only from this clean exact tag.
+    $initialSource = Get-ReleaseSourceSnapshot -VersionName $releaseVersionName
+    $initialInputs = Get-ReleaseInputSnapshot
+    $initialPackageLockHash = $initialInputs.identity.files.'package-lock.json'
     if (-not $initialPackageLockHash) { throw 'package-lock.json is required for a reproducible release install.' }
 
     # npm ci installs the exact lockfile without rewriting it. This script
@@ -258,7 +300,6 @@ try {
         throw 'bundletool returned an incomplete AAB manifest.'
     }
 
-    $releaseProperties = Read-KeyValueFile (Join-Path $root 'android\private-release.properties')
     Assert-Equal 'package' $manifestNode.GetAttribute('package') 'com.nosiah.discipline'
     Assert-Equal 'versionCode' $manifestNode.GetAttribute('versionCode', $androidNamespace) $releaseProperties.VERSION_CODE
     Assert-Equal 'versionName' $manifestNode.GetAttribute('versionName', $androidNamespace) $releaseProperties.VERSION_NAME
@@ -281,6 +322,15 @@ try {
         throw 'Built AAB Play Games app-ID resource does not match android/private-release.properties.'
     }
 
+    $integrityProjectDump = Join-Path $verificationDir 'play-integrity-cloud-project-number.txt'
+    Invoke-NativeChecked 'bundletool could not dump the Play Integrity Cloud project-number resource.' {
+        & $java -jar $bundletool dump resources "--bundle=$aab" --resource=string/play_integrity_cloud_project_number --values > $integrityProjectDump
+    }
+    $integrityProjectText = Get-Content -LiteralPath $integrityProjectDump -Raw
+    if ($integrityProjectText -notmatch [regex]::Escape($releaseProperties.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER)) {
+        throw 'Built AAB Play Integrity Cloud project-number resource does not match android/private-release.properties.'
+    }
+
     # Android upload certificates are normally self-signed. `-strict` treats
     # that expected certificate-chain warning as an error, so verify archive
     # signature integrity without requiring a public-CA chain.
@@ -288,13 +338,29 @@ try {
     Invoke-NativeChecked 'AAB signature verification failed.' {
         & (Join-Path $javaHome 'bin\jarsigner.exe') -verify $aab *> $signatureLog
     }
+    $certificateLog = Join-Path $verificationDir 'upload-certificate.txt'
+    Invoke-NativeChecked 'Could not read the AAB signing certificate.' {
+        & (Join-Path $javaHome 'bin\keytool.exe') -printcert -jarfile $aab *> $certificateLog
+    }
+    $certificateText = Get-Content -LiteralPath $certificateLog -Raw
+    $certificateMatch = [regex]::Match($certificateText, 'SHA256:\s*([0-9A-Fa-f:]+)')
+    if (-not $certificateMatch.Success) {
+        throw 'AAB signing certificate output did not contain a SHA-256 fingerprint.'
+    }
+    $actualUploadCertificate = $certificateMatch.Groups[1].Value.ToUpperInvariant()
+    $expectedUploadCertificate = [string]$releaseProperties.UPLOAD_CERT_SHA256
+    Assert-Equal 'upload certificate SHA-256' $actualUploadCertificate $expectedUploadCertificate.ToUpperInvariant()
 
-    $finalSource = Get-SourceSnapshot
+    $finalSource = Get-ReleaseSourceSnapshot -VersionName $releaseVersionName
     if ($finalSource.fingerprintSha256 -ne $initialSource.fingerprintSha256) {
         throw 'The Git source state changed while the AAB was building. The artifact is not declared release-ready; rerun from a stable working tree.'
     }
+    $finalInputs = Get-ReleaseInputSnapshot
+    if ($finalInputs.fingerprintSha256 -ne $initialInputs.fingerprintSha256) {
+        throw 'A release configuration input changed while the AAB was building. The artifact is not declared release-ready.'
+    }
 
-    $aabHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $aab).Hash
+    $aabHash = Get-FileSha256 -LiteralPath $aab
     $artifactRelativePath = 'android/app/build/outputs/bundle/release/app-release.aab'
     if ($ClosedAlphaWithGoogleDemoAds) {
         $artifactDir = Join-Path $root 'artifacts\android-closed-alpha'
@@ -317,19 +383,18 @@ try {
             sha256 = $aabHash
         }
         source = [ordered]@{
-            head = $initialSource.identity.head
+            commit = $initialSource.identity.commit
+            tree = $initialSource.identity.tree
+            exactTag = $initialSource.identity.exactTag
             branch = $initialSource.identity.branch
-            dirty = $initialSource.identity.dirty
-            status = $initialSource.identity.status
+            dirty = $false
             fingerprintSha256 = $initialSource.fingerprintSha256
-            trackedDiffGitObject = $initialSource.identity.trackedDiffGitObject
-            untracked = $initialSource.identity.untracked
         }
         inputs = [ordered]@{
             packageLockSha256 = $initialPackageLockHash
-            productionEnvSha256 = Get-OptionalFileSha256 (Join-Path $root '.env.production.local')
-            androidReleasePropertiesSha256 = Get-OptionalFileSha256 (Join-Path $root 'android\private-release.properties')
-            androidKeystorePropertiesSha256 = Get-OptionalFileSha256 (Join-Path $root 'android\keystore.properties')
+            configFingerprintSha256 = $initialInputs.fingerprintSha256
+            files = $initialInputs.identity.files
+            viteEnvironmentSha256 = $initialInputs.identity.viteEnvironmentSha256
         }
         android = [ordered]@{
             package = $manifestNode.GetAttribute('package')
@@ -339,6 +404,8 @@ try {
             targetSdkVersion = $usesSdk.GetAttribute('targetSdkVersion', $androidNamespace)
             admobAppId = $metadata['com.google.android.gms.ads.APPLICATION_ID']
             playGamesAppId = $releaseProperties.PLAY_GAMES_APP_ID
+            playIntegrityCloudProjectNumber = $releaseProperties.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER
+            uploadCertificateSha256 = $expectedUploadCertificate.ToUpperInvariant()
         }
         ads = if ($ClosedAlphaWithGoogleDemoAds) {
             [ordered]@{
@@ -373,8 +440,9 @@ try {
         Write-Output "PLAY AAB READY (not uploaded): $aab"
     }
     Write-Output "SHA-256: $aabHash"
-    Write-Output "Source HEAD: $($initialSource.identity.head)"
-    Write-Output "Source dirty: $($initialSource.identity.dirty)"
+    Write-Output "Source commit: $($initialSource.identity.commit)"
+    Write-Output "Source tree: $($initialSource.identity.tree)"
+    Write-Output "Source tag: $($initialSource.identity.exactTag)"
     Write-Output "Provenance: $provenanceFile"
 }
 finally {

@@ -7,6 +7,7 @@ crons = ["17 * * * *"]
 
 [vars]
 ADMOB_REWARDED_AD_UNIT_ID = "6776690128"
+PUBLIC_REFERRAL_BASE_URL = "https://discipline-api.nomogames.workers.dev"
 LEGAL_PUBLISHER_NAME = "Nomogames"
 LEGAL_CONTACT_EMAIL = "co.nosiah@gmail.com"
 LEGAL_EFFECTIVE_DATE = "2026-08-24"
@@ -18,3 +19,14 @@ binding = "DB"
 database_name = "discipline-db"
 database_id = "58d64196-499f-42ba-bd7e-a688b8bf64a4"
 migrations_dir = "server/migrations"
+
+[[durable_objects.bindings]]
+name = "QUICK_DRAW_ROOMS"
+class_name = "QuickDrawRoom"
+
+# This Worker had no legacy Durable Object migration history. Current Wrangler
+# recommends declarative exports for a new SQLite-backed namespace; exports and
+# legacy [[migrations]] entries are mutually exclusive.
+[exports.QuickDrawRoom]
+type = "durable-object"
+storage = "sqlite"

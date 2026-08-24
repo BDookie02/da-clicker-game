@@ -50,8 +50,9 @@ test('username and platform-login descriptions are deferred to their selected fl
   assert.match(ui, /leaderboard-signin-overlay/);
   assert.match(
     ui,
-    /connects this device to the official All-Time Taps board and submits your raw tap count/,
+    /submits a client-recorded cumulative tap count that the server limits to plausible rates/,
   );
+  assert.doesNotMatch(ui, /submits your raw tap count/);
   const promptAt = ui.indexOf('private promptLeaderboardSignIn()');
   const signInAt = ui.indexOf('await provider.signIn()', promptAt);
   const submitAt = ui.indexOf('await provider.submit(this.game.s.totalTaps)', signInAt);

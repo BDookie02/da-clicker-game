@@ -99,7 +99,7 @@ await evaluate(`(() => {
     markTermsOutdated: () => undefined,
     referralStatus: async () => ({
       code: 'A1B2C3D4E5',
-      shareUrl: 'https://play.google.com/store/apps/details?id=com.nosiah.discipline&referrer=visual-qa',
+      shareUrl: 'https://discipline-api.nomogames.workers.dev/r/A1B2C3D4E5',
       qualifiedCount: 1,
       rewardCount: 1,
       rewardLimit: 10,

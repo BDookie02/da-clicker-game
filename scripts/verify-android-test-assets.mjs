@@ -6,6 +6,7 @@ const root = process.cwd();
 const distRoot = path.join(root, 'dist');
 const androidWebRoot = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'public');
 const failures = [];
+const expectedTestApiUrl = 'http://127.0.0.1:8787';
 
 function parseEnv(file) {
   if (!fs.existsSync(file)) return {};
@@ -64,6 +65,8 @@ if (String(testEnv.VITE_VISUAL_AUDIT).toLowerCase() !== 'true')
   failures.push('VITE_VISUAL_AUDIT must be true for the Android test payload');
 if (String(testEnv.VITE_ADMOB_TESTING).toLowerCase() !== 'true')
   failures.push('VITE_ADMOB_TESTING must be true for the Android test payload');
+if (String(testEnv.VITE_API_URL || '').replace(/\/$/, '') !== expectedTestApiUrl)
+  failures.push(`VITE_API_URL must be exactly ${expectedTestApiUrl} for the physical Android test payload`);
 
 let distDigest;
 let androidDigest;
@@ -112,6 +115,8 @@ if (fs.existsSync(androidWebRoot)) {
     if (!source.includes(handle))
       failures.push(`Android test payload is missing visual-audit handle ${handle}`);
   }
+  if (!source.includes(expectedTestApiUrl))
+    failures.push(`Android test payload does not contain the required local API origin ${expectedTestApiUrl}`);
 
   const productionEnv = {
     ...parseEnv(path.join(root, '.env.production')),
@@ -119,12 +124,15 @@ if (fs.existsSync(androidWebRoot)) {
   };
   const productionRewardedId = productionEnv.VITE_ADMOB_ANDROID_REWARDED_ID || '';
   const productionInterstitialId = productionEnv.VITE_ADMOB_ANDROID_INTERSTITIAL_ID || '';
+  const productionApiUrl = String(productionEnv.VITE_API_URL || '').replace(/\/$/, '');
   if (productionRewardedId && productionRewardedId !== expectedTestRewardedId && source.includes(productionRewardedId))
     failures.push('Android test payload unexpectedly contains the production rewarded-ad unit ID');
   if (productionInterstitialId
       && productionInterstitialId !== expectedTestInterstitialId
       && source.includes(productionInterstitialId))
     failures.push('Android test payload unexpectedly contains the production interstitial-ad unit ID');
+  if (productionApiUrl && productionApiUrl !== expectedTestApiUrl && source.includes(productionApiUrl))
+    failures.push('Android test payload unexpectedly contains the production API origin');
 
   const index = path.join(androidWebRoot, 'index.html');
   if (!fs.existsSync(index) || !fs.readFileSync(index, 'utf8').includes('DISCIPLINE.'))
@@ -142,6 +150,7 @@ const report = {
   admobTesting: true,
   rewardedAdUnitId: 'ca-app-pub-3940256099942544/5224354917',
   interstitialAdUnitId: 'ca-app-pub-3940256099942544/1033173712',
+  apiUrl: expectedTestApiUrl,
   treeSha256: androidDigest.sha256,
   fileCount: androidDigest.fileCount,
 };

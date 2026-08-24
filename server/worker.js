@@ -4,8 +4,22 @@
 
 import { validateUsername } from './username-policy.js';
 import { deletionPage, legalConfig, privacyPage, termsPage } from './legal-pages.js';
-import { handleMultiplayerRoute } from './multiplayer.js';
+import {
+  handleMultiplayerRoute,
+  handleQuickDrawSocket,
+  pvpForfeitIntentStatement,
+  settlePvPAccountDeparture,
+  settlePvPForfeit,
+} from './multiplayer.js';
+export { QuickDrawRoom } from './quick-draw-room.js';
 import { TERMS_VERSION } from './constants.js';
+import {
+  PlatformProofError,
+  GOOGLE_PLAY_ATTRIBUTION_VERSION,
+  GOOGLE_PLAY_INSTALL_REFERRER_PROVIDER,
+  parseReferralClaim,
+  verifyReferralClaim,
+} from './platform-attestation.js';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -18,6 +32,20 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
 const html = (body) => new Response(body, {
   headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
 });
+
+async function quickDrawReadiness(env) {
+  if (!env.QUICK_DRAW_ROOMS) return json({ ready: false }, 503);
+  try {
+    const response = await env.QUICK_DRAW_ROOMS.getByName('release-readiness-v1').fetch(
+      new Request('https://quick-draw.internal/health'),
+    );
+    const payload = await response.json().catch(() => null);
+    return response.ok && payload?.ready === true
+      ? json({ ready: true }) : json({ ready: false }, 503);
+  } catch {
+    return json({ ready: false }, 503);
+  }
+}
 const PASSWORD_MIN = 10;
 // Cloudflare Workers Web Crypto rejects PBKDF2 iteration counts above 100,000.
 // Keep this at the platform maximum so production registration/login works.
@@ -50,6 +78,16 @@ const COSMETICS = Object.freeze({
 });
 const REFERRAL_REWARD_LIMIT = 10;
 const REFERRAL_REWARD_IDS = Object.freeze(Object.keys(COSMETICS));
+const REFERRAL_CLAIM_RATE_LIMITS = Object.freeze({
+  account: 6,
+  ip: 60,
+  codeIp: 12,
+  registerIp: 20,
+  windowSeconds: 60 * 60,
+});
+const REFERRAL_RATE_LIMIT_TEST_HOOK = Symbol.for(
+  'discipline.test.referralRateLimits',
+);
 const ANDROID_PACKAGE_NAME = 'com.nosiah.discipline';
 const ANDROID_PUBLISHER_ROOT = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${ANDROID_PACKAGE_NAME}`;
 const FINAL_REVERSED_FINANCIAL_STATUSES = Object.freeze([
@@ -295,7 +333,98 @@ async function authenticated(req, env) {
   return env.DB.prepare(`SELECT a.id, a.username, a.lower_username,
       CAST(strftime('%s',a.created_at) AS INTEGER) AS created_epoch
     FROM sessions s JOIN accounts a ON a.id=s.account_id
-    WHERE s.token_hash=? AND s.expires_at>?`).bind(tokenHash, Math.floor(Date.now() / 1000)).first();
+      WHERE s.token_hash=? AND s.expires_at>?`).bind(tokenHash, Math.floor(Date.now() / 1000)).first();
+}
+
+const ACCOUNT_MUTATION_LEASE_STALE_MS = 15 * 60 * 1000;
+
+async function acquireAccountMutationLease(env, accountId) {
+  const now = Date.now();
+  const requestId = randomHex(16);
+  // A Worker request cannot legitimately remain live for fifteen minutes.
+  // Deletion ignores an older crash remnant; normal requests do not issue a
+  // cleanup write because request ids are unique and account deletion removes
+  // every remaining row explicitly.
+  const result = await env.DB.prepare(`INSERT INTO account_mutation_leases(
+      request_id,account_id,acquired_at_ms
+    ) SELECT ?,?,?
+    WHERE NOT EXISTS (SELECT 1 FROM account_deletion_jobs WHERE account_id=?)`)
+    .bind(requestId, accountId, now, accountId).run();
+  return Number(result?.meta?.changes || 0) === 1 ? requestId : null;
+}
+
+async function accountDeletionPending(env, accountId) {
+  return Boolean(await env.DB.prepare(
+    'SELECT account_id FROM account_deletion_jobs WHERE account_id=?',
+  ).bind(accountId).first());
+}
+
+async function releaseAccountMutationLease(env, requestId, accountId) {
+  await env.DB.prepare(`DELETE FROM account_mutation_leases
+    WHERE request_id=? AND account_id=?`).bind(requestId, accountId).run();
+}
+
+const AUTHENTICATED_MUTATION_LEASE_ROUTES = new Set([
+  'GET /v1/referral',
+  'POST /v1/referral/claim',
+  'PUT /v1/account/username',
+  'PUT /v1/account/terms',
+  'POST /v1/reports',
+  'POST /v1/blocks',
+  'PUT /v1/save',
+  'POST /v1/purchases/android/verify',
+  'POST /v1/purchases/ios/verify',
+]);
+
+function authenticatedMultiplayerRouteKind(method, pathname) {
+  if (method === 'GET' && pathname === '/v1/multiplayer') return 'read';
+  if (method === 'POST' && [
+    '/v1/friends/request', '/v1/friends/respond', '/v1/pvp/invite',
+  ].includes(pathname)) return 'leased_mutation';
+  if (method === 'DELETE' && /^\/v1\/friends\/[^/]+$/.test(pathname))
+    return 'leased_mutation';
+  if (method !== 'POST') return null;
+  if (/^\/v1\/pvp\/[0-9a-f]{32}\/quick-draw\/ticket$/.test(pathname))
+    return 'leased_mutation';
+  if (/^\/v1\/pvp\/[0-9a-f]{32}\/tap$/.test(pathname)) return 'guarded_tap';
+  if (/^\/v1\/pvp\/[0-9a-f]{32}\/(?:respond|draw|cancel)$/.test(pathname))
+    return 'leased_mutation';
+  return null;
+}
+
+function authenticatedMutationNeedsLease(method, pathname) {
+  const route = `${method} ${pathname}`;
+  if (AUTHENTICATED_MUTATION_LEASE_ROUTES.has(route)) return true;
+  if (method === 'DELETE' && /^\/v1\/blocks\/[^/]+$/.test(pathname)) return true;
+  const multiplayerKind = authenticatedMultiplayerRouteKind(method, pathname);
+  // Tap snapshots are deliberately lease-exempt: both of their D1 writes use
+  // activeMatchEligibilitySql(), which atomically rejects either player's
+  // deletion job. Avoiding two lease writes per snapshot is safe and keeps a
+  // modified client from using the serialization primitive as a quota DoS.
+  return multiplayerKind === 'leased_mutation';
+}
+
+const PVP_TAP_BURST_INTERVAL_MS = 250;
+const PVP_TAP_BURST_MAX_KEYS = 2048;
+const pvpTapBurstByAccountMatch = new Map();
+
+function pvpTapBurstRetryAfter(accountId, pathname, now = Date.now()) {
+  const match = pathname.match(/^\/v1\/pvp\/([0-9a-f]{32})\/tap$/);
+  if (!match) return 0;
+  const key = `${accountId}:${match[1]}`;
+  const prior = Number(pvpTapBurstByAccountMatch.get(key) || 0);
+  if (prior && now - prior < PVP_TAP_BURST_INTERVAL_MS)
+    return PVP_TAP_BURST_INTERVAL_MS - (now - prior);
+  pvpTapBurstByAccountMatch.set(key, now);
+  if (pvpTapBurstByAccountMatch.size > PVP_TAP_BURST_MAX_KEYS) {
+    const staleBefore = now - 60_000;
+    for (const [candidate, seenAt] of pvpTapBurstByAccountMatch) {
+      if (Number(seenAt) < staleBefore) pvpTapBurstByAccountMatch.delete(candidate);
+    }
+    while (pvpTapBurstByAccountMatch.size > PVP_TAP_BURST_MAX_KEYS)
+      pvpTapBurstByAccountMatch.delete(pvpTapBurstByAccountMatch.keys().next().value);
+  }
+  return 0;
 }
 
 async function ensureAccountProfile(env, accountId) {
@@ -306,10 +435,14 @@ async function ensureAccountProfile(env, accountId) {
   // leaderboard row for report/block actions without receiving a database id.
   for (let attempt = 0; attempt < 3 && !profile; attempt++) {
     await env.DB.prepare(`INSERT OR IGNORE INTO account_profiles(account_id,public_id)
-      VALUES(?,?)`).bind(accountId, randomHex(16)).run();
+      SELECT ?,? WHERE NOT EXISTS (
+        SELECT 1 FROM account_deletion_jobs WHERE account_id=?
+      )`).bind(accountId, randomHex(16), accountId).run();
     profile = await env.DB.prepare(`SELECT account_id,public_id,terms_version,terms_accepted_at,leaderboard_status
       FROM account_profiles WHERE account_id=?`).bind(accountId).first();
   }
+  if (!profile && await accountDeletionPending(env, accountId))
+    throw new Error('account_deletion_pending');
   if (!profile) throw new Error('profile_unavailable');
   return profile;
 }
@@ -444,7 +577,7 @@ async function economyAuthority(env, accountId) {
         NOT IN ('canceled','pending_refund','partially_refunded','refunded','revoked')
       ORDER BY p.verified_at ASC`).bind(accountId).all(),
     env.DB.prepare('SELECT nonce FROM ad_rewards WHERE account_id=? ORDER BY verified_at ASC').bind(accountId).all(),
-    env.DB.prepare('SELECT cosmetic_id FROM referral_rewards WHERE referrer_account_id=? ORDER BY reward_index ASC')
+    env.DB.prepare('SELECT cosmetic_id FROM referral_reward_ledger WHERE referrer_account_id=? ORDER BY reward_index ASC')
       .bind(accountId).all(),
     env.DB.prepare('SELECT COALESCE(SUM(mentality_amount),0) AS amount FROM pvp_rewards WHERE winner_account_id=?')
       .bind(accountId).first(),
@@ -476,7 +609,7 @@ function randomUint32() {
 
 async function referralRewardState(env, accountId) {
   const [rewards, saveRow] = await Promise.all([
-    env.DB.prepare(`SELECT cosmetic_id,reward_index FROM referral_rewards
+    env.DB.prepare(`SELECT cosmetic_id,reward_index FROM referral_reward_ledger
       WHERE referrer_account_id=? ORDER BY reward_index ASC`).bind(accountId).all(),
     env.DB.prepare('SELECT save_json FROM cloud_saves WHERE account_id=?').bind(accountId).first(),
   ]);
@@ -490,23 +623,384 @@ async function referralRewardState(env, accountId) {
   };
 }
 
-async function reconcileReferralRewards(env, accountId) {
-  const pending = await env.DB.prepare(`SELECT rc.referred_account_id
+const LEGACY_ANDROID_REFERRAL_EVIDENCE_VERSION = 'referral_evidence_v1';
+const PROVIDER_REFERRAL_EVIDENCE_VERSION = 'referral_evidence_v2';
+const REFERRAL_EVIDENCE_KEY_ID = /^[A-Za-z0-9_-]{1,32}$/;
+const REFERRAL_EVIDENCE_KEY_CHECK_CONTEXT = 'discipline_referral_key_check_v1';
+
+function canonicalReferralEvidence(claim) {
+  // This exact Android v1 serialization is permanent. Tombstones created
+  // before the provider-neutral boundary contain only its HMAC; changing even
+  // one byte would make deleted installs replayable.
+  if (claim.attributionProvider === GOOGLE_PLAY_INSTALL_REFERRER_PROVIDER
+      && claim.attributionVersion === GOOGLE_PLAY_ATTRIBUTION_VERSION) return [
+    LEGACY_ANDROID_REFERRAL_EVIDENCE_VERSION,
+    `platform=${encodeURIComponent(String(claim.platform))}`,
+    `referral_code=${encodeURIComponent(String(claim.referralCode))}`,
+    `click_timestamp=${String(claim.firstTouchAt)}`,
+    `install_timestamp=${String(claim.installedAt)}`,
+  ].join('\n');
+  return [
+    PROVIDER_REFERRAL_EVIDENCE_VERSION,
+    `platform=${encodeURIComponent(String(claim.platform))}`,
+    `attribution_provider=${encodeURIComponent(String(claim.attributionProvider))}`,
+    `attribution_version=${encodeURIComponent(String(claim.attributionVersion))}`,
+    `referral_code=${encodeURIComponent(String(claim.referralCode))}`,
+    `evidence_id=${encodeURIComponent(String(claim.evidenceId))}`,
+  ].join('\n');
+}
+
+function normalizedEvidenceClaim(claimOrPlatform, code, clickTimestamp, installTimestamp) {
+  // The positional form is retained for tests and staged Android rollout
+  // compatibility. New core code supplies a provider-normalized claim.
+  return typeof claimOrPlatform === 'object' && claimOrPlatform !== null
+    ? claimOrPlatform
+    : {
+        platform: claimOrPlatform,
+        attributionProvider: GOOGLE_PLAY_INSTALL_REFERRER_PROVIDER,
+        attributionVersion: GOOGLE_PLAY_ATTRIBUTION_VERSION,
+        referralCode: code,
+        evidenceId: `${clickTimestamp}:${installTimestamp}`,
+        firstTouchAt: clickTimestamp,
+        installedAt: installTimestamp,
+      };
+}
+
+export function referralEvidenceKeyRing(env) {
+  let parsed;
+  try { parsed = JSON.parse(String(env?.REFERRAL_EVIDENCE_HMAC_KEYRING_JSON || '')); }
+  catch { throw new Error('referral_evidence_not_configured'); }
+  const current = String(parsed?.current || '');
+  const rawKeys = parsed?.keys;
+  if (!REFERRAL_EVIDENCE_KEY_ID.test(current) || !rawKeys || Array.isArray(rawKeys)
+      || typeof rawKeys !== 'object')
+    throw new Error('referral_evidence_not_configured');
+  const entries = Object.entries(rawKeys).map(([id, secret]) => ({
+    id: String(id), secret: String(secret || ''),
+  }));
+  if (!entries.length || entries.length > 16
+      || entries.some(({ id, secret }) => !REFERRAL_EVIDENCE_KEY_ID.test(id) || secret.length < 32)
+      || !entries.some(({ id }) => id === current))
+    throw new Error('referral_evidence_not_configured');
+  return Object.freeze({
+    current,
+    keys: Object.freeze([
+      entries.find(({ id }) => id === current),
+      ...entries.filter(({ id }) => id !== current).sort((a, b) => a.id.localeCompare(b.id)),
+    ]),
+  });
+}
+
+async function referralEvidenceHmac(secret, canonical) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signature = await crypto.subtle.sign(
+    'HMAC', key, new TextEncoder().encode(canonical),
+  );
+  return base64url(new Uint8Array(signature));
+}
+
+async function ensureReferralEvidenceKeyRing(env) {
+  const ring = referralEvidenceKeyRing(env);
+  const replayPepper = String(env?.REFERRAL_EVIDENCE_REPLAY_PEPPER || '');
+  if (replayPepper.length < 32) throw new Error('referral_evidence_not_configured');
+  const records = [{
+    id: 'replay-pepper-v1',
+    verificationTag: await referralEvidenceHmac(
+      replayPepper, REFERRAL_EVIDENCE_KEY_CHECK_CONTEXT,
+    ),
+    legacyUnversioned: 1,
+  }];
+  await env.DB.prepare(`INSERT OR IGNORE INTO referral_evidence_key_registry(
+      key_id,verification_tag,legacy_unversioned
+    ) SELECT json_extract(value,'$.id'),json_extract(value,'$.verificationTag'),
+        json_extract(value,'$.legacyUnversioned')
+      FROM json_each(?)`).bind(JSON.stringify(records)).run();
+  const registered = await env.DB.prepare(`SELECT key_id,verification_tag,legacy_unversioned
+    FROM referral_evidence_key_registry`).all();
+  const registeredPepper = (registered?.results || [])
+    .find(row => String(row.key_id) === 'replay-pepper-v1');
+  if (!registeredPepper
+      || records[0].verificationTag !== String(registeredPepper.verification_tag)
+      || Number(registeredPepper.legacy_unversioned) !== 1)
+    throw new Error('referral_evidence_not_configured');
+  return ring;
+}
+
+async function referralReadiness(env) {
+  try {
+    // This deliberately exercises both secret parsing and the permanent
+    // replay-pepper registry. A deploy must not reopen the API merely because
+    // the expected secret *names* exist while their values are malformed or
+    // the lifetime replay pepper no longer matches its registered tag.
+    await ensureReferralEvidenceKeyRing(env);
+    // Exercise the live 0017 table and every column used by the throttler.
+    // This keeps a partially applied migration from passing the pre-open
+    // readiness smoke and then failing registration/referral traffic.
+    await env.DB.prepare(`SELECT bucket,subject_hash,window_started_at,request_count
+      FROM request_rate_limits LIMIT 1`).all();
+    return json({ ready: true });
+  } catch {
+    return json({ ready: false }, 503);
+  }
+}
+
+function referralRateLimits(env) {
+  const test = env?.[REFERRAL_RATE_LIMIT_TEST_HOOK];
+  const result = { ...REFERRAL_CLAIM_RATE_LIMITS };
+  if (test && typeof test === 'object') {
+    for (const key of Object.keys(result)) {
+      const value = Number(test[key]);
+      if (Number.isSafeInteger(value) && value > 0) result[key] = value;
+    }
+  }
+  return result;
+}
+
+function connectingIp(req) {
+  const value = String(req.headers.get('CF-Connecting-IP') || '').trim();
+  return value.length >= 3 && value.length <= 64 && /^[0-9a-f:.]+$/i.test(value)
+    ? value.toLowerCase() : '';
+}
+
+async function rateLimitSubject(env, bucket, value) {
+  const pepper = String(env?.REFERRAL_EVIDENCE_REPLAY_PEPPER || '');
+  if (pepper.length < 32) throw new Error('rate_limit_not_configured');
+  return referralEvidenceHmac(
+    pepper,
+    `discipline_rate_limit_v1\nbucket=${bucket}\nsubject=${encodeURIComponent(String(value))}`,
+  );
+}
+
+async function pruneRequestRateLimits(env, nowSeconds) {
+  await env.DB.prepare(`DELETE FROM request_rate_limits
+    WHERE window_started_at<?`).bind(nowSeconds - 24 * 60 * 60).run();
+}
+
+async function consumeRateLimit(
+  env, bucket, rawSubject, limit, windowSeconds, nowSeconds,
+) {
+  const subjectHash = await rateLimitSubject(env, bucket, rawSubject);
+  const resetBefore = nowSeconds - windowSeconds;
+  const row = await env.DB.prepare(`INSERT INTO request_rate_limits(
+      bucket,subject_hash,window_started_at,request_count
+    ) VALUES(?,?,?,1)
+    ON CONFLICT(bucket,subject_hash) DO UPDATE SET
+      window_started_at=CASE
+        WHEN request_rate_limits.window_started_at<=?
+        THEN excluded.window_started_at ELSE request_rate_limits.window_started_at END,
+      request_count=CASE
+        WHEN request_rate_limits.window_started_at<=?
+        THEN 1 ELSE request_rate_limits.request_count+1 END
+    RETURNING request_count`).bind(
+    bucket, subjectHash, nowSeconds, resetBefore, resetBefore,
+  ).first();
+  if (!row) throw new Error('rate_limit_unavailable');
+  return Number(row.request_count) <= limit;
+}
+
+async function referralClaimRateLimitAllowed(req, env, accountId, referralCode, nowSeconds) {
+  const limits = referralRateLimits(env);
+  await pruneRequestRateLimits(env, nowSeconds);
+  if (!await consumeRateLimit(
+    env, 'referral-account-v1', accountId,
+    limits.account, limits.windowSeconds, nowSeconds,
+  )) return false;
+  const ip = connectingIp(req);
+  if (!ip) return true;
+  if (!await consumeRateLimit(
+    env, 'referral-ip-v1', ip,
+    limits.ip, limits.windowSeconds, nowSeconds,
+  )) return false;
+  // A referral code is public and may legitimately go viral. Scope its abuse
+  // bucket to the source IP so one attacker cannot exhaust a shared global
+  // quota and suppress every legitimate install using that code.
+  return consumeRateLimit(
+    env, 'referral-code-ip-v1', `${referralCode}\n${ip}`,
+    limits.codeIp, limits.windowSeconds, nowSeconds,
+  );
+}
+
+async function registrationRateLimitAllowed(req, env, nowSeconds) {
+  const ip = connectingIp(req);
+  if (!ip) return true;
+  await ensureReferralEvidenceKeyRing(env);
+  await pruneRequestRateLimits(env, nowSeconds);
+  const limits = referralRateLimits(env);
+  return consumeRateLimit(
+    env, 'registration-ip-v1', ip,
+    limits.registerIp, limits.windowSeconds, nowSeconds,
+  );
+}
+
+export async function referralEvidenceKeys(
+  env, claimOrPlatform, code, clickTimestamp, installTimestamp,
+) {
+  const claim = normalizedEvidenceClaim(
+    claimOrPlatform, code, clickTimestamp, installTimestamp,
+  );
+  const ring = referralEvidenceKeyRing(env);
+  const replayPepper = String(env?.REFERRAL_EVIDENCE_REPLAY_PEPPER || '');
+  if (replayPepper.length < 32) throw new Error('referral_evidence_not_configured');
+  const canonical = canonicalReferralEvidence(claim);
+  const version = claim.attributionProvider === GOOGLE_PLAY_INSTALL_REFERRER_PROVIDER
+      && claim.attributionVersion === GOOGLE_PLAY_ATTRIBUTION_VERSION ? 'h1' : 'h2';
+  const signatures = await Promise.all(ring.keys.map(async ({ id, secret }) => ({
+    id, signature: await referralEvidenceHmac(secret, canonical),
+  })));
+  const replaySignature = await referralEvidenceHmac(replayPepper, canonical);
+  // The first key is always the current, versioned write key. Retained active
+  // keys produce versioned candidates; the permanent pepper alone produces
+  // the stable replay fingerprint and exact historical unversioned Android
+  // candidate, so active-key rotation cannot reopen replay.
+  return [
+    ...signatures.map(({ id, signature }) => `${version}k_${id}_${signature}`),
+    `p${version.slice(1)}_${replaySignature}`,
+    // The permanent replay pepper must initially equal the pre-keyring Worker
+    // secret. This exact candidate preserves every historical Android v1
+    // tombstone while active signing keys may rotate or be retired safely.
+    ...(version === 'h1' ? [`h1_${replaySignature}`] : []),
+  ];
+}
+
+export async function referralEvidenceKey(
+  env, claimOrPlatform, code, clickTimestamp, installTimestamp,
+) {
+  return (await referralEvidenceKeys(
+    env, claimOrPlatform, code, clickTimestamp, installTimestamp,
+  ))[0];
+}
+
+const REFERRAL_DELETION_PAGE_SIZE = 8;
+
+async function continueReferralDeletion(env, accountId) {
+  const leaseCutoff = Date.now() - ACCOUNT_MUTATION_LEASE_STALE_MS;
+  await env.DB.prepare(`INSERT OR IGNORE INTO account_deletion_jobs(account_id)
+    SELECT ? WHERE NOT EXISTS (
+      SELECT 1 FROM account_mutation_leases
+      WHERE account_id=? AND acquired_at_ms>=?
+    )`).bind(accountId, accountId, leaseCutoff).run();
+  const job = await env.DB.prepare(`SELECT referral_cursor FROM account_deletion_jobs
+    WHERE account_id=?`).bind(accountId).first();
+  if (!job) throw new Error('account_deletion_job_unavailable');
+  const claims = await env.DB.prepare(`SELECT
+      rc.referred_account_id,rc.platform,rc.referral_code,rc.click_timestamp,rc.install_timestamp,
+      rc.attribution_provider,rc.attribution_version,cl.evidence_key
     FROM referral_claims rc
-    LEFT JOIN referral_rewards rr ON rr.referred_account_id=rc.referred_account_id
-    WHERE rc.referrer_account_id=? AND rr.referred_account_id IS NULL
+    LEFT JOIN referral_claim_ledger cl
+      ON cl.referred_account_id=rc.referred_account_id
+    WHERE (rc.referred_account_id=? OR rc.referrer_account_id=?)
+      AND rc.referred_account_id>?
+    ORDER BY rc.referred_account_id ASC LIMIT ?`)
+    .bind(
+      accountId, accountId, Number(job.referral_cursor), REFERRAL_DELETION_PAGE_SIZE,
+    ).all();
+  const rows = claims?.results || [];
+  if (!rows.length) return null;
+  await ensureReferralEvidenceKeyRing(env);
+  const tombstones = new Set();
+  for (const row of rows) {
+    const platform = String(row.platform || '');
+    const referralCode = String(row.referral_code || '');
+    const clickTimestamp = Number(row.click_timestamp);
+    const installTimestamp = Number(row.install_timestamp);
+    const attributionProvider = String(row.attribution_provider || 'legacy');
+    const attributionVersion = String(row.attribution_version || 'legacy');
+    // Claims predating provider metadata used the same v1 canonical fields as
+    // Android. Current Android claims use that serialization permanently too.
+    // Any future provider must add its own deterministic deletion derivation
+    // here before claims from that provider may be deleted.
+    if (platform !== 'android'
+        || !/^[A-F0-9]{10}$/.test(referralCode)
+        || !Number.isSafeInteger(clickTimestamp) || clickTimestamp <= 0
+        || !Number.isSafeInteger(installTimestamp) || installTimestamp <= 0
+        || (attributionProvider !== 'legacy'
+          && (attributionProvider !== GOOGLE_PLAY_INSTALL_REFERRER_PROVIDER
+            || attributionVersion !== GOOGLE_PLAY_ATTRIBUTION_VERSION)))
+      throw new Error('unsupported_referral_tombstone_provider');
+    const derived = await referralEvidenceKeys(
+      env, platform, referralCode, clickTimestamp, installTimestamp,
+    );
+    for (const key of derived) tombstones.add(key);
+  }
+  const nextCursor = Number(rows.at(-1).referred_account_id);
+  const results = await env.DB.batch([
+    env.DB.prepare(`INSERT OR IGNORE INTO referral_evidence_fingerprints(evidence_hash)
+      SELECT CAST(value AS TEXT) FROM json_each(?)`).bind(JSON.stringify([...tombstones])),
+    env.DB.prepare(`UPDATE account_deletion_jobs
+      SET referral_cursor=?,updated_at=datetime('now')
+      WHERE account_id=? AND referral_cursor=?`).bind(
+      nextCursor, accountId, Number(job.referral_cursor),
+    ),
+  ]);
+  if (Number(results?.[1]?.meta?.changes || 0) === 1) return String(nextCursor);
+  // A concurrent deletion request may have advanced the same job. Return the
+  // durable cursor so clients can detect progress (or fail a stuck loop)
+  // instead of blindly hammering this endpoint.
+  const current = await env.DB.prepare(`SELECT referral_cursor FROM account_deletion_jobs
+    WHERE account_id=?`).bind(accountId).first();
+  if (!current) throw new Error('account_deletion_job_unavailable');
+  return String(current.referral_cursor);
+}
+
+function referralRewardStatement(env, evidenceKey, referrerAccountId) {
+  const candidates = REFERRAL_REWARD_IDS.map(() => '(?)').join(',');
+  return env.DB.prepare(`WITH candidates(cosmetic_id) AS (VALUES ${candidates}),
+      next_reward(reward_index) AS (
+        SELECT COALESCE(MAX(reward_index),0)+1 FROM referral_reward_ledger
+        WHERE referrer_account_id=?
+      ),
+      save_owned(cosmetic_id) AS (
+        SELECT CAST(j.value AS TEXT)
+        FROM cloud_saves s,json_each(
+          CASE WHEN json_valid(s.save_json) THEN s.save_json ELSE '{"ownedCosmetics":[]}' END,
+          '$.ownedCosmetics'
+        ) j WHERE s.account_id=?
+      )
+    INSERT INTO referral_reward_ledger(
+      evidence_key,referrer_account_id,reward_index,cosmetic_id
+    )
+    SELECT ?,?,n.reward_index,c.cosmetic_id
+    FROM candidates c CROSS JOIN next_reward n
+    WHERE n.reward_index<=?
+      AND NOT EXISTS (SELECT 1 FROM save_owned s WHERE s.cosmetic_id=c.cosmetic_id)
+      AND NOT EXISTS (SELECT 1 FROM referral_reward_ledger r
+        WHERE r.referrer_account_id=? AND r.cosmetic_id=c.cosmetic_id)
+    ORDER BY random() LIMIT 1`).bind(
+    ...REFERRAL_REWARD_IDS, referrerAccountId, referrerAccountId,
+    evidenceKey, referrerAccountId, REFERRAL_REWARD_LIMIT, referrerAccountId,
+  );
+}
+
+function legacyReferralRewardStatement(env, evidenceKey, referredAccountId) {
+  return env.DB.prepare(`INSERT OR IGNORE INTO referral_rewards(
+      referred_account_id,referrer_account_id,reward_index,cosmetic_id
+    )
+    SELECT ?,rr.referrer_account_id,rr.reward_index,rr.cosmetic_id
+    FROM referral_reward_ledger rr WHERE rr.evidence_key=?`)
+    .bind(referredAccountId, evidenceKey);
+}
+
+async function reconcileReferralRewards(env, accountId) {
+  const pending = await env.DB.prepare(`SELECT rc.evidence_key
+    FROM referral_claim_ledger rc
+    LEFT JOIN referral_reward_ledger rr ON rr.evidence_key=rc.evidence_key
+    WHERE rc.referrer_account_id=? AND rr.evidence_key IS NULL
     ORDER BY rc.claimed_at ASC LIMIT ?`).bind(accountId, REFERRAL_REWARD_LIMIT).all();
   for (const claim of pending?.results || []) {
-    const state = await referralRewardState(env, accountId);
-    if (state.rewardIds.length >= REFERRAL_REWARD_LIMIT) break;
-    const cosmeticId = selectReferralRewardId(state.ownedIds, randomUint32());
-    if (!cosmeticId) break;
     try {
-      await env.DB.prepare(`INSERT INTO referral_rewards(
-        referred_account_id,referrer_account_id,reward_index,cosmetic_id
-      ) VALUES(?,?,?,?)`).bind(
-        claim.referred_account_id, accountId, state.rewardIds.length + 1, cosmeticId,
-      ).run();
+      await env.DB.batch([
+        referralRewardStatement(env, claim.evidence_key, accountId),
+        env.DB.prepare(`INSERT OR IGNORE INTO referral_rewards(
+            referred_account_id,referrer_account_id,reward_index,cosmetic_id
+          ) SELECT rc.referred_account_id,rr.referrer_account_id,
+              rr.reward_index,rr.cosmetic_id
+            FROM referral_claim_ledger rc
+            JOIN referral_reward_ledger rr ON rr.evidence_key=rc.evidence_key
+            WHERE rc.evidence_key=? AND rc.referred_account_id IS NOT NULL`)
+          .bind(claim.evidence_key),
+      ]);
     } catch { /* another request may have reconciled the same claim */ }
   }
 }
@@ -525,19 +1019,78 @@ async function ensureReferralCode(env, accountId) {
   return String(row.code);
 }
 
-async function referralStatus(env, account) {
+function androidReferralDestination(code) {
+  const referrer = new URLSearchParams({ discipline_ref: code }).toString();
+  return `https://play.google.com/store/apps/details?id=com.nosiah.discipline&referrer=${encodeURIComponent(referrer)}`;
+}
+
+function referralBaseUrl(req, env) {
+  const configured = String(env?.PUBLIC_REFERRAL_BASE_URL || '').replace(/\/$/, '');
+  try {
+    const parsed = new URL(configured);
+    if (parsed.protocol === 'https:' && !parsed.username && !parsed.password
+        && !parsed.search && !parsed.hash) return parsed.origin + parsed.pathname.replace(/\/$/, '');
+  } catch { /* fall back to the current Worker origin */ }
+  return new URL(req.url).origin;
+}
+
+async function referralLanding(url, env) {
+  let code = '';
+  try { code = decodeURIComponent(url.pathname.slice('/r/'.length)).trim().toUpperCase(); }
+  catch { /* invalid encoding is rejected below */ }
+  if (!/^[A-F0-9]{10}$/.test(code))
+    return new Response('Referral link not found.', {
+      status: 404,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...CORS },
+    });
+  let referral;
+  try {
+    referral = await env.DB.prepare(`SELECT rc.account_id FROM referral_codes rc
+      WHERE rc.code=? AND NOT EXISTS (SELECT 1 FROM account_deletion_jobs d
+        WHERE d.account_id=rc.account_id)`)
+      .bind(code).first();
+  } catch {
+    return new Response('Referral link is temporarily unavailable.', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...CORS },
+    });
+  }
+  if (!referral)
+    return new Response('Referral link not found.', {
+      status: 404,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...CORS },
+    });
+  const playUrl = androidReferralDestination(code).replace(/&/g, '&amp;');
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>DISCIPLINE. referral</title>
+<style>body{margin:0;background:#0d0d12;color:#f4f0dc;font:18px system-ui,sans-serif;display:grid;min-height:100vh;place-items:center}.card{max-width:34rem;margin:1.5rem;padding:2rem;border:2px solid #e8c96a;background:#171721;text-align:center}h1{letter-spacing:.08em}a{display:inline-block;margin:1rem 0;padding:.9rem 1.2rem;background:#e8c96a;color:#111;font-weight:800;text-decoration:none}.code{font-family:monospace;letter-spacing:.16em}</style>
+</head><body><main class="card"><h1>DISCIPLINE.</h1><p>You were invited by another player.</p>
+<a data-platform="android" href="${playUrl}">Get it for Android</a>
+<p>Referral code: <span class="code">${code}</span></p>
+<p><small>iPhone support is not available yet. This link will remain the same when it is added.</small></p>
+</main></body></html>`, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=300',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+      ...CORS,
+    },
+  });
+}
+
+async function referralStatus(req, env, account) {
   await reconcileReferralRewards(env, account.id);
   const [code, rewardState, ownClaim] = await Promise.all([
     ensureReferralCode(env, account.id),
     referralRewardState(env, account.id),
-    env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
+    env.DB.prepare('SELECT evidence_key FROM referral_claim_ledger WHERE referred_account_id=?')
       .bind(account.id).first(),
   ]);
   const rewardCount = rewardState.rewardIds.length;
-  const referrer = new URLSearchParams({ discipline_ref: code }).toString();
   return json({
     code,
-    shareUrl: `https://play.google.com/store/apps/details?id=com.nosiah.discipline&referrer=${encodeURIComponent(referrer)}`,
+    shareUrl: `${referralBaseUrl(req, env)}/r/${encodeURIComponent(code)}`,
     qualifiedCount: rewardCount,
     rewardCount,
     rewardLimit: REFERRAL_REWARD_LIMIT,
@@ -547,75 +1100,183 @@ async function referralStatus(env, account) {
   });
 }
 
+async function referralClaimState(env, accountId, claim, evidenceKeys) {
+  const placeholders = evidenceKeys.map(() => '?').join(',');
+  const [referrer, existing, usedEvidence, legacyEvidence, deletingAccount] = await Promise.all([
+    env.DB.prepare('SELECT account_id FROM referral_codes WHERE code=?')
+      .bind(claim.referralCode).first(),
+    env.DB.prepare(`SELECT referrer_account_id,evidence_key FROM referral_claim_ledger
+      WHERE referred_account_id=?`).bind(accountId).first(),
+    env.DB.prepare(`SELECT evidence_hash FROM referral_evidence_fingerprints
+      WHERE evidence_hash IN (${placeholders}) LIMIT 1`).bind(...evidenceKeys).first(),
+    env.DB.prepare(`SELECT referred_account_id FROM referral_claims
+      WHERE platform=? AND referral_code=? AND click_timestamp=? AND install_timestamp=?
+      LIMIT 1`).bind(
+      claim.platform, claim.referralCode, claim.firstTouchAt, claim.installedAt,
+    ).first(),
+    env.DB.prepare('SELECT account_id FROM account_deletion_jobs WHERE account_id=?')
+      .bind(accountId).first(),
+  ]);
+  const deletingReferrer = referrer
+    ? await env.DB.prepare('SELECT account_id FROM account_deletion_jobs WHERE account_id=?')
+      .bind(referrer.account_id).first()
+    : null;
+  return { referrer, existing, usedEvidence, legacyEvidence, deletingAccount, deletingReferrer };
+}
+
+function referralClaimStateResponse(state, accountId) {
+  if (state.deletingAccount)
+    return json({ ok: false, error: 'account_deletion_pending' }, 409);
+  if (state.existing) {
+    if (state.referrer
+        && Number(state.existing.referrer_account_id) === Number(state.referrer.account_id))
+      return json({ ok: true, alreadyClaimed: true });
+    return json({ ok: false, error: 'referral_already_claimed' }, 409);
+  }
+  if (!state.referrer || state.deletingReferrer)
+    return json({ ok: false, error: 'referral_not_found' }, 404);
+  if (Number(state.referrer.account_id) === Number(accountId))
+    return json({ ok: false, error: 'self_referral' }, 409);
+  if (state.usedEvidence || state.legacyEvidence)
+    return json({ ok: false, error: 'install_evidence_already_used' }, 409);
+  return null;
+}
+
+function guardedClaimLedgerStatement(env, accountId, referrerAccountId, claim, evidenceKeys) {
+  const placeholders = evidenceKeys.map(() => '?').join(',');
+  return env.DB.prepare(`INSERT INTO referral_claim_ledger(
+      evidence_key,referred_account_id,referrer_account_id
+    )
+    SELECT ?,?,rc.account_id FROM referral_codes rc
+    WHERE rc.code=? AND rc.account_id=? AND rc.account_id<>?
+      AND NOT EXISTS (SELECT 1 FROM account_deletion_jobs
+        WHERE account_id IN (?,rc.account_id))
+      AND NOT EXISTS (SELECT 1 FROM referral_claim_ledger WHERE referred_account_id=?)
+      AND NOT EXISTS (SELECT 1 FROM referral_evidence_fingerprints
+        WHERE evidence_hash IN (${placeholders}))
+      AND NOT EXISTS (SELECT 1 FROM referral_claims
+        WHERE platform=? AND referral_code=? AND click_timestamp=? AND install_timestamp=?)`)
+    .bind(
+      evidenceKeys[0], accountId, claim.referralCode, referrerAccountId, accountId,
+      accountId, accountId,
+      ...evidenceKeys, claim.platform, claim.referralCode, claim.firstTouchAt, claim.installedAt,
+    );
+}
+
+function guardedEvidenceStatement(env, evidenceKeys, accountId, referrerAccountId) {
+  // Persist the current private ledger identity, the stable lifetime replay
+  // fingerprint, and Android's exact historical unversioned v1 identity. The
+  // last entry keeps a safely configured emergency rollback from reopening a
+  // claim made by this release; retired active-key candidates are read-only.
+  const durableKeys = [
+    evidenceKeys[0],
+    ...evidenceKeys.filter(key => key.startsWith('p') || /^h1_/.test(key)),
+  ];
+  return env.DB.prepare(`INSERT INTO referral_evidence_fingerprints(evidence_hash)
+    SELECT CAST(value AS TEXT) FROM json_each(?) WHERE EXISTS (
+      SELECT 1 FROM referral_claim_ledger
+      WHERE evidence_key=? AND referred_account_id=? AND referrer_account_id=?)`)
+    .bind(JSON.stringify(durableKeys), evidenceKeys[0], accountId, referrerAccountId);
+}
+
+function guardedReferralClaimStatement(env, accountId, referrerAccountId, claim, evidenceKey) {
+  return env.DB.prepare(`INSERT INTO referral_claims(
+      referred_account_id,referrer_account_id,referral_code,platform,
+      click_timestamp,install_timestamp,install_version,proof_provider,proof_app_version_code,
+      attribution_provider,attribution_version
+    )
+    SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM referral_claim_ledger
+      WHERE evidence_key=? AND referred_account_id=? AND referrer_account_id=?)`).bind(
+    accountId, referrerAccountId, claim.referralCode, claim.platform,
+    claim.firstTouchAt, claim.installedAt, claim.installedVersion,
+    claim.proofProvider, claim.proofAppVersionCode,
+    claim.attributionProvider, claim.attributionVersion,
+    evidenceKey, accountId, referrerAccountId,
+  );
+}
+
 async function claimReferral(req, env, account) {
   const body = await req.json().catch(() => ({}));
-  const code = String(body.code || '').trim().toUpperCase();
-  const rawReferrer = String(body.installReferrer || '');
-  const platform = String(body.platform || '');
-  const clickTimestamp = integer(body.clickTimestamp, 1, 4_102_444_800);
-  const installTimestamp = integer(body.installTimestamp, 1, 4_102_444_800);
   const now = Math.floor(Date.now() / 1000);
-  if (!/^[A-F0-9]{10}$/.test(code) || !['android', 'ios'].includes(platform))
+  let parsedClaim;
+  try { parsedClaim = parseReferralClaim(body, String(account.id), { nowSeconds: now }); }
+  catch (error) {
+    if (error instanceof PlatformProofError)
+      return json({ ok: false, error: error.code }, error.status);
     return json({ ok: false, error: 'invalid_referral' }, 400);
-  const parsed = new URLSearchParams(rawReferrer);
-  if (parsed.get('discipline_ref')?.toUpperCase() !== code)
-    return json({ ok: false, error: 'referral_mismatch' }, 400);
-  if (clickTimestamp > installTimestamp + 300 || installTimestamp > now + 300
-      || now - installTimestamp > 90 * 24 * 60 * 60)
-    return json({ ok: false, error: 'invalid_install_evidence' }, 400);
-  if (Number(account.created_epoch || 0) < installTimestamp - 300
+  }
+  if (Number(account.created_epoch || 0) < parsedClaim.installedAt - 300
       || Number(account.created_epoch || 0) > now
       || now - Number(account.created_epoch || 0) > 14 * 24 * 60 * 60)
     return json({ ok: false, error: 'new_account_required' }, 409);
-  const referrer = await env.DB.prepare(`SELECT rc.account_id FROM referral_codes rc
-    WHERE rc.code=?`).bind(code).first();
-  if (!referrer) return json({ ok: false, error: 'referral_not_found' }, 404);
-  if (Number(referrer.account_id) === Number(account.id))
-    return json({ ok: false, error: 'self_referral' }, 409);
-  const existing = await env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
-    .bind(account.id).first();
-  if (existing?.referral_code === code) return json({ ok: true, alreadyClaimed: true });
-  if (existing) return json({ ok: false, error: 'referral_already_claimed' }, 409);
+  let evidenceKeys;
+  try {
+    await ensureReferralEvidenceKeyRing(env);
+    evidenceKeys = await referralEvidenceKeys(env, parsedClaim);
+  }
+  catch { return json({ ok: false, error: 'referral_evidence_not_configured' }, 503); }
 
-  const claimStatement = () => env.DB.prepare(`INSERT INTO referral_claims(
-    referred_account_id,referrer_account_id,referral_code,platform,
-    click_timestamp,install_timestamp,install_version
-  ) VALUES(?,?,?,?,?,?,?)`).bind(
-    account.id, referrer.account_id, code, platform,
-    clickTimestamp, installTimestamp, String(body.installVersion || '').slice(0, 32),
-  );
+  // Cheap terminal state is checked before any OAuth or Play Integrity call.
+  let state = await referralClaimState(env, account.id, parsedClaim, evidenceKeys);
+  let terminal = referralClaimStateResponse(state, account.id);
+  if (terminal) return terminal;
+  try {
+    if (!await referralClaimRateLimitAllowed(
+      req, env, account.id, parsedClaim.referralCode, now,
+    )) return json({ ok: false, error: 'referral_rate_limited' }, 429);
+  } catch {
+    return json({ ok: false, error: 'referral_throttle_unavailable' }, 503);
+  }
+
+  let claim;
+  try { claim = await verifyReferralClaim(parsedClaim, env, { nowSeconds: now }); }
+  catch (error) {
+    if (error instanceof PlatformProofError)
+      return json({ ok: false, error: error.code }, error.status);
+    return json({ ok: false, error: 'platform_proof_unavailable' }, 503);
+  }
+
+  // External verification can take seconds. Re-read terminal state afterward,
+  // then use a conditional first INSERT inside D1's transactional batch so a
+  // code deletion, competing claim, or replay arriving at the boundary cannot
+  // mutate any referral/reward row.
+  state = await referralClaimState(env, account.id, claim, evidenceKeys);
+  terminal = referralClaimStateResponse(state, account.id);
+  if (terminal) return terminal;
+  const referrerAccountId = Number(state.referrer.account_id);
+  const evidenceKey = evidenceKeys[0];
+  const conflictResponse = async () => {
+    const latest = await referralClaimState(env, account.id, claim, evidenceKeys);
+    return referralClaimStateResponse(latest, account.id);
+  };
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const rewardState = await referralRewardState(env, referrer.account_id);
-    if (rewardState.rewardIds.length >= REFERRAL_REWARD_LIMIT) {
-      try { await claimStatement().run(); }
-      catch {
-        const prior = await env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
-          .bind(account.id).first();
-        if (prior?.referral_code === code) return json({ ok: true, alreadyClaimed: true });
-        return json({ ok: false, error: 'referral_already_claimed' }, 409);
-      }
-      return json({ ok: true, rewardedReferrer: false, rewardLimitReached: true }, 201);
-    }
-    const cosmeticId = selectReferralRewardId(rewardState.ownedIds, randomUint32());
-    if (!cosmeticId) {
-      try { await claimStatement().run(); }
-      catch { return json({ ok: false, error: 'referral_already_claimed' }, 409); }
-      return json({ ok: true, rewardedReferrer: false, shopComplete: true }, 201);
-    }
-    const rewardIndex = rewardState.rewardIds.length + 1;
     try {
-      await env.DB.batch([
-        claimStatement(),
-        env.DB.prepare(`INSERT INTO referral_rewards(
-          referred_account_id,referrer_account_id,reward_index,cosmetic_id
-        ) VALUES(?,?,?,?)`).bind(account.id, referrer.account_id, rewardIndex, cosmeticId),
+      const results = await env.DB.batch([
+        guardedClaimLedgerStatement(
+          env, account.id, referrerAccountId, claim, evidenceKeys,
+        ),
+        guardedEvidenceStatement(env, evidenceKeys, account.id, referrerAccountId),
+        guardedReferralClaimStatement(
+          env, account.id, referrerAccountId, claim, evidenceKey,
+        ),
+        referralRewardStatement(env, evidenceKey, referrerAccountId),
+        legacyReferralRewardStatement(env, evidenceKey, account.id),
       ]);
-      return json({ ok: true, rewardedReferrer: true }, 201);
+      if (Number(results?.[0]?.meta?.changes || 0) !== 1) {
+        const conflict = await conflictResponse();
+        if (conflict) return conflict;
+        return json({ ok: false, error: 'referral_reward_busy' }, 503);
+      }
+      const rewarded = Number(results?.[3]?.meta?.changes || 0) > 0;
+      if (rewarded) return json({ ok: true, rewardedReferrer: true }, 201);
+      const rewardState = await referralRewardState(env, referrerAccountId);
+      if (rewardState.rewardIds.length >= REFERRAL_REWARD_LIMIT)
+        return json({ ok: true, rewardedReferrer: false, rewardLimitReached: true }, 201);
+      return json({ ok: true, rewardedReferrer: false, shopComplete: true }, 201);
     } catch {
-      const prior = await env.DB.prepare('SELECT referral_code FROM referral_claims WHERE referred_account_id=?')
-        .bind(account.id).first();
-      if (prior?.referral_code === code) return json({ ok: true, alreadyClaimed: true });
+      const conflict = await conflictResponse();
+      if (conflict) return conflict;
       if (attempt === 2) return json({ ok: false, error: 'referral_reward_busy' }, 503);
     }
   }
@@ -634,6 +1295,11 @@ export function verifiedTapTotal(requested, prior, anchorSeconds, nowSeconds) {
 async function register(req, env) {
   if (!legalConfig(env).ready)
     return json({ ok: false, error: 'legal_unavailable' }, 503);
+  try {
+    if (!await registrationRateLimitAllowed(
+      req, env, Math.floor(Date.now() / 1000),
+    )) return json({ ok: false, error: 'registration_rate_limited' }, 429);
+  } catch { return json({ ok: false, error: 'registration_unavailable' }, 503); }
   const { username, password, acceptTerms, termsVersion } = await req.json();
   const usernameError = validateUsername(username);
   if (usernameError) return json({ ok: false, error: usernameError }, 400);
@@ -697,13 +1363,38 @@ async function renameAccount(req, env, account) {
 }
 
 async function deleteAccount(env, account) {
+  let referralProgressToken;
+  try { referralProgressToken = await continueReferralDeletion(env, account.id); }
+  catch {
+    // Never delete the only plaintext evidence if we cannot first derive the
+    // exact HMAC that the corresponding provider will check on replay.
+    return json({ ok: false, error: 'account_deletion_temporarily_unavailable' }, 503);
+  }
+  if (referralProgressToken !== null)
+    return json({
+      ok: true,
+      deletionPending: true,
+      progressToken: referralProgressToken,
+      retryAfterMs: 100,
+    }, 202);
+  // An active player who deletes the account forfeits before any match or
+  // account row disappears. The opponent's eligible +5 reward and unordered
+  // pair cooldown are recorded by the same atomic gate as a normal win.
+  try { await settlePvPAccountDeparture(env, account.id); }
+  catch {
+    return json({ ok: false, error: 'account_deletion_temporarily_unavailable' }, 503);
+  }
   // Explicit deletes make the privacy guarantee independent of connection-
   // scoped foreign-key settings and leave no orphaned leaderboard/save data.
-  await env.DB.batch([
+  const statements = [
     env.DB.prepare('DELETE FROM pvp_round_scores WHERE account_id=?').bind(account.id),
     env.DB.prepare('DELETE FROM pvp_matches WHERE inviter_account_id=? OR invitee_account_id=?')
       .bind(account.id, account.id),
     env.DB.prepare('DELETE FROM pvp_rewards WHERE winner_account_id=?').bind(account.id),
+    // Preserve an opponent's earned reward while erasing the deleted account's
+    // numeric identity from the unordered-pair anti-farming fields.
+    env.DB.prepare(`UPDATE pvp_rewards SET pair_low_account_id=NULL,pair_high_account_id=NULL
+      WHERE pair_low_account_id=? OR pair_high_account_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM friendships
       WHERE account_low_id=? OR account_high_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM community_reports
@@ -712,6 +1403,14 @@ async function deleteAccount(env, account) {
       WHERE reporter_account_id=? OR reported_account_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM account_blocks
       WHERE blocker_account_id=? OR blocked_account_id=?`).bind(account.id, account.id),
+    // Referral evidence and another player's already-earned entitlement must
+    // survive deletion. Null only the deleted account's attribution. If the
+    // deleted account is the reward owner, its own entitlement is removed.
+    env.DB.prepare('DELETE FROM referral_reward_ledger WHERE referrer_account_id=?').bind(account.id),
+    env.DB.prepare(`UPDATE referral_claim_ledger SET referred_account_id=NULL
+      WHERE referred_account_id=?`).bind(account.id),
+    env.DB.prepare(`UPDATE referral_claim_ledger SET referrer_account_id=NULL
+      WHERE referrer_account_id=?`).bind(account.id),
     env.DB.prepare(`DELETE FROM referral_rewards
       WHERE referred_account_id=? OR referrer_account_id=?`).bind(account.id, account.id),
     env.DB.prepare(`DELETE FROM referral_claims
@@ -730,8 +1429,11 @@ async function deleteAccount(env, account) {
     env.DB.prepare('DELETE FROM cloud_saves WHERE account_id=?').bind(account.id),
     env.DB.prepare('DELETE FROM sessions WHERE account_id=?').bind(account.id),
     env.DB.prepare('DELETE FROM account_profiles WHERE account_id=?').bind(account.id),
+    env.DB.prepare('DELETE FROM account_mutation_leases WHERE account_id=?').bind(account.id),
+    env.DB.prepare('DELETE FROM account_deletion_jobs WHERE account_id=?').bind(account.id),
     env.DB.prepare('DELETE FROM accounts WHERE id=?').bind(account.id),
-  ]);
+  ];
+  await env.DB.batch(statements);
   return json({ ok: true, deleted: true });
 }
 
@@ -872,12 +1574,15 @@ async function blockAccount(req, env, account) {
       VALUES(?,?)`).bind(account.id, target.id),
     env.DB.prepare(`DELETE FROM friendships
       WHERE account_low_id=? AND account_high_id=?`).bind(low, high),
-    env.DB.prepare(`UPDATE pvp_matches SET status='cancelled',updated_at=datetime('now')
-      WHERE status IN ('invited','active')
+    env.DB.prepare(`UPDATE pvp_matches SET status='cancelled',result_reason='blocked_player',
+        updated_at=datetime('now'),state_revision=state_revision+1
+      WHERE status='invited'
         AND ((inviter_account_id=? AND invitee_account_id=?)
           OR (inviter_account_id=? AND invitee_account_id=?))`)
       .bind(account.id, target.id, target.id, account.id),
+    pvpForfeitIntentStatement(env, account.id, target.id, 'blocked_player'),
   ]);
+  await settlePvPForfeit(env, account.id, target.id, 'blocked_player');
   const result = results[0];
   return json({ ok: true, blocked: true, alreadyBlocked: !Number(result?.meta?.changes || 0) });
 }
@@ -1597,10 +2302,30 @@ export default {
       if (req.method === 'GET' && url.pathname === '/privacy') return html(privacyPage(env));
       if (req.method === 'GET' && url.pathname === '/terms') return html(termsPage(TERMS_VERSION, env));
       if (req.method === 'GET' && url.pathname === '/account-deletion') return html(deletionPage(env));
+      if (req.method === 'GET' && url.pathname.startsWith('/r/')) return referralLanding(url, env);
+      // Release automation must be able to validate referral secrets and the
+      // D1 pepper registry while the rest of /v1 remains in maintenance.
+      if (req.method === 'GET' && url.pathname === '/v1/referral/readiness')
+        return referralReadiness(env);
+      // The production deploy script enables this before applying migrations,
+      // then removes it only after the final Worker is live. Keeping every API
+      // request out of D1 during that short interval prevents legacy referral
+      // writes or lockless PvP matches from slipping between schema and code.
+      if (env.DEPLOYMENT_MAINTENANCE === '1' && url.pathname.startsWith('/v1/'))
+        return json({ ok: false, error: 'service_maintenance' }, 503);
+      // Browser WebSockets cannot attach the normal Authorization header. The
+      // route consumes a short-lived, one-use ticket that was minted through
+      // the authenticated REST API before proxying to the per-match DO.
+      if (url.pathname.endsWith('/quick-draw/socket')) {
+        const socket = await handleQuickDrawSocket(req, url, env);
+        if (socket) return socket;
+      }
       if (req.method === 'GET' && url.pathname === '/v1/legal') {
         const legal = legalJson(env);
         return legal.ready ? json(legal) : json({ ...legal, error: 'legal_unavailable' }, 503);
       }
+      if (req.method === 'GET' && url.pathname === '/v1/pvp/readiness')
+        return quickDrawReadiness(env);
       if (req.method === 'GET' && url.pathname === '/v1/admob/reward') return verifyAdmobCallback(req, env);
       if (req.method === 'POST' && url.pathname === '/v1/auth/register') return register(req, env);
       if (req.method === 'POST' && url.pathname === '/v1/auth/login') return login(req, env);
@@ -1616,16 +2341,46 @@ export default {
         return json({ ok: false, error: 'not_found' }, 404);
       }
       const account = await authenticated(req, env);
-      if (req.method === 'GET' && url.pathname === '/v1/board') return board(url, env, account);
-      if (!account) return json({ ok: false, error: 'unauthorized' }, 401);
+      if (!account) {
+        if (req.method === 'GET' && url.pathname === '/v1/board') return board(url, env, null);
+        return json({ ok: false, error: 'unauthorized' }, 401);
+      }
+      // Account deletion never acquires a mutation lease. Its job INSERT is
+      // the inverse half of the database lock used by mutating routes, so
+      // either an in-flight mutation finishes first or deletion begins first.
+      if (req.method === 'DELETE' && url.pathname === '/v1/account')
+        return deleteAccount(env, account);
+      const multiplayerRouteKind = authenticatedMultiplayerRouteKind(req.method, url.pathname);
+      // Cheap per-isolate burst control prevents one modified client from
+      // issuing a D1 attempt per physical tap. The D1 750 ms write floor below
+      // remains authoritative across isolates, while a rejected burst performs
+      // no account-state or match query at all after authentication.
+      if (multiplayerRouteKind === 'guarded_tap') {
+        const retryAfterMs = pvpTapBurstRetryAfter(account.id, url.pathname);
+        if (retryAfterMs) return json({
+          ok: false, error: 'pvp_tap_coalesced', retryAfterMs,
+        }, 429);
+      }
+      // Only routes that can mutate by design acquire a D1 lease. In
+      // particular, the 200 ms multiplayer state poll remains read-only at the
+      // request boundary; its rare settlement/cleanup writes carry their own
+      // deletion predicates inside the exact SQL statements.
+      const mutationRoute = authenticatedMutationNeedsLease(req.method, url.pathname);
+      const mutationLeaseId = mutationRoute
+        ? await acquireAccountMutationLease(env, account.id) : null;
+      if (mutationRoute && !mutationLeaseId)
+        return json({ ok: false, error: 'account_deletion_pending' }, 409);
+      if (!mutationRoute && await accountDeletionPending(env, account.id))
+        return json({ ok: false, error: 'account_deletion_pending' }, 409);
+      try {
+      if (req.method === 'GET' && url.pathname === '/v1/board') return await board(url, env, account);
       if (req.method === 'GET' && url.pathname === '/v1/admob/reward/status')
-        return adRewardStatus(url, env, account);
+        return await adRewardStatus(url, env, account);
       if (req.method === 'GET' && url.pathname === '/v1/referral')
-        return referralStatus(env, account);
+        return await referralStatus(req, env, account);
       if (req.method === 'POST' && url.pathname === '/v1/referral/claim')
-        return claimReferral(req, env, account);
-      if (url.pathname === '/v1/multiplayer' || url.pathname.startsWith('/v1/friends/')
-          || url.pathname.startsWith('/v1/pvp/')) {
+        return await claimReferral(req, env, account);
+      if (multiplayerRouteKind) {
         const profile = await ensureAccountProfile(env, account.id);
         if (!hasCurrentTerms(profile))
           return json({ ok: false, error: 'terms_required', termsVersion: TERMS_VERSION }, 428);
@@ -1636,13 +2391,12 @@ export default {
         const profile = await ensureAccountProfile(env, account.id);
         return json({ account: accountJson(account, profile) });
       }
-      if (req.method === 'DELETE' && url.pathname === '/v1/account') return deleteAccount(env, account);
-      if (req.method === 'PUT' && url.pathname === '/v1/account/username') return renameAccount(req, env, account);
-      if (req.method === 'PUT' && url.pathname === '/v1/account/terms') return acceptTerms(req, env, account);
-      if (req.method === 'POST' && url.pathname === '/v1/reports') return reportAccount(req, env, account);
-      if (req.method === 'POST' && url.pathname === '/v1/blocks') return blockAccount(req, env, account);
+      if (req.method === 'PUT' && url.pathname === '/v1/account/username') return await renameAccount(req, env, account);
+      if (req.method === 'PUT' && url.pathname === '/v1/account/terms') return await acceptTerms(req, env, account);
+      if (req.method === 'POST' && url.pathname === '/v1/reports') return await reportAccount(req, env, account);
+      if (req.method === 'POST' && url.pathname === '/v1/blocks') return await blockAccount(req, env, account);
       if (req.method === 'DELETE' && url.pathname.startsWith('/v1/blocks/'))
-        return unblockAccount(decodeURIComponent(url.pathname.slice('/v1/blocks/'.length)), env, account);
+        return await unblockAccount(decodeURIComponent(url.pathname.slice('/v1/blocks/'.length)), env, account);
       if (req.method === 'GET' && url.pathname === '/v1/save') {
         const row = await env.DB.prepare('SELECT revision,save_json,updated_at FROM cloud_saves WHERE account_id=?').bind(account.id).first();
         if (!row) return json({ revision: 0, save: null, updatedAt: null });
@@ -1654,17 +2408,28 @@ export default {
         const save = sanitizeSave(stored, { ...economy, totalTaps: score?.taps || stored.totalTaps }, stored, account.username);
         return json({ revision: row.revision || 0, save, updatedAt: row.updated_at || null });
       }
-      if (req.method === 'PUT' && url.pathname === '/v1/save') return saveGame(req, env, account);
-      if (req.method === 'GET' && url.pathname === '/v1/purchases') return purchaseHistory(req, env, account);
-      if (req.method === 'POST' && url.pathname === '/v1/purchases/android/verify') return verifyAndroidPurchase(req, env, account);
-      if (req.method === 'POST' && url.pathname === '/v1/purchases/ios/verify') return verifyIosPurchase(req, env, account);
+      if (req.method === 'PUT' && url.pathname === '/v1/save') return await saveGame(req, env, account);
+      if (req.method === 'GET' && url.pathname === '/v1/purchases') return await purchaseHistory(req, env, account);
+      if (req.method === 'POST' && url.pathname === '/v1/purchases/android/verify') return await verifyAndroidPurchase(req, env, account);
+      if (req.method === 'POST' && url.pathname === '/v1/purchases/ios/verify') return await verifyIosPurchase(req, env, account);
       return json({ ok: false, error: 'not_found' }, 404);
+      } finally {
+        if (mutationLeaseId) {
+          try { await releaseAccountMutationLease(env, mutationLeaseId, account.id); }
+          catch (error) { console.error('account_mutation_lease_release_failed', account.id, error); }
+        }
+      }
     } catch (error) {
+      if (error?.message === 'account_deletion_pending')
+        return json({ ok: false, error: 'account_deletion_pending' }, 409);
       console.error(error);
       return json({ ok: false, error: 'server_error' }, 500);
     }
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(reconcileAndroidPurchases(env));
+    ctx.waitUntil(Promise.all([
+      reconcileAndroidPurchases(env),
+      pruneRequestRateLimits(env, Math.floor(Date.now() / 1000)),
+    ]));
   },
 };

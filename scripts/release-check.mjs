@@ -91,6 +91,12 @@ if (!workerSource.includes("url.pathname === '/account-deletion'") || !legalSour
   runtimeFailures.push('public account-deletion route is missing');
 if (!workerSource.includes("req.method === 'DELETE' && url.pathname === '/v1/account'"))
   runtimeFailures.push('authenticated account-deletion API is missing');
+if (!workerSource.includes("url.pathname === '/v1/referral/readiness'")
+    || !workerSource.includes('REFERRAL_EVIDENCE_HMAC_KEYRING_JSON')
+    || !workerSource.includes('REFERRAL_EVIDENCE_REPLAY_PEPPER')
+    || !workerSource.includes('referral_evidence_key_registry')
+    || !workerSource.includes('request_rate_limits'))
+  runtimeFailures.push('referral secret/registry/rate-limit release-readiness gate is missing');
 if (!workerSource.includes("url.pathname === '/v1/admob/reward'") || !workerSource.includes('crypto.subtle.verify'))
   runtimeFailures.push('signed AdMob server-side verification endpoint is missing');
 
@@ -145,6 +151,10 @@ if (!localOnly) {
     productionFailures.push('Rewarded and interstitial ads must use separate AdMob unit IDs');
   if (!/^\d{6,}$/.test(gradle.PLAY_GAMES_APP_ID || '') || /^0+$/.test(gradle.PLAY_GAMES_APP_ID || ''))
     productionFailures.push('android/private-release.properties: missing numeric PLAY_GAMES_APP_ID');
+  if (!/^[1-9]\d*$/.test(gradle.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER || ''))
+    productionFailures.push('android/private-release.properties: missing numeric PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER');
+  if (!/^(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/.test(gradle.UPLOAD_CERT_SHA256 || ''))
+    productionFailures.push('android/private-release.properties: missing/invalid Play upload certificate SHA-256');
   if (!/^[1-9]\d*$/.test(gradle.VERSION_CODE || ''))
     productionFailures.push('android/private-release.properties: VERSION_CODE must be an unused positive Play version code');
   if (!/^\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/.test(gradle.VERSION_NAME || ''))

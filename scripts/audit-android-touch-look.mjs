@@ -15,7 +15,13 @@ const root = resolve(import.meta.dirname, '..');
 const port = numericOption('--port', 9222);
 const output = resolve(root, option('--out', join('devlog', 'android-touch-look')));
 const serial = option('--serial', 'emulator-5554');
-const packageName = option('--package', 'com.nosiah.discipline');
+const packageName = option('--package', 'com.nosiah.discipline.test');
+// applicationIdSuffix changes the installed package, not the Java activity
+// class. Keep this explicit so the isolated tester package resumes the real
+// launcher instead of looking for a nonexistent *.test.MainActivity class.
+const launcherComponent = option(
+  '--component', `${packageName}/com.nosiah.discipline.MainActivity`,
+);
 const sdkRoot = process.env.ANDROID_SDK_ROOT
   || (process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Android', 'Sdk') : '');
 const adbDefault = sdkRoot
@@ -80,7 +86,7 @@ const motionEvent = (action, cssPoint, viewport, frame) => {
       'shell', 'input', 'motionevent',
       'UP', String(point.x), String(point.y),
     ]);
-    adbBuffer(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`]);
+    adbBuffer(['shell', 'am', 'start', '-n', launcherComponent]);
     return { ...point, mechanism: 'HOME_RESUME' };
   }
   adbBuffer([

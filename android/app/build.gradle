@@ -15,8 +15,13 @@ def hasReleaseKeystore = keystorePropertiesFile.exists()
         && keystoreProperties.getProperty('keyPassword')
 def releaseAdMobAppId = releaseProperty("ADMOB_ANDROID_APP_ID")?.trim()
 def releasePlayGamesAppId = releaseProperty("PLAY_GAMES_APP_ID")?.trim()
+def releasePlayIntegrityCloudProjectNumber = releaseProperty("PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER")?.trim()
 def releaseVersionCode = releaseProperty("VERSION_CODE")?.trim()
 def releaseVersionName = releaseProperty("VERSION_NAME")?.trim()
+def isPositiveLong = { String value ->
+    if (!(value ==~ /[1-9]\d*/)) return false
+    try { return value.toLong() > 0L } catch (Exception ignored) { return false }
+}
 // Android Studio/debug builds stay usable without private release metadata.
 // Every release task is rejected below unless both version fields are explicit.
 def configuredVersionCode = releaseVersionCode ==~ /[1-9]\d*/ ? releaseVersionCode as Integer : 1
@@ -38,6 +43,10 @@ android {
         // Numeric Play Games project/app id. The zero value lets local debug
         // builds run; release:check rejects it for a publishing build.
         resValue "string", "game_services_project_id", "000000000000"
+        // Play Integrity uses a separate Google Cloud project number. Debug
+        // builds remain installable when it is absent, but the native proof
+        // plugin rejects referral attestation instead of emitting weak proof.
+        resValue "string", "play_integrity_cloud_project_number", "0"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -56,16 +65,27 @@ android {
     }
     buildTypes {
         debug {
+            // Install physical-device QA builds beside the Play-signed app.
+            // This prevents testing from requiring an uninstall or touching a
+            // player's production save while the release package stays exact.
+            applicationIdSuffix ".test"
+            versionNameSuffix "-test"
             // A sideloaded tester APK must identify the real Play Games
             // project too. Keep the value in ignored private-release.properties
             // and fall back to zero only before Play Games is configured.
             resValue "string", "game_services_project_id", releasePlayGamesAppId ?: "000000000000"
+            resValue "string", "play_integrity_cloud_project_number",
+                    isPositiveLong(releasePlayIntegrityCloudProjectNumber)
+                            ? releasePlayIntegrityCloudProjectNumber : "0"
         }
         release {
             // Release tasks are guarded below. These values intentionally do
             // not fall back to public test/zero identifiers.
             manifestPlaceholders.admobAppId = releaseAdMobAppId ?: ""
             resValue "string", "game_services_project_id", releasePlayGamesAppId ?: ""
+            resValue "string", "play_integrity_cloud_project_number",
+                    isPositiveLong(releasePlayIntegrityCloudProjectNumber)
+                            ? releasePlayIntegrityCloudProjectNumber : "0"
             if (hasReleaseKeystore) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -87,6 +107,9 @@ gradle.taskGraph.whenReady { graph ->
             failures << "ADMOB_ANDROID_APP_ID is missing, invalid, or a Google sample ID"
         }
         if (!(releasePlayGamesAppId ==~ /\d{6,}/) || releasePlayGamesAppId ==~ /0+/) failures << "PLAY_GAMES_APP_ID is not configured"
+        if (!isPositiveLong(releasePlayIntegrityCloudProjectNumber)) {
+            failures << "PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER is missing or invalid"
+        }
         if (!(releaseVersionCode ==~ /[1-9]\d*/)) failures << "VERSION_CODE must be explicitly set to a positive integer"
         if (!(releaseVersionName ==~ /\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?/)) {
             failures << "VERSION_NAME must be explicitly set to a valid release version"
@@ -110,6 +133,7 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     implementation "com.android.installreferrer:installreferrer:2.2"
+    implementation "com.google.android.play:integrity:1.6.0"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

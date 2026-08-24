@@ -1,8 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const read = (file) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+const absolute = (file) => fileURLToPath(new URL(`../${file}`, import.meta.url));
+const psLiteral = (value) => `'${value.replaceAll("'", "''")}'`;
+const artifactBuildScripts = [
+  'scripts/build-test-apk.ps1',
+  'scripts/build-play-release.ps1',
+];
+
+function hashWithScriptHelper(scriptPath, fixturePath) {
+  const command = [
+    '$tokens=$null',
+    '$errors=$null',
+    `$ast=[System.Management.Automation.Language.Parser]::ParseFile(${psLiteral(scriptPath)},[ref]$tokens,[ref]$errors)`,
+    "if($errors.Count){throw ($errors | Out-String)}",
+    "$functionAst=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FileSha256'},$true)",
+    "if($null -eq $functionAst){throw 'Get-FileSha256 was not found'}",
+    'Invoke-Expression $functionAst.Extent.Text',
+    `Get-FileSha256 -LiteralPath ${psLiteral(fixturePath)}`,
+  ].join('; ');
+  return execFileSync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command,
+  ], { encoding: 'utf8', windowsHide: true }).trim();
+}
 
 test('package scripts preserve native patching and route test APKs through the exact workflow', () => {
   const pkg = JSON.parse(read('package.json'));
@@ -34,10 +61,16 @@ test('test payload verifier requires byte identity, visual handles, and only Goo
   assert.match(verifier, /does not contain Google.*official Android interstitial-ad test unit/);
   assert.match(verifier, /unexpectedly contains the production interstitial-ad unit ID/);
   assert.match(verifier, /contains a non-test AdMob ID/);
+  assert.match(verifier, /expectedTestApiUrl = 'http:\/\/127\.0\.0\.1:8787'/);
+  assert.match(verifier, /VITE_API_URL must be exactly/);
+  assert.match(verifier, /does not contain the required local API origin/);
+  assert.match(verifier, /unexpectedly contains the production API origin/);
 });
 
 test('test APK workflow fingerprints both source states and exports only verified debug output', () => {
   const build = read('scripts/build-test-apk.ps1');
+  const gradle = read('android/app/build.gradle');
+  const debugManifest = read('android/app/src/debug/AndroidManifest.xml');
   const gitignore = read('.gitignore');
   assert.match(gitignore, /^\/artifacts\/$/m);
   assert.match(build, /npm ci --no-audit --no-fund/);
@@ -68,4 +101,40 @@ test('test APK workflow fingerprints both source states and exports only verifie
   assert.match(build, /\.sha256/);
   assert.match(build, /publishable = \$false/);
   assert.match(build, /buildVariant = 'debug'/);
+  assert.match(build, /\$expectedPackage = 'com\.nosiah\.discipline\.test'/);
+  assert.match(gradle, /debug\s*\{[\s\S]*applicationIdSuffix "\.test"/);
+  assert.match(gradle, /debug\s*\{[\s\S]*versionNameSuffix "-test"/);
+  assert.match(debugManifest, /android:usesCleartextTraffic="true"/);
+});
+
+test('Android artifact scripts have no Get-FileHash dependency', () => {
+  for (const script of artifactBuildScripts) {
+    const source = read(script);
+    assert.doesNotMatch(source, /\bGet-FileHash\b/,
+      `${script} must not depend on the optional Microsoft.PowerShell.Utility cmdlet`);
+    assert.match(source, /function Get-FileSha256/);
+    assert.match(source, /\[System\.IO\.File\]::OpenRead\(\$LiteralPath\)/);
+    assert.match(source, /\[System\.Security\.Cryptography\.SHA256\]::Create\(\)/);
+    assert.match(source, /ToUpperInvariant\(\)/);
+  }
+});
+
+test('Android artifact scripts use deterministic uppercase file hashes', {
+  skip: process.platform !== 'win32',
+}, (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'discipline-sha256-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const fixture = path.join(directory, 'binary hash fixture.dat');
+  const bytes = Buffer.from([0x00, 0x44, 0x49, 0x53, 0x43, 0x49, 0x50, 0x4c, 0x49, 0x4e, 0x45, 0xff]);
+  fs.writeFileSync(fixture, bytes);
+  const expected = createHash('sha256').update(bytes).digest('hex').toUpperCase();
+
+  for (const script of artifactBuildScripts) {
+    const scriptPath = absolute(script);
+    const first = hashWithScriptHelper(scriptPath, fixture);
+    const second = hashWithScriptHelper(scriptPath, fixture);
+    assert.equal(first, expected, `${script} must match Node's SHA-256 result`);
+    assert.equal(second, expected, `${script} must hash identical bytes deterministically`);
+    assert.match(first, /^[0-9A-F]{64}$/);
+  }
 });

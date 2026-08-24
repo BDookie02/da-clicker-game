@@ -39,6 +39,8 @@ test('bundle preflight skips only store-listing art and keeps every runtime gate
     'VITE_ADMOB_TESTING',
     'ADMOB_ANDROID_APP_ID',
     'PLAY_GAMES_APP_ID',
+    'PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER',
+    'UPLOAD_CERT_SHA256',
     'VERSION_CODE',
     'VERSION_NAME',
     'android/keystore.properties',

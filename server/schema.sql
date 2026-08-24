@@ -212,6 +212,10 @@ CREATE TABLE IF NOT EXISTS referral_claims (
   click_timestamp INTEGER NOT NULL,
   install_timestamp INTEGER NOT NULL,
   install_version TEXT NOT NULL DEFAULT '',
+  proof_provider TEXT NOT NULL DEFAULT 'legacy',
+  proof_app_version_code INTEGER,
+  attribution_provider TEXT NOT NULL DEFAULT 'legacy',
+  attribution_version TEXT NOT NULL DEFAULT 'legacy',
   claimed_at TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK(referred_account_id <> referrer_account_id)
 );
@@ -229,6 +233,110 @@ CREATE TABLE IF NOT EXISTS referral_rewards (
 );
 CREATE INDEX IF NOT EXISTS idx_referral_rewards_referrer
   ON referral_rewards(referrer_account_id, reward_index ASC);
+
+-- Permanent, privacy-preserving referral ledgers. The legacy claim/reward
+-- tables above retain live-account detail only. HMAC evidence fingerprints
+-- permanently block replay without retaining a referral code or timestamps.
+CREATE TABLE IF NOT EXISTS referral_evidence_fingerprints (
+  evidence_hash TEXT PRIMARY KEY,
+  claimed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS referral_claim_ledger (
+  evidence_key TEXT PRIMARY KEY,
+  referred_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+  referrer_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+  claimed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_claim_ledger_referred
+  ON referral_claim_ledger(referred_account_id)
+  WHERE referred_account_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_referral_claim_ledger_referrer
+  ON referral_claim_ledger(referrer_account_id, claimed_at ASC);
+
+CREATE TABLE IF NOT EXISTS referral_reward_ledger (
+  evidence_key TEXT PRIMARY KEY REFERENCES referral_claim_ledger(evidence_key) ON DELETE RESTRICT,
+  referrer_account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  reward_index INTEGER NOT NULL CHECK(reward_index BETWEEN 1 AND 10),
+  cosmetic_id TEXT NOT NULL,
+  awarded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(referrer_account_id, reward_index),
+  UNIQUE(referrer_account_id, cosmetic_id)
+);
+CREATE INDEX IF NOT EXISTS idx_referral_reward_ledger_referrer
+  ON referral_reward_ledger(referrer_account_id, reward_index ASC);
+
+-- Resumable deletion keeps each Worker invocation and D1 batch bounded while
+-- every live plaintext claim is converted to replay tombstones first.
+CREATE TABLE IF NOT EXISTS account_deletion_jobs (
+  account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  referral_cursor INTEGER NOT NULL DEFAULT -1,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Every authenticated mutation request owns a short-lived database lease
+-- before it may reach a route handler. Account deletion can begin only when no
+-- live lease exists, closing the check-then-mutate race without making hot
+-- read-only multiplayer polls issue database writes.
+CREATE TABLE IF NOT EXISTS account_mutation_leases (
+  request_id TEXT PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  acquired_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_account_mutation_leases_account
+  ON account_mutation_leases(account_id, acquired_at_ms);
+
+-- The replay-pepper-v1 fixed-context tag pins the permanent anti-replay pepper.
+-- Rotatable active ledger-signing keys are intentionally not registered here.
+CREATE TABLE IF NOT EXISTS referral_evidence_key_registry (
+  key_id TEXT PRIMARY KEY,
+  verification_tag TEXT NOT NULL,
+  legacy_unversioned INTEGER NOT NULL DEFAULT 0 CHECK(legacy_unversioned IN (0,1)),
+  first_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Durable fixed-window throttles protect registration and referral proof
+-- quotas across Worker isolates without retaining raw IPs or referral codes.
+CREATE TABLE IF NOT EXISTS request_rate_limits (
+  bucket TEXT NOT NULL,
+  subject_hash TEXT NOT NULL,
+  window_started_at INTEGER NOT NULL,
+  request_count INTEGER NOT NULL CHECK(request_count >= 1),
+  PRIMARY KEY(bucket, subject_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_request_rate_limits_window
+  ON request_rate_limits(window_started_at);
+
+-- Compatibility triggers keep privacy/replay ledgers complete even if an
+-- already-running request (or an emergency rollback Worker) writes through
+-- the pre-hardening referral tables. Current code writes the HMAC key first,
+-- so these triggers are no-ops on the normal path.
+CREATE TRIGGER IF NOT EXISTS trg_referral_claim_legacy_ledger
+AFTER INSERT ON referral_claims
+WHEN NOT EXISTS (
+  SELECT 1 FROM referral_claim_ledger WHERE referred_account_id=NEW.referred_account_id
+)
+BEGIN
+  INSERT INTO referral_claim_ledger(
+    evidence_key,referred_account_id,referrer_account_id,claimed_at
+  ) VALUES(
+    'legacy_' || lower(hex(randomblob(32))),NEW.referred_account_id,
+    NEW.referrer_account_id,NEW.claimed_at
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_referral_reward_legacy_ledger
+AFTER INSERT ON referral_rewards
+BEGIN
+  INSERT OR IGNORE INTO referral_reward_ledger(
+    evidence_key,referrer_account_id,reward_index,cosmetic_id,awarded_at
+  )
+  SELECT evidence_key,NEW.referrer_account_id,NEW.reward_index,
+    NEW.cosmetic_id,NEW.awarded_at
+  FROM referral_claim_ledger
+  WHERE referred_account_id=NEW.referred_account_id;
+END;
 
 CREATE TABLE IF NOT EXISTS friendships (
   account_low_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -257,16 +365,27 @@ CREATE TABLE IF NOT EXISTS pvp_matches (
   phase_starts_at INTEGER,
   phase_ends_at INTEGER,
   draw_at INTEGER,
+  quick_draw_issued_at INTEGER,
   winner_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   completed_at TEXT,
+  state_revision INTEGER NOT NULL DEFAULT 0,
+  tap_commit_barrier_until INTEGER,
+  result_reason TEXT CHECK(result_reason IN (
+    'no_input','incomplete_round','tie_limit','stale_timeout',
+    'friend_removed','blocked_player','cancelled_by_inviter','rollout_recovery'
+  )),
   CHECK(inviter_account_id <> invitee_account_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pvp_matches_inviter
   ON pvp_matches(inviter_account_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pvp_matches_invitee
   ON pvp_matches(invitee_account_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pvp_matches_status_created
+  ON pvp_matches(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_pvp_matches_status_updated
+  ON pvp_matches(status, updated_at);
 
 CREATE TABLE IF NOT EXISTS pvp_round_scores (
   match_id TEXT NOT NULL REFERENCES pvp_matches(id) ON DELETE CASCADE,
@@ -274,15 +393,75 @@ CREATE TABLE IF NOT EXISTS pvp_round_scores (
   account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   tap_count INTEGER NOT NULL DEFAULT 0,
   reaction_ms INTEGER,
+  raw_reaction_ms INTEGER,
+  rtt_adjustment_ms INTEGER NOT NULL DEFAULT 0,
+  reaction_transport TEXT CHECK(reaction_transport IN ('websocket','rest')),
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY(match_id, round_number, account_id)
 );
 
 CREATE TABLE IF NOT EXISTS pvp_rewards (
   match_id TEXT PRIMARY KEY,
-  winner_account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  -- These numeric IDs deliberately have no foreign keys. The compact
+  -- anti-farming record must survive deletion of either participant and the
+  -- match while the account rows themselves are deleted normally.
+  winner_account_id INTEGER NOT NULL,
+  pair_low_account_id INTEGER,
+  pair_high_account_id INTEGER,
   mentality_amount INTEGER NOT NULL DEFAULT 5 CHECK(mentality_amount = 5),
-  awarded_at TEXT NOT NULL DEFAULT (datetime('now'))
+  awarded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK((pair_low_account_id IS NULL AND pair_high_account_id IS NULL)
+    OR (pair_low_account_id IS NOT NULL AND pair_high_account_id IS NOT NULL
+      AND pair_low_account_id < pair_high_account_id))
 );
 CREATE INDEX IF NOT EXISTS idx_pvp_rewards_winner
   ON pvp_rewards(winner_account_id, awarded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pvp_rewards_pair
+  ON pvp_rewards(pair_low_account_id, pair_high_account_id, awarded_at DESC)
+  WHERE pair_low_account_id IS NOT NULL AND pair_high_account_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS pvp_socket_tickets (
+  token_hash TEXT PRIMARY KEY,
+  match_id TEXT NOT NULL REFERENCES pvp_matches(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  expires_at_ms INTEGER NOT NULL,
+  used_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_pvp_socket_tickets_account_match
+  ON pvp_socket_tickets(account_id, match_id, expires_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_pvp_socket_tickets_expiry
+  ON pvp_socket_tickets(expires_at_ms);
+
+CREATE TABLE IF NOT EXISTS pvp_player_locks (
+  account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  match_id TEXT NOT NULL REFERENCES pvp_matches(id) ON DELETE CASCADE,
+  acquired_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pvp_player_locks_match
+  ON pvp_player_locks(match_id);
+
+-- Lock acquisition belongs to the database transaction that creates a match.
+-- This protects both current code and a temporarily running older Worker from
+-- creating overlapping or lockless invitations during deploy/rollback.
+CREATE TRIGGER IF NOT EXISTS trg_pvp_acquire_locks_insert
+AFTER INSERT ON pvp_matches
+WHEN NEW.status IN ('invited','active')
+BEGIN
+  INSERT INTO pvp_player_locks(account_id,match_id)
+    VALUES(NEW.inviter_account_id,NEW.id);
+  INSERT INTO pvp_player_locks(account_id,match_id)
+    VALUES(NEW.invitee_account_id,NEW.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_pvp_release_locks_terminal
+AFTER UPDATE OF status ON pvp_matches
+WHEN NEW.status IN ('completed','declined','cancelled')
+BEGIN
+  DELETE FROM pvp_player_locks WHERE match_id=NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_pvp_release_locks_deleted
+AFTER DELETE ON pvp_matches
+BEGIN
+  DELETE FROM pvp_player_locks WHERE match_id=OLD.id;
+END;

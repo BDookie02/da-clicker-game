@@ -22,6 +22,11 @@ import {
 } from './ads';
 import { AD_M_REWARD, M_PACKS, UnavailablePurchases, queuePendingPurchase, removePendingPurchase, type PurchaseProvider } from './purchases';
 
+// PvP scores are cumulative, so a one-second snapshot preserves the final
+// result without turning every physical tap into a network/D1 write. Phase
+// close still bypasses this timer and flushes the exact final count.
+const PVP_TAP_SYNC_INTERVAL_MS = 1000;
+
 function el(tag: string, cls?: string, html?: string): HTMLElement {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -58,18 +63,40 @@ export class UI {
   private referral: ReferralStatus | null = null;
   private referralAccountId = '';
   private referralLoading = false;
+  private referralLoadError = '';
   private multiplayer: MultiplayerState | null = null;
   private multiplayerAccountId = '';
   private multiplayerLoading = false;
+  private multiplayerLoadError = '';
   private multiplayerPollTimer = 0;
+  private multiplayerPollFailures = 0;
+  private multiplayerMutationPending = false;
   private multiplayerMode: PvPMode = 'tap';
   private multiplayerDuration = 60;
+  private multiplayerFriendCodeDraft = '';
+  private multiplayerView: 'friends' | 'add_friend' | 'challenge' = 'friends';
+  private multiplayerSelectedFriendCode = '';
   private pvpOverlay: HTMLElement | null = null;
   private pvpClockTimer = 0;
   private pvpPhaseKey = '';
   private pvpLocalTaps = 0;
   private pvpTapSendTimer = 0;
+  private pvpTapSending = false;
+  private pvpTapQueuedMatchId = '';
+  private pvpTapQueuedPhaseKey = '';
+  private pvpTapQueuedFinal = false;
+  private pvpTapFinalPhaseKey = '';
+  private pvpTapFinalRetryAt = 0;
   private pvpDrawSubmitted = false;
+  private pvpDrawSending = false;
+  private pvpDrawSocket: WebSocket | null = null;
+  private pvpDrawSocketKey = '';
+  private pvpDrawSocketConnecting = false;
+  private pvpDrawSocketFailures = 0;
+  private pvpDrawSocketRetryAt = 0;
+  private pvpDrawNonce = '';
+  private pvpDrawReady = false;
+  private pvpDrawEndsAt = 0;
   private pvpServerOffset = 0;
   private pvpPresentedMatchId = '';
   private readonly settledPvP = new Set<string>();
@@ -526,7 +553,7 @@ export class UI {
       overlay.innerHTML = `
         <div class="ad-box name-box leaderboard-signin-box">
           <div class="ad-label">${platformName.toUpperCase()} LOGIN</div>
-          <div class="name-copy">${platformName} connects this device to the official All-Time Taps board and submits your raw tap count. Your Discipline username and cloud save remain separate.</div>
+          <div class="name-copy">${platformName} connects this device to the official All-Time Taps board and submits a client-recorded cumulative tap count that the server limits to plausible rates. Your Discipline username and cloud save remain separate.</div>
           <div class="name-status" aria-live="polite"></div>
           <div class="name-actions"><button class="leaderboard-signin-cancel">CANCEL</button><button class="leaderboard-signin-confirm">SIGN IN</button></div>
         </div>`;
@@ -918,6 +945,10 @@ export class UI {
     if (this.openTab === tab) return this.close();
     const wasGarage = this.openTab === 'garage';
     this.openTab = tab;
+    if (tab === 'multiplayer') {
+      this.multiplayerView = 'friends';
+      this.multiplayerSelectedFriendCode = '';
+    }
     // garage opens with the sheet COLLAPSED — you see your car first,
     // cosmetics list is one tap away
     this.garageSheetOpen = tab !== 'garage';
@@ -1081,6 +1112,12 @@ export class UI {
   private refreshPanel() {
     if (!this.panel || !this.openTab) return;
     const previousScroller = this.panel.querySelector<HTMLElement>('.panel-scroll');
+    const previousFriendInput = this.openTab === 'multiplayer'
+      ? this.panel.querySelector<HTMLInputElement>('.friend-code-input') : null;
+    if (previousFriendInput) this.multiplayerFriendCodeDraft = previousFriendInput.value.slice(0, 9);
+    const friendInputWasFocused = document.activeElement === previousFriendInput;
+    const friendSelectionStart = previousFriendInput?.selectionStart ?? this.multiplayerFriendCodeDraft.length;
+    const friendSelectionEnd = previousFriendInput?.selectionEnd ?? friendSelectionStart;
     const previousScroll = previousScroller?.scrollTop ?? 0;
     const wasAtBottom = Boolean(previousScroller
       && previousScroller.scrollHeight > previousScroller.clientHeight
@@ -1163,56 +1200,100 @@ export class UI {
       } else if (!this.account.termsCurrent) {
         rows.push('<div class="panel-note">Review the current Community Terms in Settings before using friends or multiplayer.</div>');
       } else {
-        if (this.multiplayerAccountId !== this.account.accountId) this.multiplayer = null;
-        if (!this.multiplayer && !this.multiplayerLoading) void this.loadMultiplayerState();
+        if (this.multiplayerAccountId !== this.account.accountId) {
+          // Bind the attempted load to this account before the request starts.
+          // Otherwise a first-load failure leaves the IDs different, refresh()
+          // clears the error, and render immediately starts an endless retry.
+          this.multiplayerAccountId = this.account.accountId;
+          this.multiplayer = null;
+          this.multiplayerLoadError = '';
+          this.multiplayerMutationPending = false;
+          this.multiplayerFriendCodeDraft = '';
+          this.multiplayerView = 'friends';
+          this.multiplayerSelectedFriendCode = '';
+        }
+        if (!this.multiplayer && !this.multiplayerLoading && !this.multiplayerLoadError)
+          void this.loadMultiplayerState();
         const multiplayer = this.multiplayer;
-        rows.push(`<section class="multiplayer-card">
-          <div class="ad-label">YOUR FRIEND CODE</div>
-          ${multiplayer ? `<div class="referral-code">${escapeHtml(formatFriendCode(multiplayer.friendCode))}</div>
-            <button class="friend-code-copy">COPY CODE</button>`
-            : '<div class="panel-note">Loading your cross-platform friend code…</div>'}
-        </section>`);
-        rows.push(`<section class="multiplayer-card">
-          <div class="ad-label">ADD A FRIEND</div>
-          <div class="friend-add"><input class="friend-code-input" inputmode="text" maxlength="9" autocomplete="off" spellcheck="false" placeholder="ABCD-EF12"><button class="friend-add-submit">ADD</button></div>
-        </section>`);
-        if (multiplayer?.incomingRequests.length) {
-          rows.push('<div class="mp-section-title">FRIEND REQUESTS</div>');
-          for (const friend of multiplayer.incomingRequests) rows.push(`<div class="mp-row">
-            <span><b>${escapeHtml(friend.username)}</b><small>${escapeHtml(formatFriendCode(friend.playerCode))}</small></span>
-            <span class="mp-actions"><button data-friend-accept="${escapeAttr(friend.playerCode)}">ACCEPT</button><button data-friend-decline="${escapeAttr(friend.playerCode)}">DECLINE</button></span>
-          </div>`);
-        }
+        if (this.multiplayerLoadError) rows.push(`<div class="panel-note multiplayer-load-error">${escapeHtml(this.multiplayerLoadError)} <button class="multiplayer-retry">RETRY</button></div>`);
         const incomingMatches = multiplayer?.matches.filter(match => match.status === 'invited' && !match.invitedByMe) ?? [];
-        if (incomingMatches.length) {
-          rows.push('<div class="mp-section-title">CHALLENGES</div>');
-          for (const match of incomingMatches) rows.push(`<div class="mp-row mp-challenge">
-            <span><b>${escapeHtml(match.opponentName)}</b><small>${match.mode === 'quick_draw' ? 'QUICK DRAW' : `${match.durationSeconds}s TAP BATTLE`}</small></span>
-            <span class="mp-actions"><button data-pvp-accept="${escapeAttr(match.id)}">PLAY</button><button data-pvp-decline="${escapeAttr(match.id)}">DECLINE</button></span>
-          </div>`);
+        if (this.multiplayerView === 'friends' && incomingMatches.length) {
+          rows.push('<div class="mp-section-title">BATTLE INVITES</div>');
+          for (const match of incomingMatches) rows.push(`<section class="mp-invite-card">
+            <div class="mp-invite-copy"><small>FRIENDLY BATTLE</small><b>${escapeHtml(match.opponentName)}</b><span>${match.mode === 'quick_draw' ? 'QUICK DRAW' : `TAP BATTLE · ${match.durationSeconds} SEC`}</span></div>
+            <div class="mp-invite-actions"><button class="mp-decline" data-pvp-decline="${escapeAttr(match.id)}">DECLINE</button><button class="mp-accept" data-pvp-accept="${escapeAttr(match.id)}">PLAY</button></div>
+          </section>`);
         }
-        rows.push(`<section class="multiplayer-card">
-          <div class="ad-label">CHALLENGE SETTINGS</div>
-          <div class="mp-choice-row"><button data-pvp-mode="tap" class="${this.multiplayerMode === 'tap' ? 'selected' : ''}">TAP BATTLE</button><button data-pvp-mode="quick_draw" class="${this.multiplayerMode === 'quick_draw' ? 'selected' : ''}">QUICK DRAW</button></div>
-          ${this.multiplayerMode === 'tap' ? `<div class="mp-choice-row">${[30, 60, 90].map(seconds => `<button data-pvp-duration="${seconds}" class="${this.multiplayerDuration === seconds ? 'selected' : ''}">${seconds}s</button>`).join('')}</div>` : '<div class="setting-hint">Timing mode. Tap only when DRAW appears.</div>'}
-          <div class="setting-hint">Winner receives 5 Mentality. Exact ties switch to the other mode as a tiebreaker.</div>
-        </section>`);
         const friends = multiplayer?.friends ?? [];
-        rows.push('<div class="mp-section-title">FRIENDS</div>');
-        if (!friends.length) rows.push('<div class="panel-note">Add a friend with their DISCIPLINE friend code to challenge them on Android now and iOS later.</div>');
-        for (const friend of friends) rows.push(`<div class="mp-row">
-          <span><b>${escapeHtml(friend.username)}</b><small>${escapeHtml(formatFriendCode(friend.playerCode))}</small></span>
-          <span class="mp-actions"><button data-pvp-challenge="${escapeAttr(friend.playerCode)}">CHALLENGE</button><button data-friend-remove="${escapeAttr(friend.playerCode)}">REMOVE</button></span>
-        </div>`);
+        const selectedFriend = friends.find(friend => friend.playerCode === this.multiplayerSelectedFriendCode);
+        if (this.multiplayerView === 'challenge' && !selectedFriend) {
+          this.multiplayerView = 'friends';
+          this.multiplayerSelectedFriendCode = '';
+        }
+
+        if (this.multiplayerView === 'challenge' && selectedFriend) {
+          rows.push('<button class="mp-back" data-mp-view="friends">‹ BACK TO FRIENDS</button>');
+          rows.push(`<section class="mp-versus-card">
+            <div class="ad-label">FRIENDLY BATTLE</div>
+            <div class="mp-versus"><span>YOU</span><b>VS</b><span>${escapeHtml(selectedFriend.username)}</span></div>
+            <div class="setting-hint">Choose how you want to battle.</div>
+          </section>`);
+          rows.push(`<div class="mp-mode-grid">
+            <button data-pvp-mode="tap" class="mp-mode-card ${this.multiplayerMode === 'tap' ? 'selected' : ''}"><b>TAP BATTLE</b><small>Tap faster than your opponent.</small></button>
+            <button data-pvp-mode="quick_draw" class="mp-mode-card ${this.multiplayerMode === 'quick_draw' ? 'selected' : ''}"><b>QUICK DRAW</b><small>Wait for DRAW. Fastest reaction wins.</small></button>
+          </div>`);
+          if (this.multiplayerMode === 'tap') rows.push(`<section class="mp-duration-card">
+            <div class="ad-label">BATTLE LENGTH</div>
+            <div class="mp-choice-row mp-duration-row">${[30, 60, 90].map(seconds => `<button data-pvp-duration="${seconds}" class="${this.multiplayerDuration === seconds ? 'selected' : ''}"><b>${seconds}</b><small>SEC</small></button>`).join('')}</div>
+          </section>`);
+          rows.push(`<section class="mp-reward-card">
+            <b>WIN: +5 MENTALITY</b>
+            <small>An eligible win receives 5 Mentality. Exact ties switch to the other mode once. Rewards are limited to 10 wins per 24 hours and one rewarded result with the same opponent per 24 hours.</small>
+          </section>`);
+          rows.push(`<button class="mp-send-challenge" data-pvp-send="${escapeAttr(selectedFriend.playerCode)}">SEND CHALLENGE</button>`);
+        } else if (this.multiplayerView === 'add_friend') {
+          rows.push('<button class="mp-back" data-mp-view="friends">‹ BACK TO FRIENDS</button>');
+          rows.push(`<section class="multiplayer-card mp-add-card">
+            <div class="ad-label">ADD A FRIEND</div>
+            <div class="mp-card-heading">ENTER THEIR DISCIPLINE CODE</div>
+            <div class="friend-add"><input class="friend-code-input" inputmode="text" maxlength="9" autocomplete="off" spellcheck="false" placeholder="ABCD-EF12" value="${escapeAttr(this.multiplayerFriendCodeDraft)}"><button class="friend-add-submit">ADD</button></div>
+          </section>`);
+          rows.push(`<section class="multiplayer-card mp-own-code-card">
+            <div class="ad-label">YOUR FRIEND CODE</div>
+            ${multiplayer ? `<div class="referral-code">${escapeHtml(formatFriendCode(multiplayer.friendCode))}</div>
+              <button class="friend-code-copy">COPY MY CODE</button>`
+              : this.multiplayerLoadError ? '<div class="panel-note">Reconnect, then retry to load your friend code.</div>'
+                : '<div class="panel-note">Loading your cross-platform friend code…</div>'}
+          </section>`);
+        } else {
+          rows.push(`<section class="mp-social-hero">
+            <div><div class="ad-label">FRIEND BATTLES</div><b>Pick a friend. Pick a mode. Battle.</b></div>
+            <button data-mp-view="add_friend">ADD FRIEND</button>
+          </section>`);
+          if (multiplayer?.incomingRequests.length) {
+            rows.push('<div class="mp-section-title">FRIEND REQUESTS</div>');
+            for (const friend of multiplayer.incomingRequests) rows.push(`<div class="mp-row mp-request-row">
+              <span><b>${escapeHtml(friend.username)}</b><small>${escapeHtml(formatFriendCode(friend.playerCode))}</small></span>
+              <span class="mp-actions"><button data-friend-accept="${escapeAttr(friend.playerCode)}">ACCEPT</button><button class="mp-decline" data-friend-decline="${escapeAttr(friend.playerCode)}">DECLINE</button></span>
+            </div>`);
+          }
+          rows.push('<div class="mp-section-title">FRIENDS</div>');
+          if (!friends.length) rows.push('<div class="panel-note">Add a friend with their DISCIPLINE code, then challenge them from this list.</div>');
+          for (const friend of friends) rows.push(`<div class="mp-row mp-friend-row">
+            <span><b>${escapeHtml(friend.username)}</b><small>${escapeHtml(formatFriendCode(friend.playerCode))}</small></span>
+            <span class="mp-actions"><button class="mp-battle-button" data-pvp-select-friend="${escapeAttr(friend.playerCode)}">BATTLE</button><button class="mp-remove-button" data-friend-remove="${escapeAttr(friend.playerCode)}">REMOVE</button></span>
+          </div>`);
+          if (multiplayer) rows.push(`<button class="mp-share-code friend-code-copy">SHARE MY CODE · ${escapeHtml(formatFriendCode(multiplayer.friendCode))}</button>`);
+        }
         const outgoingMatches = multiplayer?.matches.filter(match => match.status === 'invited' && match.invitedByMe) ?? [];
-        if (outgoingMatches.length) {
+        if (this.multiplayerView === 'friends' && outgoingMatches.length) {
           rows.push('<div class="mp-section-title">WAITING FOR ACCEPTANCE</div>');
-          for (const match of outgoingMatches) rows.push(`<div class="mp-row">
+          for (const match of outgoingMatches) rows.push(`<div class="mp-row mp-waiting-row">
             <span><b>${escapeHtml(match.opponentName)}</b><small>${match.mode === 'quick_draw' ? 'QUICK DRAW' : `${match.durationSeconds}s TAP BATTLE`}</small></span>
             <button data-pvp-cancel="${escapeAttr(match.id)}">CANCEL</button>
           </div>`);
         }
-        if (multiplayer?.outgoingRequests.length) {
+        if (this.multiplayerView === 'friends' && multiplayer?.outgoingRequests.length) {
           rows.push('<div class="mp-section-title">REQUESTS SENT</div>');
           for (const friend of multiplayer.outgoingRequests) rows.push(`<div class="mp-row"><span><b>${escapeHtml(friend.username)}</b><small>WAITING</small></span></div>`);
         }
@@ -1312,8 +1393,13 @@ export class UI {
           <div class="cheat-entry"><input class="cheat-code" type="password" autocomplete="off" spellcheck="false" placeholder="ENTER OWNER CODE"><button class="cheat-submit">UNLOCK</button></div>
         </details>`);
       if (this.account?.signedIn) {
-        if (this.referralAccountId !== this.account.accountId) this.referral = null;
-        if (!this.referral && !this.referralLoading) void this.loadReferralStatus();
+        if (this.referralAccountId !== this.account.accountId) {
+          this.referralAccountId = this.account.accountId;
+          this.referral = null;
+          this.referralLoadError = '';
+        }
+        if (!this.referral && !this.referralLoading && !this.referralLoadError)
+          void this.loadReferralStatus();
         const referral = this.referral;
         rows.push(`<section class="referral-card" aria-label="Friend referral rewards">
           <div class="ad-label">FRIEND REFERRALS</div>
@@ -1322,7 +1408,9 @@ export class UI {
             <div class="name-actions"><button class="referral-share" ${referral.remaining === 0 ? 'disabled' : ''}>${referral.remaining === 0 ? 'REWARDS COMPLETE' : 'SHARE LINK'}</button>
             <button disabled>${referral.rewardCount}/${referral.rewardLimit}</button></div>
             <div class="setting-hint">Verified rewards: ${referral.rewardCount} · ${referral.remaining} remaining</div>`
-            : '<div class="panel-note">Loading verified referral status…</div>'}
+            : this.referralLoadError
+              ? `<div class="panel-note referral-load-error">${escapeHtml(this.referralLoadError)} <button class="referral-retry">RETRY</button></div>`
+              : '<div class="panel-note">Loading verified referral status…</div>'}
         </section>`);
       }
       if (this.account?.signedIn) {
@@ -1370,6 +1458,16 @@ export class UI {
     this.panel.querySelector('.x')?.addEventListener('click', () => this.close());
     if (this.openTab === 'settings') this.bindSettings();
     if (this.openTab === 'multiplayer') this.bindMultiplayer();
+    if (friendInputWasFocused) {
+      const nextFriendInput = this.panel.querySelector<HTMLInputElement>('.friend-code-input');
+      if (nextFriendInput) {
+        nextFriendInput.focus({ preventScroll: true });
+        nextFriendInput.setSelectionRange(
+          Math.min(friendSelectionStart, nextFriendInput.value.length),
+          Math.min(friendSelectionEnd, nextFriendInput.value.length),
+        );
+      }
+    }
     // garage-specific controls
     this.panel.querySelector('.g-exit')?.addEventListener('click', () => this.close());
     this.panel.querySelector('.g-collapse')?.addEventListener('click', () => {
@@ -1467,6 +1565,11 @@ export class UI {
         this.toast('Referral link shared.', 'gold');
       } catch { this.toast('Sharing was canceled.'); }
     });
+    this.panel.querySelector('.referral-retry')?.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation();
+      this.referralLoadError = '';
+      void this.loadReferralStatus(true);
+    });
   }
 
   async refreshReferralReward() {
@@ -1482,6 +1585,7 @@ export class UI {
       if (this.account.accountId !== accountId) return;
       this.referral = referral;
       this.referralAccountId = accountId;
+      this.referralLoadError = '';
       const newRewards = this.referral.rewards.filter((id) =>
         COSMETICS.some((cosmetic) => cosmetic.id === id) && !this.game.s.ownedCosmetics.includes(id));
       if (newRewards.length) {
@@ -1491,7 +1595,7 @@ export class UI {
         const newest = COSMETICS.find((cosmetic) => cosmetic.id === newRewards[newRewards.length - 1]);
         this.toast(`${newest?.name || 'Random shop item'} unlocked by referral!`, 'gold');
       }
-    } catch { /* settings remains usable offline */ }
+    } catch { this.referralLoadError = 'Referral status is unavailable. Check your connection.'; }
     finally {
       this.referralLoading = false;
       if (this.openTab === 'settings') this.refreshPanel();
@@ -1500,10 +1604,28 @@ export class UI {
 
   private bindMultiplayer() {
     if (!this.panel || !this.account?.signedIn) return;
+    const friendInput = this.panel.querySelector<HTMLInputElement>('.friend-code-input');
+    friendInput?.addEventListener('input', () => {
+      this.multiplayerFriendCodeDraft = friendInput.value.slice(0, 9);
+    });
     const run = async (action: () => Promise<void>) => {
-      try { await action(); await this.loadMultiplayerState(true); }
-      catch (error) { this.toast(multiplayerError(error)); }
+      // A mutation can reach the server even when its response (or the state
+      // refresh immediately after it) is lost. Keep polling until one
+      // authoritative state read confirms where both players landed.
+      this.multiplayerMutationPending = true;
+      try { await action(); }
+      catch (error) {
+        if (!(error instanceof Error) || error.message !== 'multiplayer_unavailable')
+          this.multiplayerMutationPending = false;
+        this.toast(multiplayerError(error));
+      }
+      await this.loadMultiplayerState(true);
     };
+    this.panel.querySelector('.multiplayer-retry')?.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation();
+      this.multiplayerLoadError = '';
+      void this.loadMultiplayerState(true);
+    });
     this.panel.querySelector('.friend-code-copy')?.addEventListener('click', (ev) => {
       ev.stopImmediatePropagation();
       if (!this.multiplayer) return;
@@ -1514,9 +1636,24 @@ export class UI {
     this.panel.querySelector('.friend-add-submit')?.addEventListener('click', (ev) => {
       ev.stopImmediatePropagation();
       const input = this.panel!.querySelector<HTMLInputElement>('.friend-code-input');
-      const code = input?.value.trim() || '';
+      const code = input?.value.trim() || this.multiplayerFriendCodeDraft.trim();
       if (!code) { this.toast('Enter a friend code.'); return; }
-      void run(async () => { await this.account!.requestFriend(code); this.toast('Friend request sent.', 'gold'); });
+      void run(async () => {
+        await this.account!.requestFriend(code);
+        this.multiplayerFriendCodeDraft = '';
+        const currentInput = this.panel?.querySelector<HTMLInputElement>('.friend-code-input');
+        if (currentInput) currentInput.value = '';
+        this.multiplayerView = 'friends';
+        this.toast('Friend request sent.', 'gold');
+      });
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-mp-view]').forEach((button) => {
+      button.addEventListener('click', (ev) => {
+        ev.stopImmediatePropagation();
+        this.multiplayerView = button.dataset.mpView as 'friends' | 'add_friend';
+        if (this.multiplayerView === 'friends') this.multiplayerSelectedFriendCode = '';
+        this.refreshPanel();
+      });
     });
     this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-mode]').forEach((button) => {
       button.addEventListener('click', (ev) => {
@@ -1544,10 +1681,20 @@ export class UI {
       button.addEventListener('click', () => void run(() =>
         this.account!.removeFriend(button.dataset.friendRemove!)));
     });
-    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-challenge]').forEach((button) => {
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-select-friend]').forEach((button) => {
+      button.addEventListener('click', (ev) => {
+        ev.stopImmediatePropagation();
+        this.multiplayerSelectedFriendCode = button.dataset.pvpSelectFriend!;
+        this.multiplayerView = 'challenge';
+        this.refreshPanel();
+      });
+    });
+    this.panel.querySelectorAll<HTMLButtonElement>('[data-pvp-send]').forEach((button) => {
       button.addEventListener('click', () => void run(async () => {
-        await this.account!.invitePvP(button.dataset.pvpChallenge!, this.multiplayerMode,
+        await this.account!.invitePvP(button.dataset.pvpSend!, this.multiplayerMode,
           this.multiplayerMode === 'tap' ? this.multiplayerDuration : 0);
+        this.multiplayerView = 'friends';
+        this.multiplayerSelectedFriendCode = '';
         this.toast('Challenge sent.', 'gold');
       }));
     });
@@ -1567,9 +1714,23 @@ export class UI {
 
   private scheduleMultiplayerPoll() {
     window.clearTimeout(this.multiplayerPollTimer);
+    if (!this.multiplayer) return;
     const active = this.multiplayer?.matches.some(match => match.status === 'active');
-    if (!active && this.openTab !== 'multiplayer') return;
-    this.multiplayerPollTimer = window.setTimeout(() => void this.loadMultiplayerState(true), active ? 500 : 3000);
+    const invited = this.multiplayer.matches.some(match => match.status === 'invited');
+    const mustRecover = active || invited || this.multiplayerMutationPending;
+    // A failed initial/panel-only request stays manually retryable. Every
+    // nonterminal match and every uncertain mutation recovers with bounded
+    // backoff, including an invite that became active while its next GET was
+    // lost; neither player can be stranded on stale invite state.
+    if (this.multiplayerLoadError && !mustRecover) return;
+    if (!mustRecover && this.openTab !== 'multiplayer') return;
+    const waitingForDraw = this.multiplayer.matches.some(match => match.status === 'active'
+      && match.phase === 'quick_draw' && !match.drawReady);
+    const recoveryDelay = Math.min(3000, 300 * (2 ** Math.min(this.multiplayerPollFailures, 4)));
+    this.multiplayerPollTimer = window.setTimeout(
+      () => void this.loadMultiplayerState(true),
+      this.multiplayerLoadError ? recoveryDelay : waitingForDraw ? 200 : active ? 500 : 3000,
+    );
   }
 
   private async loadMultiplayerState(force = false) {
@@ -1585,18 +1746,23 @@ export class UI {
       this.pvpServerOffset = state.serverNow - Math.round((startedAt + receivedAt) / 2);
       this.multiplayer = state;
       this.multiplayerAccountId = accountId;
+      this.multiplayerLoadError = '';
+      this.multiplayerPollFailures = 0;
+      this.multiplayerMutationPending = false;
       const active = state.matches.find(match => match.status === 'active');
       if (active) {
         this.pvpPresentedMatchId = active.id;
         this.showPvPMatch(active);
       } else if (this.pvpPresentedMatchId) {
-        const completed = state.matches.find(match => match.id === this.pvpPresentedMatchId
-          && match.status === 'completed' && !this.dismissedPvP.has(match.id));
-        if (completed) this.showPvPMatch(completed);
-        else if (!completed) this.removePvPOverlay();
+        const settled = state.matches.find(match => match.id === this.pvpPresentedMatchId
+          && (match.status === 'completed' || match.status === 'cancelled')
+          && !this.dismissedPvP.has(match.id));
+        if (settled) this.showPvPMatch(settled);
+        else this.removePvPOverlay();
       }
     } catch (error) {
-      if (this.openTab === 'multiplayer') this.toast(multiplayerError(error));
+      this.multiplayerLoadError = multiplayerError(error);
+      this.multiplayerPollFailures += 1;
     } finally {
       this.multiplayerLoading = false;
       if (this.openTab === 'multiplayer') this.refreshPanel();
@@ -1605,13 +1771,34 @@ export class UI {
   }
 
   private showPvPMatch(match: PvPMatch) {
-    if (match.status === 'completed') { this.showPvPResult(match); return; }
+    if (match.status === 'completed' || match.status === 'cancelled') {
+      this.showPvPResult(match); return;
+    }
     const phaseKey = `${match.id}:${match.roundNumber}:${match.phase}`;
     if (this.pvpPhaseKey !== phaseKey) {
+      this.closeQuickDrawSocket();
       this.pvpPhaseKey = phaseKey;
       this.pvpLocalTaps = match.myTapCount;
+      this.pvpTapFinalPhaseKey = '';
+      this.pvpTapFinalRetryAt = 0;
+      this.pvpTapQueuedMatchId = '';
+      this.pvpTapQueuedPhaseKey = '';
+      this.pvpTapQueuedFinal = false;
       this.pvpDrawSubmitted = match.myReactionMs !== null;
-    } else this.pvpLocalTaps = Math.max(this.pvpLocalTaps, match.myTapCount);
+      this.pvpDrawSending = false;
+      this.pvpDrawReady = match.drawReady;
+      this.pvpDrawEndsAt = Number(match.phaseEndsAt) || 0;
+    } else {
+      this.pvpLocalTaps = Math.max(this.pvpLocalTaps, match.myTapCount);
+      if (match.myReactionMs !== null) {
+        this.pvpDrawSubmitted = true;
+        this.pvpDrawSending = false;
+      } else if (!this.pvpDrawSending) this.pvpDrawSubmitted = false;
+      this.pvpDrawReady ||= match.drawReady;
+      if (match.phaseEndsAt != null) this.pvpDrawEndsAt = Number(match.phaseEndsAt);
+    }
+    if (match.phase === 'quick_draw') this.ensureQuickDrawSocket(match);
+    else this.closeQuickDrawSocket();
     if (!this.pvpOverlay) {
       this.pvpOverlay = el('div', 'ad-overlay pvp-overlay');
       document.body.appendChild(this.pvpOverlay);
@@ -1622,7 +1809,7 @@ export class UI {
       <div class="pvp-opponent">VS ${escapeHtml(match.opponentName)}</div>
       <div class="pvp-clock" aria-live="polite"></div>
       <button class="pvp-tap-zone" aria-label="${match.phase === 'quick_draw' ? 'Quick draw' : 'Tap as fast as possible'}"><span></span></button>
-      <div class="pvp-score"><span>YOU <b class="pvp-my-score">${this.pvpLocalTaps}</b></span><span>THEM <b>${match.opponentTapCount}</b></span></div>
+      <div class="pvp-score"><span>YOU <b class="pvp-my-score">${this.pvpLocalTaps}</b></span><span>THEM <b>${match.opponentTapCount ?? '—'}</b></span></div>
       <div class="setting-hint pvp-rule">${match.phase === 'quick_draw'
         ? 'Tap only after DRAW. An early tap is a foul.'
         : 'Tap the large zone as fast as possible.'}</div>
@@ -1631,24 +1818,147 @@ export class UI {
     zone.addEventListener('pointerdown', (event) => {
       event.stopPropagation(); event.preventDefault();
       const now = Date.now() + this.pvpServerOffset;
-      if (now < Number(match.phaseStartsAt) || now > Number(match.phaseEndsAt)) return;
+      const phaseEndsAt = match.phase === 'quick_draw'
+        ? this.pvpDrawEndsAt : Number(match.phaseEndsAt);
+      if (now < Number(match.phaseStartsAt) || now > phaseEndsAt) return;
       if (match.phase === 'tap') {
         this.pvpLocalTaps += 1;
         const score = this.pvpOverlay?.querySelector('.pvp-my-score');
         if (score) score.textContent = String(this.pvpLocalTaps);
         sfx.tap();
         this.queuePvPTap(match.id);
-      } else if (!this.pvpDrawSubmitted) {
-        this.pvpDrawSubmitted = true;
+      } else if (!this.pvpDrawSubmitted && !this.pvpDrawSending) {
+        this.pvpDrawSending = true;
         zone.classList.add('submitted');
+        if (this.pvpDrawSocket?.readyState === WebSocket.OPEN
+            && (!this.pvpDrawReady || Boolean(this.pvpDrawNonce))) {
+          this.pvpDrawSocket.send(JSON.stringify(this.pvpDrawReady
+            ? { type: 'draw_response', nonce: this.pvpDrawNonce }
+            : { type: 'early' }));
+          return;
+        }
+        // The REST endpoint preserves playability if the socket cannot be
+        // established. It remains server-timestamped, but receives no RTT
+        // normalization and only reveals DRAW after the bounded failover.
         void this.account!.submitQuickDraw(match.id)
-          .then(() => this.loadMultiplayerState(true))
-          .catch((error) => this.toast(multiplayerError(error)));
+          .then(() => {
+            this.pvpDrawSubmitted = true;
+            this.pvpDrawSending = false;
+            return this.loadMultiplayerState(true);
+          })
+          .catch((error) => {
+            this.pvpDrawSending = false;
+            void this.loadMultiplayerState(true);
+            this.toast(multiplayerError(error));
+          });
       }
     });
     window.clearInterval(this.pvpClockTimer);
     this.pvpClockTimer = window.setInterval(() => this.updatePvPClock(match), 50);
     this.updatePvPClock(match);
+  }
+
+  private closeQuickDrawSocket(preserveRoundState = false) {
+    const socket = this.pvpDrawSocket;
+    this.pvpDrawSocket = null;
+    this.pvpDrawSocketKey = '';
+    this.pvpDrawSocketConnecting = false;
+    if (!preserveRoundState) {
+      this.pvpDrawNonce = '';
+      this.pvpDrawReady = false;
+      this.pvpDrawEndsAt = 0;
+      this.pvpDrawSocketFailures = 0;
+      this.pvpDrawSocketRetryAt = 0;
+    }
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+      try { socket.close(1000, 'Round changed'); } catch { /* already closed */ }
+    }
+  }
+
+  private ensureQuickDrawSocket(match: PvPMatch) {
+    if (!this.account?.signedIn || match.phase !== 'quick_draw'
+        || match.status !== 'active') return;
+    if (Date.now() < this.pvpDrawSocketRetryAt) return;
+    const key = `${match.id}:${match.roundNumber}`;
+    if (this.pvpDrawSocketKey === key
+        && (this.pvpDrawSocketConnecting || this.pvpDrawSocket)) return;
+    this.closeQuickDrawSocket(true);
+    this.pvpDrawSocketKey = key;
+    this.pvpDrawSocketConnecting = true;
+    void this.account.quickDrawSocketTicket(match.id).then(({ ticket }) => {
+      if (this.pvpDrawSocketKey !== key) return;
+      if (!ticket) {
+        this.deferQuickDrawSocketRetry();
+        return;
+      }
+      const socket = this.account!.openQuickDrawSocket(match.id, ticket);
+      this.pvpDrawSocket = socket;
+      socket.addEventListener('open', () => {
+        if (this.pvpDrawSocket === socket) {
+          this.pvpDrawSocketConnecting = false;
+          this.pvpDrawSocketFailures = 0;
+          this.pvpDrawSocketRetryAt = 0;
+        }
+      });
+      socket.addEventListener('message', (event) => {
+        if (this.pvpDrawSocket !== socket || typeof event.data !== 'string') return;
+        let message: any;
+        try { message = JSON.parse(event.data); } catch { return; }
+        if (message?.type === 'ping' && typeof message.id === 'string') {
+          socket.send(JSON.stringify({ type: 'pong', id: message.id }));
+          return;
+        }
+        if (message?.type === 'ready') {
+          if (message.responded === true) {
+            this.pvpDrawSubmitted = true;
+            this.pvpDrawSending = false;
+          }
+          return;
+        }
+        if (message?.type === 'draw' && Number(message.roundNumber) === match.roundNumber
+            && typeof message.nonce === 'string') {
+          this.pvpDrawNonce = message.nonce;
+          this.pvpDrawReady = true;
+          this.pvpDrawEndsAt = Number(message.phaseEndsAt) || this.pvpDrawEndsAt;
+          this.updatePvPClock(match);
+          return;
+        }
+        if (message?.type === 'accepted') {
+          this.pvpDrawSubmitted = true;
+          this.pvpDrawSending = false;
+          void this.loadMultiplayerState(true);
+        } else if (message?.type === 'error') {
+          this.pvpDrawSending = false;
+          void this.loadMultiplayerState(true);
+        }
+      });
+      const disconnected = () => {
+        if (this.pvpDrawSocket !== socket) return;
+        this.pvpDrawSocket = null;
+        this.pvpDrawSocketKey = '';
+        this.pvpDrawSocketConnecting = false;
+        this.pvpDrawSending = false;
+        this.deferQuickDrawSocketRetry();
+        void this.loadMultiplayerState(true);
+      };
+      socket.addEventListener('close', disconnected);
+      socket.addEventListener('error', disconnected);
+    }).catch(() => {
+      if (this.pvpDrawSocketKey !== key) return;
+      this.deferQuickDrawSocketRetry();
+      // Existing bounded state polling is the recovery path and will retry a
+      // fresh one-use ticket without blocking the round UI.
+    });
+  }
+
+  private deferQuickDrawSocketRetry() {
+    this.pvpDrawSocket = null;
+    this.pvpDrawSocketKey = '';
+    this.pvpDrawSocketConnecting = false;
+    this.pvpDrawSending = false;
+    this.pvpDrawSocketFailures += 1;
+    this.pvpDrawSocketRetryAt = Date.now()
+      + Math.min(3000, 300 * (2 ** Math.min(this.pvpDrawSocketFailures - 1, 4)));
   }
 
   private updatePvPClock(match: PvPMatch) {
@@ -1658,26 +1968,41 @@ export class UI {
     const zone = this.pvpOverlay.querySelector<HTMLButtonElement>('.pvp-tap-zone');
     const label = zone?.querySelector('span');
     if (!clock || !zone || !label) return;
+    const drawReady = match.drawReady || this.pvpDrawReady;
+    const phaseEndsAt = match.phase === 'quick_draw'
+      ? this.pvpDrawEndsAt || Number(match.phaseEndsAt) : Number(match.phaseEndsAt);
+    if (this.multiplayerLoadError && match.phase === 'quick_draw' && !drawReady) {
+      // DRAW is server-controlled and intentionally hidden until a successful
+      // poll. Never guess its timing from a stale response.
+      clock.textContent = 'RECONNECTING…';
+      label.textContent = 'WAIT';
+      zone.classList.remove('live');
+      zone.classList.add('waiting');
+      return;
+    }
     if (now < Number(match.phaseStartsAt)) {
       clock.textContent = `${Math.max(1, Math.ceil((Number(match.phaseStartsAt) - now) / 1000))}`;
       label.textContent = 'GET READY';
       zone.classList.remove('live');
       return;
     }
-    if (now > Number(match.phaseEndsAt)) {
+    if (now > phaseEndsAt) {
       clock.textContent = 'WAITING FOR RESULT';
       label.textContent = 'LOCKED';
       zone.classList.remove('live');
-      this.queuePvPTap(match.id, true);
+      // Quick Draw submits a server-timestamped reaction separately. Only a
+      // tap round needs the final cumulative counter upload.
+      if (match.phase === 'tap') this.queuePvPTap(match.id, true);
       return;
     }
     if (match.phase === 'quick_draw') {
-      const drawn = now >= Number(match.drawAt);
+      const drawn = drawReady;
       clock.textContent = drawn
-        ? `${Math.max(0, (Number(match.phaseEndsAt) - now) / 1000).toFixed(1)}s`
+        ? `${Math.max(0, (phaseEndsAt - now) / 1000).toFixed(1)}s`
         : 'WAIT…';
-      label.textContent = this.pvpDrawSubmitted ? 'LOCKED' : drawn ? 'DRAW!' : 'WAIT';
-      zone.classList.toggle('live', drawn && !this.pvpDrawSubmitted);
+      label.textContent = this.pvpDrawSubmitted ? 'LOCKED'
+        : this.pvpDrawSending ? 'SENDING…' : drawn ? 'DRAW!' : 'WAIT';
+      zone.classList.toggle('live', drawn && !this.pvpDrawSubmitted && !this.pvpDrawSending);
       zone.classList.toggle('waiting', !drawn);
     } else {
       clock.textContent = `${Math.max(0, (Number(match.phaseEndsAt) - now) / 1000).toFixed(1)}s`;
@@ -1687,27 +2012,87 @@ export class UI {
   }
 
   private queuePvPTap(matchId: string, immediate = false) {
-    if (!this.account?.signedIn || (!immediate && this.pvpTapSendTimer)) return;
+    if (!this.account?.signedIn) return;
+    const phaseKey = this.pvpPhaseKey;
+    if (immediate) {
+      if (this.pvpTapFinalPhaseKey === phaseKey) return;
+      // The clock ticks every 50 ms after close. Retry a failed final upload
+      // within the server grace window, but never flood the endpoint.
+      if (Date.now() < this.pvpTapFinalRetryAt) return;
+    } else if (this.pvpTapSendTimer) return;
+    if (this.pvpTapSending) {
+      this.pvpTapQueuedMatchId = matchId;
+      this.pvpTapQueuedPhaseKey = phaseKey;
+      this.pvpTapQueuedFinal ||= immediate;
+      return;
+    }
+    const finalSubmission = immediate;
     const send = () => {
       this.pvpTapSendTimer = 0;
-      void this.account!.submitPvPTaps(matchId, this.pvpLocalTaps).catch(() => { /* next poll preserves the match */ });
+      this.pvpTapSending = true;
+      void this.account!.submitPvPTaps(matchId, this.pvpLocalTaps)
+        .then(() => {
+          if (finalSubmission && phaseKey === this.pvpPhaseKey) {
+            this.pvpTapFinalPhaseKey = phaseKey;
+            this.pvpTapFinalRetryAt = 0;
+          }
+        })
+        .catch(() => {
+          if (finalSubmission && phaseKey === this.pvpPhaseKey)
+            this.pvpTapFinalRetryAt = Date.now() + 300;
+        })
+        .finally(() => {
+          this.pvpTapSending = false;
+          const queuedMatchId = this.pvpTapQueuedMatchId;
+          const queuedPhaseKey = this.pvpTapQueuedPhaseKey;
+          const queuedFinal = this.pvpTapQueuedFinal;
+          this.pvpTapQueuedMatchId = '';
+          this.pvpTapQueuedPhaseKey = '';
+          this.pvpTapQueuedFinal = false;
+          if (queuedMatchId && queuedPhaseKey === this.pvpPhaseKey)
+            this.queuePvPTap(queuedMatchId, queuedFinal);
+        });
     };
     if (immediate) {
       window.clearTimeout(this.pvpTapSendTimer); send();
-    } else this.pvpTapSendTimer = window.setTimeout(send, 140);
+    } else this.pvpTapSendTimer = window.setTimeout(send, PVP_TAP_SYNC_INTERVAL_MS);
   }
 
   private showPvPResult(match: PvPMatch) {
     window.clearInterval(this.pvpClockTimer);
+    this.closeQuickDrawSocket();
     if (!this.pvpOverlay) {
       this.pvpOverlay = el('div', 'ad-overlay pvp-overlay');
       document.body.appendChild(this.pvpOverlay);
     }
+    const cancelled = match.status === 'cancelled';
+    const noContestReason: Record<string, string> = {
+      no_input: 'Nobody submitted a score.',
+      incomplete_round: 'The player who participated won by forfeit.',
+      tie_limit: 'Still tied after the tiebreaker.',
+      stale_timeout: 'The match timed out.',
+      friend_removed: 'The friendship ended during the match.',
+      blocked_player: 'The match was closed by a player block.',
+      rollout_recovery: 'The match was safely closed during a server update.',
+    };
+    const zeroRewardVictory = match.resultReason === 'incomplete_round'
+      || match.resultReason === 'no_input'
+      ? 'VICTORY — NO REWARD (OPPONENT INACTIVE)'
+      : match.resultReason
+      ? 'VICTORY — NO REWARD'
+      : 'VICTORY — REWARD LIMIT REACHED';
     this.pvpOverlay.innerHTML = `<div class="pvp-box pvp-result ${match.won ? 'won' : 'lost'}">
-      <div class="ad-label">${match.won ? 'YOU WIN' : 'YOU LOSE'}</div>
+      <div class="ad-label">${cancelled ? 'NO CONTEST' : match.won ? 'YOU WIN' : 'YOU LOSE'}</div>
       <div class="pvp-opponent">${escapeHtml(match.opponentName)}</div>
-      <div class="pvp-result-reward">${match.won ? '+5 MENTALITY' : 'BETTER LUCK NEXT TIME'}</div>
-      <button class="pvp-result-close">BACK TO GAME</button>
+      <div class="pvp-result-reward">${cancelled
+        ? escapeHtml(noContestReason[match.resultReason || ''] || 'The match ended without a winner.')
+        : match.won
+        ? match.rewardAmount > 0 ? `+${match.rewardAmount} MENTALITY` : zeroRewardVictory
+        : 'BETTER LUCK NEXT TIME'}</div>
+      <div class="pvp-result-actions">
+        <button class="pvp-result-close">BACK TO FRIENDS</button>
+        ${cancelled ? '' : '<button class="pvp-play-again">PLAY AGAIN</button>'}
+      </div>
     </div>`;
     this.pvpOverlay.querySelector('.pvp-result-close')!.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -1716,13 +2101,36 @@ export class UI {
       this.removePvPOverlay();
       if (this.openTab === 'multiplayer') this.refreshPanel();
     });
+    this.pvpOverlay.querySelector<HTMLButtonElement>('.pvp-play-again')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const button = event.currentTarget as HTMLButtonElement;
+      button.disabled = true;
+      this.multiplayerMutationPending = true;
+      void this.account?.invitePvP(match.opponentCode, match.mode,
+        match.mode === 'tap' ? match.durationSeconds : 0).then(async () => {
+        this.dismissedPvP.add(match.id);
+        this.pvpPresentedMatchId = '';
+        this.multiplayerView = 'friends';
+        this.multiplayerSelectedFriendCode = '';
+        this.removePvPOverlay();
+        await this.loadMultiplayerState(true);
+        this.toast('Rematch sent.', 'gold');
+      }).catch((error) => {
+        if (!(error instanceof Error) || error.message !== 'multiplayer_unavailable')
+          this.multiplayerMutationPending = false;
+        button.disabled = false;
+        this.toast(multiplayerError(error));
+        void this.loadMultiplayerState(true);
+      });
+    });
     if (!this.settledPvP.has(match.id)) {
-      if (!match.won) this.settledPvP.add(match.id);
+      if (cancelled || !match.won) this.settledPvP.add(match.id);
       else void this.account?.save(this.game.s).then((saved) => {
         if (!saved) return;
         this.settledPvP.add(match.id);
         this.refresh();
-        this.toast('PvP victory: +5 Mentality.', 'gold');
+        this.toast(match.rewardAmount > 0
+          ? `PvP victory: +${match.rewardAmount} Mentality.` : 'PvP victory.', 'gold');
       });
     }
   }
@@ -1732,9 +2140,17 @@ export class UI {
     window.clearTimeout(this.pvpTapSendTimer);
     this.pvpClockTimer = 0;
     this.pvpTapSendTimer = 0;
+    this.pvpTapQueuedMatchId = '';
+    this.pvpTapQueuedPhaseKey = '';
+    this.pvpTapQueuedFinal = false;
+    this.pvpTapFinalPhaseKey = '';
+    this.pvpTapFinalRetryAt = 0;
     this.pvpOverlay?.remove();
     this.pvpOverlay = null;
     this.pvpPhaseKey = '';
+    this.pvpDrawSubmitted = false;
+    this.pvpDrawSending = false;
+    this.closeQuickDrawSocket();
   }
 
   private async action(kind: string, id: string) {
@@ -1815,6 +2231,8 @@ function multiplayerError(error: unknown): string {
     friend_not_found: 'That friend code was not found.',
     self_friend: 'You cannot add your own friend code.',
     friend_unavailable: 'That player is unavailable.',
+    friend_limit_reached: 'One of these friend lists is full.',
+    friend_request_changed: 'That friend request is no longer available.',
     friend_required: 'Add this player as a friend before challenging them.',
     player_busy: 'One of you already has an open challenge.',
     unverified_pvp_tap_rate: 'The server rejected an impossible tap rate.',

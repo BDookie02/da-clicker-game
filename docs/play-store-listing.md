@@ -23,7 +23,8 @@ upgrade your power to outlast increasingly unhinged rivals. When the meter hits
 - Earn optional boosters or M by fully watching rewarded ads.
 - Create a DISCIPLINE account to keep progress, inventory, and verified
   purchases with that account across supported devices.
-- Compete using raw physical taps on the public worldwide leaderboard.
+- Compete using your client-submitted cumulative tap total after the account
+  service applies its server-side plausibility limit.
 
 No brakes. No excuses. Make eye contact.
 
@@ -70,7 +71,8 @@ developer-generated identifiers before submission.
   log/backup retention wording, and target-audience/age decision.
 - Pass the production Worker environment to the legal-page renderers and
   configure the five `LEGAL_*` values listed in `docs/privacy-policy.md`.
-- Apply the current base D1 schema and every unapplied migration through `0005`
+- Apply the current base D1 schema and every unapplied migration through
+  `0018_pvp_reward_forfeit_hardening.sql`
   to the production database in numeric order, then verify account deletion,
   moderation, purchase financials, and refund reconciliation end to end.
 - Assign the moderation operator and configure the production-only moderation

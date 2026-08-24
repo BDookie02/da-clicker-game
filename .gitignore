@@ -21,6 +21,10 @@ android/.idea/
 /DISCIPLINE-*.apk
 /DISCIPLINE-*.apk.idsig
 /artifacts/
+/.wrangler/
+/wrangler-dry-run.log
+/devlog/integrity-aar-inspect/
+/devlog/physical-pvp-qa/
 # Generated QA captures stay local; previously tracked release-history images
 # remain tracked, but new screenshots cannot accidentally bloat a source push.
 devlog/**/*.png
